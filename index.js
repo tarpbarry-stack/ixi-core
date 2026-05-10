@@ -18,6 +18,25 @@ const integrationSdk = sharetribe.createInstance({
   clientSecret: process.env.SHARETRIBE_CLIENT_SECRET,
 });
 
+function formatPrice(price) {
+  return Number(price).toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  });
+}
+
+function buildCaption(job) {
+  return `${job.title}
+
+Price: ${formatPrice(job.price)}
+
+View full listing:
+${job.listing_url}
+
+#IronXchange #HeavyEquipment #ConstructionEquipment`;
+}
+
 app.get("/", async (req, res) => {
   try {
     const result = await pool.query("SELECT NOW()");
@@ -60,14 +79,18 @@ app.get("/setup", async (req, res) => {
       ALTER TABLE social_post_jobs
       ADD COLUMN IF NOT EXISTS title TEXT,
       ADD COLUMN IF NOT EXISTS price NUMERIC,
-      ADD COLUMN IF NOT EXISTS listing_url TEXT;
+      ADD COLUMN IF NOT EXISTS listing_url TEXT,
+      ADD COLUMN IF NOT EXISTS caption TEXT,
+      ADD COLUMN IF NOT EXISTS platform_post_id TEXT,
+      ADD COLUMN IF NOT EXISTS platform_post_url TEXT,
+      ADD COLUMN IF NOT EXISTS error_message TEXT,
+      ADD COLUMN IF NOT EXISTS posted_at TIMESTAMP;
     `);
 
     res.json({
       status: "setup complete",
       table: "social_post_jobs",
     });
-    
   } catch (error) {
     res.status(500).json({
       status: "setup failed",
@@ -109,9 +132,20 @@ app.get("/import-listings", async (req, res) => {
 
     let imported = 0;
     let skipped = 0;
+    let missingPrice = 0;
 
     for (const listing of listings) {
       const listingId = listing.id.uuid;
+      const title = listing.attributes.title || null;
+
+      const price = listing.attributes.price?.amount
+        ? listing.attributes.price.amount / 100
+        : null;
+
+      if (!price) {
+        missingPrice++;
+        continue;
+      }
 
       const existing = await pool.query(
         `
@@ -128,13 +162,6 @@ app.get("/import-listings", async (req, res) => {
         continue;
       }
 
-      const title = listing.attributes.title || null;
-
-      const price =
-        listing.attributes.price?.amount
-          ? listing.attributes.price.amount / 100
-          : null;
-
       const listingUrl = `https://staging.ironxchange.com/l/${listingId}`;
 
       await pool.query(
@@ -149,14 +176,7 @@ app.get("/import-listings", async (req, res) => {
         )
         VALUES ($1, $2, $3, $4, $5, $6)
         `,
-        [
-          listingId,
-          "facebook",
-          "pending",
-          title,
-          price,
-          listingUrl,
-        ]
+        [listingId, "facebook", "pending", title, price, listingUrl]
       );
 
       imported++;
@@ -166,12 +186,58 @@ app.get("/import-listings", async (req, res) => {
       status: "import complete",
       imported,
       skipped,
+      missingPrice,
     });
   } catch (error) {
     console.error(error);
 
     res.status(500).json({
       status: "import failed",
+      error: error.message,
+    });
+  }
+});
+
+app.get("/generate-captions", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT *
+      FROM social_post_jobs
+      WHERE caption IS NULL
+      ORDER BY created_at ASC
+      LIMIT 50
+    `);
+
+    let updated = 0;
+
+    for (const job of result.rows) {
+      if (!job.price) {
+        continue;
+      }
+
+      const caption = buildCaption(job);
+
+      await pool.query(
+        `
+        UPDATE social_post_jobs
+        SET caption = $1
+        WHERE id = $2
+        `,
+        [caption, job.id]
+      );
+
+      updated++;
+    }
+
+    res.json({
+      status: "captions generated",
+      updated,
+    });
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      status: "caption generation failed",
       error: error.message,
     });
   }
