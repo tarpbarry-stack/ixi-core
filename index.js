@@ -5,7 +5,6 @@ const { Pool } = require("pg");
 const sharetribe = require("sharetribe-flex-integration-sdk");
 
 const app = express();
-
 app.use(express.json());
 
 const pool = new Pool({
@@ -26,15 +25,93 @@ function formatPrice(price) {
   });
 }
 
+function slugify(text = "") {
+  return text
+    .toString()
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function getListingUrl(listing) {
+  const title = listing.attributes?.title || "listing";
+  const id = listing.id?.uuid;
+  return `https://staging.ironxchange.com/l/${slugify(title)}/${id}`;
+}
+
+function getListingImages(listing) {
+  const images = listing.images || [];
+
+  const imageUrls = images
+    .map(image =>
+      image.attributes?.variants?.scaledLarge?.url ||
+      image.attributes?.variants?.scaledMedium?.url ||
+      image.attributes?.variants?.default?.url
+    )
+    .filter(Boolean);
+
+  return {
+    imageUrls,
+    primaryImageUrl: imageUrls[0] || null,
+  };
+}
+
+function getListingState(listing) {
+  return (
+    listing.attributes?.publicData?.state ||
+    listing.attributes?.publicData?.location?.state ||
+    listing.attributes?.publicData?.addressState ||
+    "USA"
+  );
+}
+
 function buildCaption(job) {
   return `${job.title}
 
 Price: ${formatPrice(job.price)}
+Location: ${job.state || "USA"}
 
 View full listing:
 ${job.listing_url}
 
 #IronXchange #HeavyEquipment #ConstructionEquipment`;
+}
+
+async function fetchPublishedListings() {
+  const result = await integrationSdk.listings.query({
+    states: ["published"],
+    sort: "-createdAt",
+    perPage: 25,
+    include: ["images"],
+    "fields.image": ["variants.scaledLarge", "variants.scaledMedium", "variants.default"],
+  });
+
+  return result.data.data || [];
+}
+
+function normalizeListing(listing) {
+  const listingId = listing.id.uuid;
+  const title = listing.attributes?.title || null;
+
+  const price = listing.attributes?.price?.amount
+    ? listing.attributes.price.amount / 100
+    : null;
+
+  const listingUrl = getListingUrl(listing);
+  const state = getListingState(listing);
+  const { imageUrls, primaryImageUrl } = getListingImages(listing);
+
+  return {
+    listingId,
+    title,
+    price,
+    listingUrl,
+    state,
+    imageUrls,
+    primaryImageUrl,
+  };
 }
 
 app.get("/", async (req, res) => {
@@ -65,11 +142,16 @@ app.get("/setup", async (req, res) => {
         title TEXT,
         price NUMERIC,
         listing_url TEXT,
+        state TEXT,
+        primary_image_url TEXT,
+        image_urls JSONB,
+        watermarked_image_url TEXT,
         caption TEXT,
         platform_post_id TEXT,
         platform_post_url TEXT,
         error_message TEXT,
         created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW(),
         posted_at TIMESTAMP,
         UNIQUE (sharetribe_listing_id, platform)
       );
@@ -80,15 +162,16 @@ app.get("/setup", async (req, res) => {
       ADD COLUMN IF NOT EXISTS title TEXT,
       ADD COLUMN IF NOT EXISTS price NUMERIC,
       ADD COLUMN IF NOT EXISTS listing_url TEXT,
+      ADD COLUMN IF NOT EXISTS state TEXT,
+      ADD COLUMN IF NOT EXISTS primary_image_url TEXT,
+      ADD COLUMN IF NOT EXISTS image_urls JSONB,
+      ADD COLUMN IF NOT EXISTS watermarked_image_url TEXT,
       ADD COLUMN IF NOT EXISTS caption TEXT,
       ADD COLUMN IF NOT EXISTS platform_post_id TEXT,
       ADD COLUMN IF NOT EXISTS platform_post_url TEXT,
       ADD COLUMN IF NOT EXISTS error_message TEXT,
-      ADD COLUMN IF NOT EXISTS posted_at TIMESTAMP,
-      ADD COLUMN IF NOT EXISTS state TEXT,
-      ADD COLUMN IF NOT EXISTS primary_image_url TEXT,
-      ADD COLUMN IF NOT EXISTS image_urls JSONB,
-      ADD COLUMN IF NOT EXISTS watermarked_image_url TEXT;
+      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW(),
+      ADD COLUMN IF NOT EXISTS posted_at TIMESTAMP;
     `);
 
     res.json({
@@ -126,49 +209,28 @@ app.get("/jobs", async (req, res) => {
 
 app.get("/import-listings", async (req, res) => {
   try {
-    const result = await integrationSdk.listings.query({
-      states: ["published"],
-      sort: "-createdAt",
-      perPage: 25,
-    });
-
-    const listings = result.data.data;
+    const listings = await fetchPublishedListings();
 
     let imported = 0;
-    let skipped = 0;
+    let updated = 0;
     let missingPrice = 0;
 
     for (const listing of listings) {
-      const listingId = listing.id.uuid;
-      const title = listing.attributes.title || null;
+      const item = normalizeListing(listing);
 
-      const price = listing.attributes.price?.amount
-        ? listing.attributes.price.amount / 100
-        : null;
-
-      if (!price) {
+      if (!item.price) {
         missingPrice++;
         continue;
       }
 
-      const existing = await pool.query(
-        `
-        SELECT id
-        FROM social_post_jobs
-        WHERE sharetribe_listing_id = $1
-        AND platform = 'facebook'
-        `,
-        [listingId]
-      );
+      const caption = buildCaption({
+        title: item.title,
+        price: item.price,
+        state: item.state,
+        listing_url: item.listingUrl,
+      });
 
-      if (existing.rows.length > 0) {
-        skipped++;
-        continue;
-      }
-
-      const listingUrl = `https://staging.ironxchange.com/l/${listingId}`;
-
-      await pool.query(
+      const result = await pool.query(
         `
         INSERT INTO social_post_jobs (
           sharetribe_listing_id,
@@ -176,20 +238,51 @@ app.get("/import-listings", async (req, res) => {
           status,
           title,
           price,
-          listing_url
+          listing_url,
+          state,
+          primary_image_url,
+          image_urls,
+          caption,
+          updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, NOW())
+        ON CONFLICT (sharetribe_listing_id, platform)
+        DO UPDATE SET
+          title = EXCLUDED.title,
+          price = EXCLUDED.price,
+          listing_url = EXCLUDED.listing_url,
+          state = EXCLUDED.state,
+          primary_image_url = EXCLUDED.primary_image_url,
+          image_urls = EXCLUDED.image_urls,
+          caption = EXCLUDED.caption,
+          updated_at = NOW()
+        RETURNING (xmax = 0) AS inserted
         `,
-        [listingId, "facebook", "pending", title, price, listingUrl]
+        [
+          item.listingId,
+          "facebook",
+          "pending",
+          item.title,
+          item.price,
+          item.listingUrl,
+          item.state,
+          item.primaryImageUrl,
+          JSON.stringify(item.imageUrls),
+          caption,
+        ]
       );
 
-      imported++;
+      if (result.rows[0]?.inserted) {
+        imported++;
+      } else {
+        updated++;
+      }
     }
 
     res.json({
       status: "import complete",
       imported,
-      skipped,
+      updated,
       missingPrice,
     });
   } catch (error) {
@@ -207,7 +300,7 @@ app.get("/generate-captions", async (req, res) => {
     const result = await pool.query(`
       SELECT *
       FROM social_post_jobs
-      WHERE caption IS NULL
+      WHERE status = 'pending'
       ORDER BY created_at ASC
       LIMIT 50
     `);
@@ -215,16 +308,15 @@ app.get("/generate-captions", async (req, res) => {
     let updated = 0;
 
     for (const job of result.rows) {
-      if (!job.price) {
-        continue;
-      }
+      if (!job.price) continue;
 
       const caption = buildCaption(job);
 
       await pool.query(
         `
         UPDATE social_post_jobs
-        SET caption = $1
+        SET caption = $1,
+            updated_at = NOW()
         WHERE id = $2
         `,
         [caption, job.id]
