@@ -2,7 +2,6 @@ require("dotenv").config();
 
 const express = require("express");
 const { Pool } = require("pg");
-const sharetribe = require("sharetribe-flex-integration-sdk");
 
 const app = express();
 app.use(express.json());
@@ -12,10 +11,66 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
-const integrationSdk = sharetribe.createInstance({
-  clientId: process.env.SHARETRIBE_CLIENT_ID,
-  clientSecret: process.env.SHARETRIBE_CLIENT_SECRET,
-});
+const SHARETRIBE_CLIENT_ID = process.env.SHARETRIBE_CLIENT_ID;
+const SHARETRIBE_CLIENT_SECRET = process.env.SHARETRIBE_CLIENT_SECRET;
+
+function getId(value) {
+  return value?.uuid || value;
+}
+
+async function safeJson(response) {
+  const text = await response.text();
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(
+      `Expected JSON but got ${response.status} ${response.statusText}: ${text.slice(0, 120)}`
+    );
+  }
+}
+
+async function getAccessToken() {
+  const response = await fetch("https://flex-api.sharetribe.com/v1/auth/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
+      Accept: "application/json",
+    },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: SHARETRIBE_CLIENT_ID,
+      client_secret: SHARETRIBE_CLIENT_SECRET,
+      scope: "integ",
+    }),
+  });
+
+  const data = await safeJson(response);
+
+  if (!response.ok) {
+    throw new Error(`Auth failed: ${JSON.stringify(data)}`);
+  }
+
+  return data.access_token;
+}
+
+function getBestImageUrl(imageAsset) {
+  const variants = imageAsset?.attributes?.variants || {};
+
+  return (
+    variants["listing-card-2x"]?.url ||
+    variants["listing-card"]?.url ||
+    variants["landscape-crop2x"]?.url ||
+    variants["landscape-crop"]?.url ||
+    variants["scaled-large"]?.url ||
+    variants["scaled-medium"]?.url ||
+    variants["scaled-small"]?.url ||
+    variants["square-small"]?.url ||
+    Object.values(variants).find((variant) => variant?.url)?.url ||
+    imageAsset?.attributes?.url ||
+    ""
+  );
+}
 
 function formatPrice(price) {
   return Number(price).toLocaleString("en-US", {
@@ -35,34 +90,12 @@ function slugify(text = "") {
     .replace(/^-|-$/g, "");
 }
 
-function getListingUrl(listing) {
-  const title = listing.attributes?.title || "listing";
-  const id = listing.id?.uuid;
-  return `https://staging.ironxchange.com/l/${slugify(title)}/${id}`;
-}
-
-function getListingImages(listing) {
-  const images = listing.images || [];
-
-  const imageUrls = images
-    .map(image =>
-      image.attributes?.variants?.scaledLarge?.url ||
-      image.attributes?.variants?.scaledMedium?.url ||
-      image.attributes?.variants?.default?.url
-    )
-    .filter(Boolean);
-
-  return {
-    imageUrls,
-    primaryImageUrl: imageUrls[0] || null,
-  };
-}
-
-function getListingState(listing) {
+function getListingState(publicData = {}) {
   return (
-    listing.attributes?.publicData?.state ||
-    listing.attributes?.publicData?.location?.state ||
-    listing.attributes?.publicData?.addressState ||
+    publicData.state ||
+    publicData.location?.state ||
+    publicData.addressState ||
+    publicData.loc ||
     "USA"
   );
 }
@@ -79,39 +112,67 @@ ${job.listing_url}
 #IronXchange #HeavyEquipment #ConstructionEquipment`;
 }
 
-async function fetchPublishedListings() {
-  const result = await integrationSdk.listings.query({
-    states: ["published"],
-    sort: "-createdAt",
-    perPage: 25,
-    include: ["images"],
-    "fields.image": ["variants.scaledLarge", "variants.scaledMedium", "variants.default"],
-  });
+async function fetchPublishedListingsWithImages() {
+  const token = await getAccessToken();
 
-  return result.data.data || [];
-}
+  const response = await fetch(
+    "https://flex-integ-api.sharetribe.com/v1/integration_api/listings/query?per_page=100&include=images",
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+      },
+    }
+  );
 
-function normalizeListing(listing) {
-  const listingId = listing.id.uuid;
-  const title = listing.attributes?.title || null;
+  const data = await safeJson(response);
 
-  const price = listing.attributes?.price?.amount
-    ? listing.attributes.price.amount / 100
-    : null;
+  if (!response.ok) {
+    throw new Error(`Listings failed: ${JSON.stringify(data)}`);
+  }
 
-  const listingUrl = getListingUrl(listing);
-  const state = getListingState(listing);
-  const { imageUrls, primaryImageUrl } = getListingImages(listing);
+  const imageById = {};
 
-  return {
-    listingId,
-    title,
-    price,
-    listingUrl,
-    state,
-    imageUrls,
-    primaryImageUrl,
-  };
+  for (const asset of data.included || []) {
+    if (asset.type !== "image") continue;
+
+    const id = getId(asset.id);
+    const url = getBestImageUrl(asset);
+
+    if (id && url) {
+      imageById[id] = url;
+    }
+  }
+
+  return (data.data || [])
+    .filter((item) => item.attributes?.state === "published")
+    .map((item) => {
+      const attrs = item.attributes || {};
+      const publicData = attrs.publicData || {};
+      const listingId = getId(item.id);
+
+      const imageIds =
+        item.relationships?.images?.data?.map((image) => getId(image.id)) || [];
+
+      const imageUrls = imageIds
+        .map((imageId) => imageById[imageId])
+        .filter(Boolean);
+
+      const slug = slugify(attrs.slug || attrs.title || "equipment");
+
+      const price = attrs.price?.amount ? attrs.price.amount / 100 : null;
+
+      return {
+        listingId,
+        title: attrs.title || "Equipment",
+        price,
+        listingUrl: `https://staging.ironxchange.com/l/${slug}/${listingId}`,
+        state: getListingState(publicData),
+        primaryImageUrl: imageUrls[0] || null,
+        imageUrls,
+      };
+    });
 }
 
 app.get("/", async (req, res) => {
@@ -209,18 +270,21 @@ app.get("/jobs", async (req, res) => {
 
 app.get("/import-listings", async (req, res) => {
   try {
-    const listings = await fetchPublishedListings();
+    const listings = await fetchPublishedListingsWithImages();
 
     let imported = 0;
     let updated = 0;
     let missingPrice = 0;
+    let missingImage = 0;
 
-    for (const listing of listings) {
-      const item = normalizeListing(listing);
-
+    for (const item of listings) {
       if (!item.price) {
         missingPrice++;
         continue;
+      }
+
+      if (!item.primaryImageUrl) {
+        missingImage++;
       }
 
       const caption = buildCaption({
@@ -284,6 +348,7 @@ app.get("/import-listings", async (req, res) => {
       imported,
       updated,
       missingPrice,
+      missingImage,
     });
   } catch (error) {
     console.error(error);
