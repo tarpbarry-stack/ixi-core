@@ -3,8 +3,18 @@ require("dotenv").config();
 const express = require("express");
 const { Pool } = require("pg");
 
+const sharp = require("sharp");
+const fs = require("fs");
+const path = require("path");
+
 const app = express();
+
 app.use(express.json());
+
+app.use(
+  "/generated",
+  express.static(path.join(__dirname, "generated"))
+);
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
