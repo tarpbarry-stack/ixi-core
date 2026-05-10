@@ -84,7 +84,11 @@ app.get("/setup", async (req, res) => {
       ADD COLUMN IF NOT EXISTS platform_post_id TEXT,
       ADD COLUMN IF NOT EXISTS platform_post_url TEXT,
       ADD COLUMN IF NOT EXISTS error_message TEXT,
-      ADD COLUMN IF NOT EXISTS posted_at TIMESTAMP;
+      ADD COLUMN IF NOT EXISTS posted_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS state TEXT,
+      ADD COLUMN IF NOT EXISTS primary_image_url TEXT,
+      ADD COLUMN IF NOT EXISTS image_urls JSONB,
+      ADD COLUMN IF NOT EXISTS watermarked_image_url TEXT;
     `);
 
     res.json({
