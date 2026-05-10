@@ -56,10 +56,18 @@ app.get("/setup", async (req, res) => {
       );
     `);
 
+    await pool.query(`
+      ALTER TABLE social_post_jobs
+      ADD COLUMN IF NOT EXISTS title TEXT,
+      ADD COLUMN IF NOT EXISTS price NUMERIC,
+      ADD COLUMN IF NOT EXISTS listing_url TEXT;
+    `);
+
     res.json({
       status: "setup complete",
       table: "social_post_jobs",
     });
+    
   } catch (error) {
     res.status(500).json({
       status: "setup failed",
