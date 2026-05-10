@@ -69,6 +69,7 @@ function getBestImageUrl(imageAsset) {
     variants["scaled-medium"]?.url ||
     variants["scaled-small"]?.url ||
     variants["square-small"]?.url ||
+    variants.default?.url ||
     Object.values(variants).find((variant) => variant?.url)?.url ||
     imageAsset?.attributes?.url ||
     ""
@@ -158,65 +159,10 @@ async function fetchPublishedListingsWithImages() {
       const imageRefs = item.relationships?.images?.data || [];
 
       const imageUrls = imageRefs
-        .map((ref) => {
-          const imageId = getId(ref.id);
-          return imageById.get(imageId);
-        })
+        .map((ref) => imageById.get(getId(ref.id)))
         .filter(Boolean);
 
       const slug = slugify(attrs.slug || attrs.title || "equipment");
-
-      const price = attrs.price?.amount ? attrs.price.amount / 100 : null;
-
-      return {
-        listingId,
-        title: attrs.title || "Equipment",
-        price,
-        listingUrl: `https://staging.ironxchange.com/l/${slug}/${listingId}`,
-        state: getListingState(publicData),
-        primaryImageUrl: imageUrls[0] || null,
-        imageUrls,
-      };
-    });
-},
-    }
-  );
-
-  const data = await safeJson(response);
-
-  if (!response.ok) {
-    throw new Error(`Listings failed: ${JSON.stringify(data)}`);
-  }
-
-  const imageById = {};
-
-  for (const asset of data.included || []) {
-    if (asset.type !== "image") continue;
-
-    const id = getId(asset.id);
-    const url = getBestImageUrl(asset);
-
-    if (id && url) {
-      imageById[id] = url;
-    }
-  }
-
-  return (data.data || [])
-    .filter((item) => item.attributes?.state === "published")
-    .map((item) => {
-      const attrs = item.attributes || {};
-      const publicData = attrs.publicData || {};
-      const listingId = getId(item.id);
-
-      const imageIds =
-        item.relationships?.images?.data?.map((image) => getId(image.id)) || [];
-
-      const imageUrls = imageIds
-        .map((imageId) => imageById[imageId])
-        .filter(Boolean);
-
-      const slug = slugify(attrs.slug || attrs.title || "equipment");
-
       const price = attrs.price?.amount ? attrs.price.amount / 100 : null;
 
       return {
