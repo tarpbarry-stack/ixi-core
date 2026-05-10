@@ -15,7 +15,10 @@ const SHARETRIBE_CLIENT_ID = process.env.SHARETRIBE_CLIENT_ID;
 const SHARETRIBE_CLIENT_SECRET = process.env.SHARETRIBE_CLIENT_SECRET;
 
 function getId(value) {
-  return value?.uuid || value;
+  if (!value) return null;
+  if (typeof value === "string") return value;
+  if (value.uuid) return value.uuid;
+  return String(value);
 }
 
 async function safeJson(response) {
@@ -123,6 +126,59 @@ async function fetchPublishedListingsWithImages() {
         Authorization: `Bearer ${token}`,
         Accept: "application/json",
       },
+    }
+  );
+
+  const data = await safeJson(response);
+
+  if (!response.ok) {
+    throw new Error(`Listings failed: ${JSON.stringify(data)}`);
+  }
+
+  const imageById = new Map();
+
+  for (const asset of data.included || []) {
+    if (asset.type !== "image") continue;
+
+    const id = getId(asset.id);
+    const url = getBestImageUrl(asset);
+
+    if (id && url) {
+      imageById.set(id, url);
+    }
+  }
+
+  return (data.data || [])
+    .filter((item) => item.attributes?.state === "published")
+    .map((item) => {
+      const attrs = item.attributes || {};
+      const publicData = attrs.publicData || {};
+      const listingId = getId(item.id);
+
+      const imageRefs = item.relationships?.images?.data || [];
+
+      const imageUrls = imageRefs
+        .map((ref) => {
+          const imageId = getId(ref.id);
+          return imageById.get(imageId);
+        })
+        .filter(Boolean);
+
+      const slug = slugify(attrs.slug || attrs.title || "equipment");
+
+      const price = attrs.price?.amount ? attrs.price.amount / 100 : null;
+
+      return {
+        listingId,
+        title: attrs.title || "Equipment",
+        price,
+        listingUrl: `https://staging.ironxchange.com/l/${slug}/${listingId}`,
+        state: getListingState(publicData),
+        primaryImageUrl: imageUrls[0] || null,
+        imageUrls,
+      };
+    });
+},
     }
   );
 
