@@ -2,7 +2,6 @@ require("dotenv").config();
 
 const express = require("express");
 const { Pool } = require("pg");
-
 const sharp = require("sharp");
 const fs = require("fs");
 const path = require("path");
@@ -10,11 +9,7 @@ const path = require("path");
 const app = express();
 
 app.use(express.json());
-
-app.use(
-  "/generated",
-  express.static(path.join(__dirname, "generated"))
-);
+app.use("/generated", express.static(path.join(__dirname, "generated")));
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -167,7 +162,6 @@ async function fetchPublishedListingsWithImages() {
       const listingId = getId(item.id);
 
       const imageRefs = item.relationships?.images?.data || [];
-
       const imageUrls = imageRefs
         .map((ref) => imageById.get(getId(ref.id)))
         .filter(Boolean);
@@ -348,11 +342,8 @@ app.get("/import-listings", async (req, res) => {
         ]
       );
 
-      if (result.rows[0]?.inserted) {
-        imported++;
-      } else {
-        updated++;
-      }
+      if (result.rows[0]?.inserted) imported++;
+      else updated++;
     }
 
     res.json({
@@ -411,6 +402,128 @@ app.get("/generate-captions", async (req, res) => {
 
     res.status(500).json({
       status: "caption generation failed",
+      error: error.message,
+    });
+  }
+});
+
+app.get("/watermark-pending-images", async (req, res) => {
+  try {
+    const outputDir = path.join(__dirname, "generated", "watermarked");
+    fs.mkdirSync(outputDir, { recursive: true });
+
+    const watermarkPath = path.join(
+      __dirname,
+      "assets",
+      "ironxchange-watermark-x-white-2048.png"
+    );
+
+    if (!fs.existsSync(watermarkPath)) {
+      return res.status(500).json({
+        status: "watermark failed",
+        error: "Watermark asset not found",
+        expected_path: watermarkPath,
+      });
+    }
+
+    const jobsResult = await pool.query(`
+      SELECT id, sharetribe_listing_id, primary_image_url
+      FROM social_post_jobs
+      WHERE status = 'pending'
+        AND primary_image_url IS NOT NULL
+        AND watermarked_image_url IS NULL
+      ORDER BY created_at ASC
+      LIMIT 25
+    `);
+
+    let processed = 0;
+    let failed = 0;
+    const errors = [];
+
+    for (const job of jobsResult.rows) {
+      try {
+        const imageResponse = await fetch(job.primary_image_url);
+
+        if (!imageResponse.ok) {
+          throw new Error(`Image download failed: ${imageResponse.status}`);
+        }
+
+        const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+        const imageMeta = await sharp(imageBuffer).metadata();
+
+        const imageWidth = imageMeta.width || 1200;
+        const watermarkWidth = Math.round(imageWidth * 0.11);
+        const padding = Math.round(imageWidth * 0.035);
+
+        const watermarkBuffer = await sharp(watermarkPath)
+          .resize({ width: watermarkWidth })
+          .ensureAlpha()
+          .composite([
+            {
+              input: Buffer.from([255, 255, 255, 61]),
+              raw: {
+                width: 1,
+                height: 1,
+                channels: 4,
+              },
+              tile: true,
+              blend: "dest-in",
+            },
+          ])
+          .png()
+          .toBuffer();
+
+        const outputFilename = `${job.sharetribe_listing_id}-watermarked.jpg`;
+        const outputPath = path.join(outputDir, outputFilename);
+
+        await sharp(imageBuffer)
+          .composite([
+            {
+              input: watermarkBuffer,
+              top: padding,
+              left: imageWidth - watermarkWidth - padding,
+            },
+          ])
+          .jpeg({
+            quality: 92,
+            mozjpeg: true,
+          })
+          .toFile(outputPath);
+
+        const publicUrl = `/generated/watermarked/${outputFilename}`;
+
+        await pool.query(
+          `
+          UPDATE social_post_jobs
+          SET watermarked_image_url = $1,
+              updated_at = NOW()
+          WHERE id = $2
+          `,
+          [publicUrl, job.id]
+        );
+
+        processed++;
+      } catch (error) {
+        failed++;
+        errors.push({
+          job_id: job.id,
+          error: error.message,
+        });
+      }
+    }
+
+    res.json({
+      status: "watermark complete",
+      found: jobsResult.rows.length,
+      processed,
+      failed,
+      errors,
+    });
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      status: "watermark failed",
       error: error.message,
     });
   }
