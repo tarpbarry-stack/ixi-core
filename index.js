@@ -427,14 +427,13 @@ app.get("/watermark-pending-images", async (req, res) => {
     }
 
     const jobsResult = await pool.query(`
-      SELECT id, sharetribe_listing_id, primary_image_url
-      FROM social_post_jobs
-      WHERE status = 'pending'
-        AND primary_image_url IS NOT NULL
-        AND watermarked_image_url IS NULL
-      ORDER BY created_at ASC
-      LIMIT 25
-    `);
+  SELECT id, sharetribe_listing_id, primary_image_url
+  FROM social_post_jobs
+  WHERE status = 'pending'
+    AND primary_image_url IS NOT NULL
+  ORDER BY created_at ASC
+  LIMIT 25
+`);
 
     let processed = 0;
     let failed = 0;
