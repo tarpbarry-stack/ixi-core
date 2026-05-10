@@ -404,6 +404,40 @@ app.get("/generate-captions", async (req, res) => {
   }
 });
 
+app.get("/debug-raw-listing", async (req, res) => {
+  try {
+    const token = await getAccessToken();
+
+    const response = await fetch(
+      "https://flex-integ-api.sharetribe.com/v1/integration_api/listings/query?per_page=1&include=images",
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+        },
+      }
+    );
+
+    const data = await safeJson(response);
+
+    res.json({
+      ok: response.ok,
+      status: response.status,
+      listing: data.data?.[0] || null,
+      included_count: data.included?.length || 0,
+      included: data.included || [],
+    });
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      status: "debug failed",
+      error: error.message,
+    });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
