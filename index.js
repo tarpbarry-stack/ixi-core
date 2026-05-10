@@ -2,13 +2,20 @@ require("dotenv").config();
 
 const express = require("express");
 const { Pool } = require("pg");
+const sharetribe = require("sharetribe-flex-integration-sdk");
 
 const app = express();
+
 app.use(express.json());
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
+});
+
+const integrationSdk = sharetribe.createInstance({
+  clientId: process.env.SHARETRIBE_CLIENT_ID,
+  clientSecret: process.env.SHARETRIBE_CLIENT_SECRET,
 });
 
 app.get("/", async (req, res) => {
@@ -36,6 +43,9 @@ app.get("/setup", async (req, res) => {
         sharetribe_listing_id TEXT NOT NULL,
         platform TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'pending',
+        title TEXT,
+        price NUMERIC,
+        listing_url TEXT,
         caption TEXT,
         platform_post_id TEXT,
         platform_post_url TEXT,
@@ -74,6 +84,86 @@ app.get("/jobs", async (req, res) => {
   } catch (error) {
     res.status(500).json({
       status: "jobs query failed",
+      error: error.message,
+    });
+  }
+});
+
+app.get("/import-listings", async (req, res) => {
+  try {
+    const result = await integrationSdk.listings.query({
+      states: ["published"],
+      sort: "-createdAt",
+      perPage: 25,
+    });
+
+    const listings = result.data.data;
+
+    let imported = 0;
+    let skipped = 0;
+
+    for (const listing of listings) {
+      const listingId = listing.id.uuid;
+
+      const existing = await pool.query(
+        `
+        SELECT id
+        FROM social_post_jobs
+        WHERE sharetribe_listing_id = $1
+        AND platform = 'facebook'
+        `,
+        [listingId]
+      );
+
+      if (existing.rows.length > 0) {
+        skipped++;
+        continue;
+      }
+
+      const title = listing.attributes.title || null;
+
+      const price =
+        listing.attributes.price?.amount
+          ? listing.attributes.price.amount / 100
+          : null;
+
+      const listingUrl = `https://staging.ironxchange.com/l/${listingId}`;
+
+      await pool.query(
+        `
+        INSERT INTO social_post_jobs (
+          sharetribe_listing_id,
+          platform,
+          status,
+          title,
+          price,
+          listing_url
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+        `,
+        [
+          listingId,
+          "facebook",
+          "pending",
+          title,
+          price,
+          listingUrl,
+        ]
+      );
+
+      imported++;
+    }
+
+    res.json({
+      status: "import complete",
+      imported,
+      skipped,
+    });
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      status: "import failed",
       error: error.message,
     });
   }
