@@ -460,7 +460,7 @@ app.get("/watermark-pending-images", async (req, res) => {
           .ensureAlpha()
           .composite([
             {
-              input: Buffer.from([255, 255, 255, 61]),
+              input: Buffer.from([255, 255, 255, 185]),
               raw: {
                 width: 1,
                 height: 1,
