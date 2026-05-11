@@ -5,6 +5,7 @@ const { Pool } = require("pg");
 const sharp = require("sharp");
 const fs = require("fs");
 const path = require("path");
+const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 
 const app = express();
 
@@ -15,6 +16,11 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
+const s3 = new S3Client({
+  region: process.env.AWS_REGION,
+});
+
+const S3_BUCKET = process.env.AWS_S3_BUCKET;
 
 const SHARETRIBE_CLIENT_ID = process.env.SHARETRIBE_CLIENT_ID;
 const SHARETRIBE_CLIENT_SECRET = process.env.SHARETRIBE_CLIENT_SECRET;
@@ -472,24 +478,33 @@ app.get("/watermark-pending-images", async (req, res) => {
           .png()
           .toBuffer();
 
-        const outputFilename = `${job.sharetribe_listing_id}-watermarked.jpg`;
-        const outputPath = path.join(outputDir, outputFilename);
+       const outputFilename = `${job.sharetribe_listing_id}-watermarked.jpg`;
+const s3Key = `watermarked/${outputFilename}`;
 
-        await sharp(imageBuffer)
-          .composite([
-            {
-              input: watermarkBuffer,
-              top: padding,
-              left: imageWidth - watermarkWidth - padding,
-            },
-          ])
-          .jpeg({
-            quality: 92,
-            mozjpeg: true,
-          })
-          .toFile(outputPath);
+const finalImageBuffer = await sharp(imageBuffer)
+  .composite([
+    {
+      input: watermarkBuffer,
+      top: padding,
+      left: imageWidth - watermarkWidth - padding,
+    },
+  ])
+  .jpeg({
+    quality: 92,
+    mozjpeg: true,
+  })
+  .toBuffer();
 
-        const publicUrl = `/generated/watermarked/${outputFilename}`;
+await s3.send(
+  new PutObjectCommand({
+    Bucket: S3_BUCKET,
+    Key: s3Key,
+    Body: finalImageBuffer,
+    ContentType: "image/jpeg",
+  })
+);
+
+const publicUrl = `https://${S3_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${s3Key}`;
 
         await pool.query(
           `
