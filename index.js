@@ -715,6 +715,105 @@ app.get("/post-one-instagram", async (req, res) => {
   }
 });
 
+app.get("/post-one-linkedin", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT *
+      FROM social_post_jobs
+      WHERE status = 'pending'
+        AND watermarked_image_url IS NOT NULL
+      ORDER BY created_at ASC
+      LIMIT 1
+    `);
+
+    if (result.rows.length === 0) {
+      return res.json({
+        status: "no pending jobs",
+      });
+    }
+
+    const job = result.rows[0];
+
+    const organizationUrn = `urn:li:organization:${process.env.LINKEDIN_ORGANIZATION_ID}`;
+
+    const postBody = {
+      author: organizationUrn,
+      commentary: job.caption,
+      visibility: "PUBLIC",
+      distribution: {
+        feedDistribution: "MAIN_FEED",
+        targetEntities: [],
+        thirdPartyDistributionChannels: [],
+      },
+      lifecycleState: "PUBLISHED",
+      content: {
+        article: {
+          source: job.listing_url,
+          title: job.title,
+          description: `${job.title} listed on IronXchange`,
+          thumbnail: job.watermarked_image_url,
+        },
+      },
+    };
+
+    const response = await fetch("https://api.linkedin.com/rest/posts", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.LINKEDIN_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+        "LinkedIn-Version": "202506",
+        "X-Restli-Protocol-Version": "2.0.0",
+      },
+      body: JSON.stringify(postBody),
+    });
+
+    const text = await response.text();
+
+    if (!response.ok) {
+      throw new Error(text);
+    }
+
+    const linkedinPostId =
+      response.headers.get("x-restli-id") ||
+      response.headers.get("X-RestLi-Id") ||
+      null;
+
+    await pool.query(
+      `
+      UPDATE social_post_jobs
+      SET
+        status = 'posted',
+        platform_post_id = $1,
+        platform_post_url = $2,
+        posted_at = NOW(),
+        updated_at = NOW()
+      WHERE id = $3
+      `,
+      [
+        linkedinPostId,
+        linkedinPostId
+          ? `https://www.linkedin.com/feed/update/${linkedinPostId}`
+          : null,
+        job.id,
+      ]
+    );
+
+    res.json({
+      status: "linkedin post successful",
+      job_id: job.id,
+      linkedin_post_id: linkedinPostId,
+      linkedin_response: text || null,
+    });
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      status: "linkedin post failed",
+      error: error.message,
+    });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
