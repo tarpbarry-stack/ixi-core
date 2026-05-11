@@ -618,6 +618,103 @@ app.get("/post-one-facebook", async (req, res) => {
   }
 });
 
+app.get("/post-one-instagram", async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT *
+      FROM social_post_jobs
+      WHERE status = 'pending'
+        AND watermarked_image_url IS NOT NULL
+      ORDER BY created_at ASC
+      LIMIT 1
+    `);
+
+    if (result.rows.length === 0) {
+      return res.json({
+        status: "no pending jobs",
+      });
+    }
+
+    const job = result.rows[0];
+
+    // STEP 1: Create IG media container
+    const containerResponse = await fetch(
+      `https://graph.facebook.com/v22.0/${process.env.INSTAGRAM_BUSINESS_ACCOUNT_ID}/media`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          image_url: job.watermarked_image_url,
+          caption: job.caption,
+          access_token: process.env.FACEBOOK_PAGE_ACCESS_TOKEN,
+        }),
+      }
+    );
+
+    const containerData = await safeJson(containerResponse);
+
+    if (!containerResponse.ok) {
+      throw new Error(JSON.stringify(containerData));
+    }
+
+    const creationId = containerData.id;
+
+    // STEP 2: Publish IG media container
+    const publishResponse = await fetch(
+      `https://graph.facebook.com/v22.0/${process.env.INSTAGRAM_BUSINESS_ACCOUNT_ID}/media_publish`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          creation_id: creationId,
+          access_token: process.env.FACEBOOK_PAGE_ACCESS_TOKEN,
+        }),
+      }
+    );
+
+    const publishData = await safeJson(publishResponse);
+
+    if (!publishResponse.ok) {
+      throw new Error(JSON.stringify(publishData));
+    }
+
+    await pool.query(
+      `
+      UPDATE social_post_jobs
+      SET
+        status = 'posted',
+        platform_post_id = $1,
+        platform_post_url = $2,
+        posted_at = NOW(),
+        updated_at = NOW()
+      WHERE id = $3
+      `,
+      [
+        publishData.id,
+        `https://www.instagram.com/p/${publishData.id}/`,
+        job.id,
+      ]
+    );
+
+    res.json({
+      status: "instagram post successful",
+      job_id: job.id,
+      instagram_response: publishData,
+    });
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      status: "instagram post failed",
+      error: error.message,
+    });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
