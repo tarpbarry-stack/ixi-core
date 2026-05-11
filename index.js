@@ -543,35 +543,76 @@ const publicUrl = `https://${S3_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.c
   }
 });
 
-app.get("/debug-raw-listing", async (req, res) => {
+app.get("/post-one-facebook", async (req, res) => {
   try {
-    const token = await getAccessToken();
+    const result = await pool.query(`
+      SELECT *
+      FROM social_post_jobs
+      WHERE status = 'pending'
+        AND watermarked_image_url IS NOT NULL
+      ORDER BY created_at ASC
+      LIMIT 1
+    `);
+
+    if (result.rows.length === 0) {
+      return res.json({
+        status: "no pending jobs",
+      });
+    }
+
+    const job = result.rows[0];
+
+    const facebookImageUrl = job.watermarked_image_url;
 
     const response = await fetch(
-      "https://flex-integ-api.sharetribe.com/v1/integration_api/listings/query?per_page=1&include=images",
+      `https://graph.facebook.com/v22.0/${process.env.FACEBOOK_PAGE_ID}/photos`,
       {
-        method: "GET",
+        method: "POST",
         headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/json",
+          "Content-Type": "application/json",
         },
+        body: JSON.stringify({
+          url: facebookImageUrl,
+          caption: job.caption,
+          access_token: process.env.FACEBOOK_PAGE_ACCESS_TOKEN,
+        }),
       }
     );
 
     const data = await safeJson(response);
 
+    if (!response.ok) {
+      throw new Error(JSON.stringify(data));
+    }
+
+    await pool.query(
+      `
+      UPDATE social_post_jobs
+      SET
+        status = 'posted',
+        platform_post_id = $1,
+        platform_post_url = $2,
+        posted_at = NOW(),
+        updated_at = NOW()
+      WHERE id = $3
+      `,
+      [
+        data.post_id || data.id,
+        `https://facebook.com/${data.post_id || data.id}`,
+        job.id,
+      ]
+    );
+
     res.json({
-      ok: response.ok,
-      status: response.status,
-      listing: data.data?.[0] || null,
-      included_count: data.included?.length || 0,
-      included: data.included || [],
+      status: "facebook post successful",
+      job_id: job.id,
+      facebook_response: data,
     });
   } catch (error) {
     console.error(error);
 
     res.status(500).json({
-      status: "debug failed",
+      status: "facebook post failed",
       error: error.message,
     });
   }
