@@ -746,14 +746,13 @@ app.get("/post-one-linkedin", async (req, res) => {
         thirdPartyDistributionChannels: [],
       },
       lifecycleState: "PUBLISHED",
-      content: {
-        article: {
-          source: job.listing_url,
-          title: job.title,
-          description: `${job.title} listed on IronXchange`,
-          thumbnail: job.watermarked_image_url,
-        },
-      },
+    content: {
+  article: {
+    source: job.listing_url,
+    title: job.title,
+    description: `${job.title} listed on IronXchange`,
+  },
+},
     };
 
     const response = await fetch("https://api.linkedin.com/rest/posts", {
