@@ -42,10 +42,24 @@ test("increments revision on valid state change",()=>{
  assert.equal(next.audit.updatedBy,"ACT-2");
 });
 
-test("calculates actual total, variance and actual dollars per mile",()=>{
+test("blocks external carrier reconciliation until canonical Bill is linked",()=>{
+ assert.throws(()=>calculateActualEconomics(draft(),{actualFreight:2600}),error=>error.code==="FREIGHT_BILL_REQUIRED");
+});
+
+test("calculates actual total, variance and actual dollars per mile after carrier Bill",()=>{
  const record=draft();
+ record.financial.billId="BILL-100";
  const actual=calculateActualEconomics(record,{actualFreight:2600,actualPermits:100,actualDetention:50});
  assert.equal(actual.actualTotal,2750);
  assert.equal(actual.variance,250);
  assert.equal(actual.actualPerMile,5.5);
+});
+
+test("allows internal fleet reconciliation without an external carrier Bill",()=>{
+ const record=draft();
+ record.execution.mode="internal-fleet";
+ record.execution.carrierName="";
+ const actual=calculateActualEconomics(record,{actualFreight:1200,actualPermits:100});
+ assert.equal(actual.actualTotal,1300);
+ assert.equal(actual.actualPerMile,2.6);
 });
