@@ -30,6 +30,11 @@ jobs:
         run: |
           node -c integrity/creationIntegrityService.js
           node -c integrity/creationIntegrityRouter.js
+          node -c integrity/creationIntegrityRunner.js
+          node -c integrity/creationIntegrityRuntimeStore.js
+          node -c integrity/creationIntegrityWorker.js
+          node -c integrity/creationIntegrityService.test.js
+          node -c integrity/creationIntegrityRunner.test.js
 
       - name: Run integrity invariant tests
-        run: node --test integrity/creationIntegrityService.test.js
+        run: node --test integrity/creationIntegrityService.test.js integrity/creationIntegrityRunner.test.js
