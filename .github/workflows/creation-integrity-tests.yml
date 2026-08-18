@@ -1,0 +1,49 @@
+name: AOS Creation Integrity Tests
+
+on:
+  pull_request:
+    paths:
+      - 'integrity/**'
+      - 'live/**'
+      - 'ops/**'
+      - '.github/workflows/creation-integrity-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'integrity/**'
+      - 'live/**'
+      - 'ops/**'
+      - '.github/workflows/creation-integrity-tests.yml'
+
+jobs:
+  creation-integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Syntax check
+        run: |
+          node -c integrity/creationIntegrityService.js
+          node -c integrity/creationIntegrityRouter.js
+          node -c integrity/creationIntegrityRunner.js
+          node -c integrity/creationIntegrityRuntimeStore.js
+          node -c integrity/creationIntegrityWorker.js
+          node -c integrity/creationIntegrityService.test.js
+          node -c integrity/creationIntegrityRunner.test.js
+          node -c live/mos/integrity/liveCreationIntegrityAdapter.js
+          node -c live/mos/integrity/liveCreationIntegrityWorkerAdapter.js
+          node -c live/mos/provisioning/aosObjectPassportService.js
+          bash -n ops/deploy-live-aos-integrity.sh
+          bash -n ops/verify-live-aos-integrity.sh
+
+      - name: Run integrity invariant tests
+        run: node --test integrity/creationIntegrityService.test.js integrity/creationIntegrityRunner.test.js

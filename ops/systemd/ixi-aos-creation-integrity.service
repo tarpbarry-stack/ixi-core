@@ -1,0 +1,20 @@
+[Unit]
+Description=IXI AOS Creation Integrity Reconciliation
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/var/www/ix-core
+EnvironmentFile=/var/www/ix-core/.env
+ExecStart=/usr/bin/flock -n /run/lock/ixi-aos-creation-integrity.lock /usr/bin/node /var/www/ix-core/integrity/creationIntegrityWorker.js
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

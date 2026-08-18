@@ -1,0 +1,13 @@
+[Unit]
+Description=Schedule IXI AOS Creation Integrity Reconciliation
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=15s
+RandomizedDelaySec=15s
+Persistent=true
+Unit=ixi-aos-creation-integrity.service
+
+[Install]
+WantedBy=timers.target
