@@ -14,6 +14,9 @@ async function initializeFreightSubsystem(pool) {
 
 function registerFreightSubsystem(app, { pool, resolveActor = null, adapters = createAdapters() } = {}) {
   if (!app || !pool) throw new Error("registerFreightSubsystem requires app and pool.");
+  if (process.env.NODE_ENV === "production" && typeof resolveActor !== "function") {
+    throw new Error("Freight production registration requires a trusted server-side resolveActor implementation.");
+  }
   app.use("/freight/v1/routes", createFreightRouteRouter());
   app.use("/freight/v1/analytics", createFreightAnalyticsRouter({ pool, resolveActor }));
   app.use("/freight/v1", createFreightRouter({ pool, resolveActor, adapters }));
