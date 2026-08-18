@@ -27,24 +27,29 @@ function createAdapters({ mosBaseUrl = process.env.IXI_MOS_BASE_URL, financialBa
   const authHeaders = serviceToken ? { Authorization: `Bearer ${serviceToken}`, "X-IXI-Service": "freight" } : { "X-IXI-Service": "freight" };
 
   return {
-    async requestFreightMove({ commandId, entityId, objectId, destinationContainerId, actorId, reason, metadata }) {
+    async requestFreightMove({ commandId, entityId, objectId, destinationContainerId, actorId, reason, metadata = {} }) {
+      const freightOrderId = String(metadata?.freightOrderId || "").trim();
+      const stableCommandId = freightOrderId ? `freight:${freightOrderId}:movement` : commandId;
       return jsonRequest(`${mosBase}/movements/freight`, {
         method: "POST", headers: authHeaders,
-        body: JSON.stringify({ commandId, entityId, objectId, destinationContainerId, actorId, reason, metadata })
+        body: JSON.stringify({ commandId: stableCommandId, entityId, objectId, destinationContainerId, actorId, reason, metadata })
       });
     },
 
     async completeFreightMove({ movementId, commandId, actorId }) {
+      const stableCommandId = movementId ? `freight-movement:${movementId}:complete` : commandId;
       return jsonRequest(`${mosBase}/movements/${encodeURIComponent(movementId)}/complete`, {
         method: "POST", headers: authHeaders,
-        body: JSON.stringify({ commandId, actorId })
+        body: JSON.stringify({ commandId: stableCommandId, actorId })
       });
     },
 
-    async moveAssetImmediately({ commandId, entityId, objectId, destinationContainerId, actorId, reason, metadata }) {
+    async moveAssetImmediately({ commandId, entityId, objectId, destinationContainerId, actorId, reason, metadata = {} }) {
+      const assetMoveId = String(metadata?.assetMoveId || "").trim();
+      const stableCommandId = assetMoveId ? `asset-move:${assetMoveId}:movement` : commandId;
       return jsonRequest(`${mosBase}/movements/immediate`, {
         method: "POST", headers: authHeaders,
-        body: JSON.stringify({ commandId, entityId, objectId, destinationContainerId, movementType: "asset-move", actorId, reason, metadata })
+        body: JSON.stringify({ commandId: stableCommandId, entityId, objectId, destinationContainerId, movementType: "asset-move", actorId, reason, metadata })
       });
     },
 
