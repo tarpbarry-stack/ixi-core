@@ -3,6 +3,7 @@
 const express = require("express");
 const crypto = require("crypto");
 const { createAdapters } = require("./integrationAdapters");
+const { beginCommand, completeCommand, failCommand } = require("./commandGuard");
 
 const clean = value => String(value ?? "").trim();
 const makeId = prefix => `${prefix}-${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
@@ -53,20 +54,31 @@ function createAssetMoveRouter({ pool, adapters = createAdapters(), resolveActor
 
   router.post("/orders", async (req, res) => {
     const client = await pool.connect();
+    let entityId = "";
+    let commandId = "";
     try {
-      const { entityId, actorId } = await context(req);
+      const resolved = await context(req);
+      entityId = resolved.entityId;
+      const actorId = resolved.actorId;
       const asset = req.body?.asset || {};
       const from = req.body?.from || {};
       const to = req.body?.to || {};
       if (!clean(asset.objectId) || !clean(asset.passportId)) { const e = new Error("Asset identity is required."); e.code="ASSET_MOVE_ASSET_REQUIRED"; e.status=400; throw e; }
       if (!clean(to.objectId || to.containerId)) { const e = new Error("Destination is required."); e.code="ASSET_MOVE_DESTINATION_REQUIRED"; e.status=400; throw e; }
-      const commandId = clean(req.body?.commandId) || makeId("asset-move");
-      const assetMoveId = clean(req.body?.assetMoveId) || `AMO-${Date.now()}`;
+      commandId = clean(req.body?.commandId) || makeId("asset-move");
+      const assetMoveId = clean(req.body?.assetMoveId) || `AMO-${commandId.replace(/[^a-zA-Z0-9]/g,"").slice(-18)}`;
       await client.query("BEGIN");
+      const guard = await beginCommand(client,{entityId,commandId,operation:"asset-move.complete",payload:req.body});
+      if(guard.replay){await client.query("COMMIT");return res.json({...guard.result,idempotentReplay:true});}
       const existing = await client.query(`SELECT record FROM ixi_asset_moves WHERE entity_id=$1 AND asset_move_id=$2 FOR UPDATE`, [entityId, assetMoveId]);
-      if (existing.rowCount) { await client.query("COMMIT"); return res.json({ ok: true, assetMove: existing.rows[0].record, idempotentReplay: true }); }
+      if (existing.rowCount) {
+        const result={ok:true,assetMove:existing.rows[0].record,idempotentReplay:true};
+        await completeCommand(client,{entityId,commandId,result});
+        await client.query("COMMIT");
+        return res.json(result);
+      }
       const movementResult = await adapters.moveAssetImmediately({
-        commandId: `${commandId}:mos`, entityId, objectId: clean(asset.objectId),
+        commandId: `asset-move:${assetMoveId}:mos`, entityId, objectId: clean(asset.objectId),
         destinationContainerId: clean(to.containerId || to.objectId), actorId,
         reason: clean(req.body?.reason), metadata: { assetMoveId, moveType: clean(req.body?.moveType || "location"), assetPassportId: clean(asset.passportId) }
       });
@@ -84,10 +96,13 @@ function createAssetMoveRouter({ pool, adapters = createAdapters(), resolveActor
         INSERT INTO ixi_asset_moves(entity_id, asset_move_id, asset_passport_id, asset_object_id, movement_id, move_type, from_object_id, from_passport_id, to_object_id, to_passport_id, status, record, completed_at)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'completed',$11::jsonb,NOW())
       `, [entityId, assetMoveId, asset.passportId, asset.objectId, record.identity.movementId, record.move.type, clean(from.objectId), clean(from.passportId), clean(to.objectId || to.containerId), clean(to.passportId), JSON.stringify(record)]);
+      const result={ok:true,assetMove:record,movement:movementResult};
+      await completeCommand(client,{entityId,commandId,result});
       await client.query("COMMIT");
-      res.json({ ok: true, assetMove: record, movement: movementResult });
+      res.json(result);
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
+      try { await failCommand(pool,{entityId,commandId,error}); } catch {}
       sendError(res, error);
     } finally { client.release(); }
   });
