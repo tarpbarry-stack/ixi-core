@@ -5,7 +5,6 @@ const crypto = require("crypto");
 const CONTRACT_VERSION = "ixi-aos-creation-integrity-v1";
 const clean = value => String(value ?? "").trim();
 const array = value => Array.isArray(value) ? value : [];
-const object = value => value && typeof value === "object" && !Array.isArray(value) ? value : {};
 
 function stableHash(value) {
   const normalized = JSON.stringify(value, Object.keys(value || {}).sort());
@@ -50,27 +49,55 @@ function getProvisioningSource(record = {}) {
   );
 }
 
+function toTimestamp(value) {
+  const text = clean(value);
+  if (!text) return null;
+  const timestamp = Date.parse(text);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function passportRequiresEntityId({ passport, enforcementAt }) {
+  const enforcementTimestamp = toTimestamp(enforcementAt);
+  if (enforcementTimestamp === null) return false;
+  const createdTimestamp = toTimestamp(passport?.createdAt);
+  if (createdTimestamp === null) return true;
+  return createdTimestamp >= enforcementTimestamp;
+}
+
 function createFinding(code, severity, details = {}) {
-  return {
-    code,
-    severity,
-    ...details
-  };
+  return { code, severity, ...details };
 }
 
 function reconcileCreationIntegrity({
   entityId,
   objects = [],
   passports = [],
-  provisioningRecords = []
+  provisioningRecords = [],
+  passportEntityEnforcementAt = process.env.IXI_AOS_PASSPORT_ENTITY_ENFORCEMENT_AT || ""
 } = {}) {
   const resolvedEntityId = clean(entityId);
-  const scopedObjects = array(objects).filter(item => !resolvedEntityId || clean(item?.entityId) === resolvedEntityId);
+
+  const scopedObjects = array(objects).filter(
+    item => !resolvedEntityId || clean(item?.entityId) === resolvedEntityId
+  );
+
+  const scopedObjectIds = new Set(
+    scopedObjects.map(item => getObjectId(item)).filter(Boolean)
+  );
+
   const scopedPassports = array(passports).filter(item => {
     if (!resolvedEntityId) return true;
     const passportEntity = clean(item?.entityId || item?.metadata?.entityId);
+    const sourceObjectId = getPassportSourceObjectId(item);
+
+    // Keep a Passport visible when its canonical source Object belongs to
+    // this tenant even if Passport.entityId is wrong. Otherwise the bad
+    // tenant value could hide its own corruption from reconciliation.
+    if (sourceObjectId && scopedObjectIds.has(sourceObjectId)) return true;
+
     return !passportEntity || passportEntity === resolvedEntityId;
   });
+
   const scopedProvisioning = array(provisioningRecords).filter(item => {
     const recordEntityId = clean(item?.entityId || item?.metadata?.entityId);
     return !resolvedEntityId || !recordEntityId || recordEntityId === resolvedEntityId;
@@ -116,6 +143,29 @@ function reconcileCreationIntegrity({
     passportById.set(passportId, item);
 
     const sourceObjectId = getPassportSourceObjectId(item);
+    const passportEntityId = clean(item?.entityId || item?.metadata?.entityId);
+    const linkedObject = sourceObjectId ? objectById.get(sourceObjectId) : null;
+    const expectedEntityId = clean(linkedObject?.entityId) || resolvedEntityId;
+
+    if (passportEntityId && expectedEntityId && passportEntityId !== expectedEntityId) {
+      findings.push(createFinding("PASSPORT_ENTITY_ID_MISMATCH", "critical", {
+        passportId,
+        sourceObjectId: sourceObjectId || null,
+        expectedEntityId,
+        actualEntityId: passportEntityId
+      }));
+    }
+
+    if (!passportEntityId && passportRequiresEntityId({ passport: item, enforcementAt: passportEntityEnforcementAt })) {
+      findings.push(createFinding("PASSPORT_ENTITY_ID_MISSING", "critical", {
+        passportId,
+        sourceObjectId: sourceObjectId || null,
+        expectedEntityId: expectedEntityId || null,
+        createdAt: clean(item?.createdAt) || null,
+        enforcementAt: clean(passportEntityEnforcementAt) || null
+      }));
+    }
+
     if (sourceObjectId) {
       const linked = passportsBySourceObject.get(sourceObjectId) || [];
       linked.push(passportId);
@@ -232,6 +282,7 @@ module.exports = {
   getPassportId,
   getPassportSourceObjectId,
   getProvisioningCommandId,
+  passportRequiresEntityId,
   reconcileCreationIntegrity,
   assertCreationIntegrity
 };
