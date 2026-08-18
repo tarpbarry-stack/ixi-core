@@ -71,6 +71,12 @@ function createFreightOrder({ id, entityId, actorId, asset = {}, route = {}, exe
 }
 
 function calculateActualEconomics(record, patch = {}) {
+  if (clean(record?.execution?.mode) === "external-carrier" && !clean(record?.financial?.billId)) {
+    const error = new Error("External carrier freight requires the carrier Bill before reconciliation.");
+    error.code = "FREIGHT_BILL_REQUIRED";
+    error.status = 409;
+    throw error;
+  }
   const current = obj(record.economics);
   const next = { ...current, ...obj(patch) };
   const actualTotal = money(
