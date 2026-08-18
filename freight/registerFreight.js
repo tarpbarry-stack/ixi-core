@@ -17,7 +17,7 @@ function registerFreightSubsystem(app, { pool, resolveActor = null, adapters = c
   if (process.env.NODE_ENV === "production" && typeof resolveActor !== "function") {
     throw new Error("Freight production registration requires a trusted server-side resolveActor implementation.");
   }
-  app.use("/freight/v1/routes", createFreightRouteRouter());
+  app.use("/freight/v1/routes", createFreightRouteRouter({ resolveActor }));
   app.use("/freight/v1/analytics", createFreightAnalyticsRouter({ pool, resolveActor }));
   app.use("/freight/v1", createFreightRouter({ pool, resolveActor, adapters }));
   app.use("/asset-moves/v1", createAssetMoveRouter({ pool, resolveActor, adapters }));
