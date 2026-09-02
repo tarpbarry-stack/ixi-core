@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "manufacturers": [
+    {
+      "canonical": "CATERPILLAR",
+      "aliases": [
+        "CAT",
+        "CATERPILLER",
+        "CATERPILLAR CONSTRUCTION EQUIPMENT"
+      ]
+    },
+    {
+      "canonical": "JOHN DEERE",
+      "aliases": [
+        "DEERE",
+        "JD",
+        "JOHNDEERE",
+        "JOHN DEERE CONSTRUCTION"
+      ]
+    },
+    {
+      "canonical": "KOMATSU",
+      "aliases": [
+        "KOMATSUU"
+      ]
+    },
+    {
+      "canonical": "VOLVO",
+      "aliases": [
+        "VOLVO CE",
+        "VOLVO CONSTRUCTION EQUIPMENT"
+      ]
+    },
+    {
+      "canonical": "LINK-BELT",
+      "aliases": [
+        "LINKBELT",
+        "LINK BELT"
+      ]
+    },
+    {
+      "canonical": "NEW HOLLAND",
+      "aliases": [
+        "NEWHOLLAND"
+      ]
+    }
+  ]
+}
