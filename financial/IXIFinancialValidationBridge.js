@@ -69,7 +69,20 @@ const DOCUMENT_TYPES =
     "credit",
     "adjustment",
     "journal-entry",
-    "period-close"
+    "period-close",
+    "asset-acquisition",
+    "rental",
+    "quote",
+    "settlement",
+    "material-usage",
+    "service-order",
+    "purchase-requisition",
+    "collection",
+    "receipt",
+    "reconciliation",
+    "posting-rule",
+    "technology-work-order",
+    "freight-order"
   ]);
 
 
@@ -89,7 +102,11 @@ const FINANCIAL_STATES =
     "void",
     "reversed",
     "posted",
-    "closed"
+    "closed",
+    "planned",
+    "receivable",
+    "received",
+    "credited"
   ]);
 
 

@@ -484,6 +484,8 @@ function createWorkOrderDocument({
   sourceDocumentId = "",
   externalReference = "",
 
+  workOrder = {},
+
   metadata = {}
 } = {}) {
 
@@ -647,6 +649,9 @@ function createWorkOrderDocument({
       )
     );
 
+  const resolvedWorkOrder = safeObject(workOrder);
+  const resolvedDocumentNumber = clean(documentNumber || resolvedWorkOrder?.identity?.number);
+
 
   return {
     financialDocumentId:
@@ -655,10 +660,7 @@ function createWorkOrderDocument({
     documentType:
       "work-order",
 
-    documentNumber:
-      clean(
-        documentNumber
-      ),
+    documentNumber: resolvedDocumentNumber,
 
     financialState:
       clean(
@@ -692,10 +694,16 @@ function createWorkOrderDocument({
         workOrderType
       ),
 
-    priority:
-      clean(
-        priority
-      ),
+    priority: clean(priority || resolvedWorkOrder?.work?.priority),
+
+    workOrder: {
+      ...resolvedWorkOrder,
+      identity: {
+        ...safeObject(resolvedWorkOrder?.identity),
+        workOrderId: clean(resolvedWorkOrder?.identity?.workOrderId) || resolvedDocumentId,
+        number: resolvedDocumentNumber || resolvedDocumentId
+      }
+    },
 
     sourceSystem:
       clean(

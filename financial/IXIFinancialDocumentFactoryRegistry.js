@@ -109,6 +109,10 @@ const {
     "./IXIFinancialPeriodCloseFactory"
   );
 
+const {
+  operationalFactory
+} = require("./IXIFinancialOperationalDocumentFactory");
+
 
 /* =========================================================
    TYPES
@@ -146,8 +150,20 @@ const IXI_FINANCIAL_DOCUMENT_TYPES =
     JOURNAL_ENTRY:
       "journal-entry",
 
-    PERIOD_CLOSE:
-      "period-close"
+    PERIOD_CLOSE: "period-close",
+    ASSET_ACQUISITION: "asset-acquisition",
+    RENTAL: "rental",
+    QUOTE: "quote",
+    SETTLEMENT: "settlement",
+    MATERIAL_USAGE: "material-usage",
+    SERVICE_ORDER: "service-order",
+    PURCHASE_REQUISITION: "purchase-requisition",
+    COLLECTION: "collection",
+    RECEIPT: "receipt",
+    RECONCILIATION: "reconciliation",
+    POSTING_RULE: "posting-rule",
+    TECHNOLOGY_WORK_ORDER: "technology-work-order",
+    FREIGHT_ORDER: "freight-order"
   });
 
 
@@ -234,8 +250,20 @@ const FACTORIES =
       createJournalEntryDocument,
 
 
-    [IXI_FINANCIAL_DOCUMENT_TYPES.PERIOD_CLOSE]:
-      createPeriodCloseDocument
+    [IXI_FINANCIAL_DOCUMENT_TYPES.PERIOD_CLOSE]: createPeriodCloseDocument,
+    [IXI_FINANCIAL_DOCUMENT_TYPES.ASSET_ACQUISITION]: operationalFactory("asset-acquisition"),
+    [IXI_FINANCIAL_DOCUMENT_TYPES.RENTAL]: operationalFactory("rental"),
+    [IXI_FINANCIAL_DOCUMENT_TYPES.QUOTE]: operationalFactory("quote"),
+    [IXI_FINANCIAL_DOCUMENT_TYPES.SETTLEMENT]: operationalFactory("settlement"),
+    [IXI_FINANCIAL_DOCUMENT_TYPES.MATERIAL_USAGE]: operationalFactory("material-usage"),
+    [IXI_FINANCIAL_DOCUMENT_TYPES.SERVICE_ORDER]: operationalFactory("service-order"),
+    [IXI_FINANCIAL_DOCUMENT_TYPES.PURCHASE_REQUISITION]: operationalFactory("purchase-requisition"),
+    [IXI_FINANCIAL_DOCUMENT_TYPES.COLLECTION]: operationalFactory("collection"),
+    [IXI_FINANCIAL_DOCUMENT_TYPES.RECEIPT]: operationalFactory("receipt"),
+    [IXI_FINANCIAL_DOCUMENT_TYPES.RECONCILIATION]: operationalFactory("reconciliation"),
+    [IXI_FINANCIAL_DOCUMENT_TYPES.POSTING_RULE]: operationalFactory("posting-rule"),
+    [IXI_FINANCIAL_DOCUMENT_TYPES.TECHNOLOGY_WORK_ORDER]: operationalFactory("technology-work-order"),
+    [IXI_FINANCIAL_DOCUMENT_TYPES.FREIGHT_ORDER]: operationalFactory("freight-order")
   });
 
 
