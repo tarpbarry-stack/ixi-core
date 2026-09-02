@@ -69,6 +69,9 @@ const IXI_FINANCIAL_ACTIONS =
     PATCH_DOCUMENT:
       "financial.document.patch",
 
+    POST_DOCUMENT:
+      "financial.document.post",
+
     APPROVE_DOCUMENT:
       "financial.document.approve",
 
@@ -219,6 +222,9 @@ const ROLE_PERMISSIONS =
 
         IXI_FINANCIAL_ACTIONS
           .PATCH_DOCUMENT,
+
+        IXI_FINANCIAL_ACTIONS
+          .POST_DOCUMENT,
 
         IXI_FINANCIAL_ACTIONS
           .APPROVE_DOCUMENT,

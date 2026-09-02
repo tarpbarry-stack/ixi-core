@@ -80,6 +80,14 @@ const providerService =
   );
 
 
+const {
+  postJournalEntry
+} =
+  require(
+    "./IXIFinancialJournalPostingService"
+  );
+
+
 
 const financialStore =
   require(
@@ -1508,6 +1516,94 @@ async function executeCreateFinancialDocumentCommand(
 
 
 /* =========================================================
+   POST JOURNAL ENTRY COMMAND
+   ========================================================= */
+
+async function executePostJournalEntryCommand(
+  input = {}
+) {
+  const commandId =
+    clean(
+      input.commandId
+    ) ||
+    createFinancialCommandId();
+
+  const idempotencyKey =
+    clean(
+      input.idempotencyKey
+    ) ||
+    createFinancialIdempotencyKey();
+
+  try {
+    return await postJournalEntry({
+      ...safeObject(
+        input
+      ),
+
+      commandId,
+      idempotencyKey
+    }, {
+      loadDocument:
+        financialStore
+          .getCurrentDocumentRecord,
+
+      loadIdempotency:
+        financialStore
+          .getIdempotencyRecord,
+
+      replaceDocument:
+        providerService
+          .replaceDocument,
+
+      validateAccounts:
+        validateJournalAccounts,
+
+      assertPeriodOpen:
+        assertFinancialPeriodOpen
+    });
+
+  } catch (
+    error
+  ) {
+    return {
+      ok:
+        false,
+
+      operation:
+        "financial.journal.post",
+
+      commandId,
+      idempotencyKey,
+
+      errors: [
+        {
+          name:
+            clean(
+              error?.name ||
+              "IXIFinancialJournalPostError"
+            ),
+
+          message:
+            clean(
+              error?.message ||
+              "Journal entry could not be posted."
+            ),
+
+          details:
+            safeObject(
+              error?.details
+            )
+        }
+      ],
+
+      warnings:
+        []
+    };
+  }
+}
+
+
+/* =========================================================
    CLOSE ACCOUNTING PERIOD COMMAND
    ========================================================= */
 
@@ -2260,5 +2356,6 @@ module.exports = {
   validateJournalAccounts,
 
   executeCreateFinancialDocumentCommand,
+  executePostJournalEntryCommand,
   executeCloseFinancialPeriodCommand
 };

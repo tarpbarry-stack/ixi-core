@@ -1089,13 +1089,22 @@ function buildFinancialGLProjection({
    * =======================================================
    */
 
+  const isPostedJournal =
+    document =>
+      clean(
+        document?.documentType
+      ) === "journal-entry" &&
+      clean(
+        document?.financialState
+      ) === "posted" &&
+      clean(
+        document?.status
+      ) === "posted";
+
+
   const journals =
     periodDocuments.filter(
-      document =>
-        clean(
-          document.documentType
-        ) ===
-          "journal-entry"
+      isPostedJournal
     );
 
 
@@ -1107,11 +1116,7 @@ function buildFinancialGLProjection({
 
   const throughPeriodJournals =
     throughPeriodDocuments.filter(
-      document =>
-        clean(
-          document.documentType
-        ) ===
-          "journal-entry"
+      isPostedJournal
     );
 
 

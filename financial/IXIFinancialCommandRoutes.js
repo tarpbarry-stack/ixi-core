@@ -86,6 +86,7 @@ const {
 
 const {
   executeCreateFinancialDocumentCommand,
+  executePostJournalEntryCommand,
   executeCloseFinancialPeriodCommand
 } =
   require(
@@ -307,9 +308,19 @@ function getStatus(
 
   if (
     name ===
+      "IXIFinancialDocumentNotFoundError"
+  ) {
+    return 404;
+  }
+
+
+  if (
+    name ===
       "IXIFinancialConflictError" ||
     name ===
-      "IXIFinancialRevisionConflictError"
+      "IXIFinancialRevisionConflictError" ||
+    name ===
+      "IXIFinancialJournalStateConflictError"
   ) {
     return 409;
   }
@@ -334,6 +345,144 @@ function getStatus(
 /* =========================================================
    CREATE COMMAND
    ========================================================= */
+
+/* =========================================================
+   TRAN$ACT DESKTOP — POST JOURNAL ENTRY
+   ========================================================= */
+
+router.post(
+  "/desktop/journals/:financialDocumentId/post",
+  async (
+    req,
+    res
+  ) => {
+    try {
+      const body =
+        safeObject(
+          req.body
+        );
+
+      const accessContext =
+        await resolveFinancialAccessContextFromRequest(
+          req
+        );
+
+      const authorization =
+        authorizeFinancialAction({
+          accessContext,
+
+          action:
+            IXI_FINANCIAL_ACTIONS
+              .POST_DOCUMENT
+        });
+
+      if (
+        !authorization.allowed
+      ) {
+        const response =
+          createAuthorizationFailure({
+            accessContext,
+            reason:
+              authorization.reason,
+            action:
+              IXI_FINANCIAL_ACTIONS
+                .POST_DOCUMENT
+          });
+
+        return res
+          .status(
+            getStatus(
+              response
+            )
+          )
+          .json(
+            response
+          );
+      }
+
+      const result =
+        await executePostJournalEntryCommand({
+          financialDocumentId:
+            clean(
+              req.params
+                .financialDocumentId
+            ),
+
+          expectedRevision:
+            body.expectedRevision,
+
+          actorPassportId:
+            accessContext
+              .actorPassportId,
+
+          entityPassportId:
+            accessContext
+              .entityPassportId,
+
+          commandId:
+            clean(
+              body.commandId
+            ),
+
+          idempotencyKey:
+            clean(
+              body.idempotencyKey
+            ),
+
+          requestId:
+            clean(
+              req.headers[
+                "x-request-id"
+              ]
+            ),
+
+          source:
+            "ixi-transact-desktop",
+
+          metadata: {
+            ...safeObject(
+              body.metadata
+            ),
+
+            transactSurface:
+              "desktop",
+
+            accountingScope:
+              "entity"
+          }
+        });
+
+      return res
+        .status(
+          getStatus(
+            result
+          )
+        )
+        .json(
+          result
+        );
+
+    } catch (
+      error
+    ) {
+      console.error(
+        "TRAN$ACT journal-post command failed:",
+        error
+      );
+
+      const response =
+        createCommandRouteError(
+          error
+        );
+
+      return res
+        .status(500)
+        .json(
+          response
+        );
+    }
+  }
+);
 
 /*
  * =========================================================

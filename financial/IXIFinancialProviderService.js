@@ -479,6 +479,13 @@ async function createDocument(
 async function replaceDocument(
   input = {}
 ) {
+  const auditEventType =
+    clean(
+      input.auditEventType
+    ) === "post"
+      ? "post"
+      : "replace";
+
   const request =
     normalizeFinancialDocumentWriteRequest(
       input
@@ -577,7 +584,7 @@ async function replaceDocument(
         financialDocumentId,
 
         eventType:
-          "replace",
+          auditEventType,
 
         actorPassportId:
           request.actorPassportId,
