@@ -62,6 +62,7 @@ const DOCUMENT_TYPES =
     "purchase-order",
     "work-order",
     "time-entry",
+    "material-usage",
     "bill",
     "supplier-invoice",
     "invoice",
@@ -112,6 +113,8 @@ const TECH_WORK_IMPACTS = new Set(["normal", "degraded", "critical"]);
 const TECH_WORK_ENVIRONMENTS = new Set(["production", "test", "development", "field", "unknown"]);
 const TIME_ENTRY_MODES = new Set(["live", "manual"]);
 const TIME_ENTRY_STATUSES = new Set(["running", "paused", "stopped", "recorded", "posted"]);
+const MATERIAL_SOURCES = new Set(["inventory", "manual", "purchase-order", "existing-supply"]);
+const MATERIAL_UNITS = new Set(["EA", "FT", "YD", "GAL", "QT", "LB", "OZ", "SET", "BOX", "ROLL", "LOT"]);
 
 
 const EXPENSE_PAYMENT_METHODS =
@@ -951,6 +954,67 @@ function validateFinancialDocument(
     }
     if (Number(source?.totals?.laborHours) !== hours) {
       errors.push("time entry total labor hours must match the operational record.");
+    }
+  }
+
+  if (documentType === "material-usage") {
+    const usage = safeObject(source.materialUsage);
+    const identity = safeObject(usage.identity);
+    const context = safeObject(usage.context);
+    const material = safeObject(usage.material);
+    const attribution = safeObject(usage.costAttribution);
+    const adjustment = safeObject(usage.inventoryAdjustment);
+    const receiving = safeObject(usage.receivingConsumption);
+    const materialSource = clean(material.source).toLowerCase();
+    const quantity = finiteNumber(material.quantity);
+    const unitCost = finiteNumber(material.unitCost);
+    const extendedCost = roundMoney(material.extendedCost);
+    const expectedCost = quantity === null || unitCost === null ? null : roundMoney(quantity * unitCost);
+
+    if (clean(usage.schema) !== "ixi-material-usage-v2") errors.push("material usage schema is invalid.");
+    if (clean(identity.materialUsageId) !== financialDocumentId) errors.push("material usage identity must match financialDocumentId.");
+    if (clean(identity.number) !== clean(source.documentNumber)) errors.push("material usage number must match documentNumber.");
+    if (!clean(context.primaryPassportId)) {
+      errors.push("material usage primary Passport is required.");
+    } else if (!normalizedReferences.some(reference => clean(reference.passportId) === clean(context.primaryPassportId))) {
+      errors.push("material usage primary Passport must be referenced by the financial document.");
+    }
+    if (!clean(context.employeePassportId || context.employeeId)) errors.push("material usage employee identity is required.");
+    if (clean(context.employeePassportId) && !normalizedReferences.some(reference => clean(reference.passportId) === clean(context.employeePassportId) && ["employee", "technician"].includes(clean(reference.role).toLowerCase()))) {
+      errors.push("material usage employee Passport must be referenced as employee or technician.");
+    }
+    if (!MATERIAL_SOURCES.has(materialSource)) errors.push("material usage source is invalid.");
+    if (!clean(material.description)) errors.push("material usage description is required.");
+    if (quantity === null || !(quantity > 0)) errors.push("material usage quantity must be greater than zero.");
+    if (!MATERIAL_UNITS.has(clean(material.unit).toUpperCase())) errors.push("material usage unit is invalid.");
+    if (unitCost === null || unitCost < 0) errors.push("material usage unit cost is invalid.");
+    if (extendedCost === null || expectedCost === null || extendedCost !== expectedCost) errors.push("material usage extended cost must equal quantity times unit cost.");
+    if (!clean(material.dateUsed) || !isValidDate(material.dateUsed)) errors.push("material usage date is required and must be valid.");
+    if (Number(attribution.amount) !== extendedCost || clean(attribution.currency).toUpperCase() !== currency || attribution.economicEvent !== false) {
+      errors.push("material usage cost attribution must match the material and remain non-economic.");
+    }
+    if (Number(source?.totals?.materialCost) !== extendedCost) errors.push("material usage total must match extended cost.");
+    if (normalizedLines.length !== 1 || Number(normalizedLines[0]?.quantity) !== quantity || Number(normalizedLines[0]?.amount) !== extendedCost || clean(normalizedLines[0]?.direction) !== "neutral") {
+      errors.push("material usage requires one matching neutral material line.");
+    }
+    if (materialSource === "inventory") {
+      if (!clean(material.inventoryItemId || material.inventoryPassportId)) errors.push("inventory material usage requires inventory item identity.");
+      if (!clean(material.sourceLocationId || material.sourceLocationLabel)) errors.push("inventory material usage requires source location.");
+      if (adjustment.required !== true || clean(adjustment.direction) !== "decrement" || Number(adjustment.quantity) !== quantity || clean(adjustment.status) !== "recorded") {
+        errors.push("inventory material usage requires a recorded matching decrement.");
+      }
+      const available = finiteNumber(material.availableQuantity);
+      if (available === null || available < quantity) errors.push("inventory material usage exceeds available quantity.");
+    } else if (adjustment.required === true) {
+      errors.push("non-inventory material usage cannot require inventory decrement.");
+    }
+    if (materialSource === "purchase-order") {
+      if (!clean(material.purchaseOrderId || material.purchaseOrderNumber)) errors.push("purchase-order material usage requires purchase order lineage.");
+      if (receiving.required !== true || Number(receiving.quantity) !== quantity || clean(receiving.status) !== "recorded") errors.push("purchase-order material usage requires recorded receiving consumption.");
+      const available = finiteNumber(material.availableQuantity);
+      if (available === null || available < quantity) errors.push("purchase-order material usage exceeds available received quantity.");
+    } else if (receiving.required === true) {
+      errors.push("non-purchase-order material usage cannot require receiving consumption.");
     }
   }
 

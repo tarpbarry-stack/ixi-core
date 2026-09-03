@@ -83,6 +83,13 @@ const {
     "./IXIFinancialTimeEntryFactory"
   );
 
+const {
+  createMaterialUsageDocument
+} =
+  require(
+    "./IXIFinancialMaterialUsageFactory"
+  );
+
 
 const {
   createCostCreditDocument
@@ -139,6 +146,9 @@ const IXI_FINANCIAL_DOCUMENT_TYPES =
 
     TIME_ENTRY:
       "time-entry",
+
+    MATERIAL_USAGE:
+      "material-usage",
 
     CREDIT:
       "credit",
@@ -224,6 +234,9 @@ const FACTORIES =
 
     [IXI_FINANCIAL_DOCUMENT_TYPES.TIME_ENTRY]:
       createTimeEntryDocument,
+
+    [IXI_FINANCIAL_DOCUMENT_TYPES.MATERIAL_USAGE]:
+      createMaterialUsageDocument,
 
 
     [IXI_FINANCIAL_DOCUMENT_TYPES.CREDIT]:
