@@ -111,6 +111,11 @@ const COMMITMENT_TYPES =
     "rental-expense"
   ]);
 
+const REVENUE_COMMITMENT_TYPES =
+  new Set([
+    "rental-income"
+  ]);
+
 
 const REVENUE_TYPES =
   new Set([
@@ -1025,6 +1030,21 @@ function getPurchaseOrderEffect({
   };
 }
 
+function getRevenueCommitmentEffect({ document, childIndex } = {}) {
+  const state = normalizeState(document?.financialState);
+  if (DEAD_STATES.has(state) || DRAFT_STATES.has(state)) return { contractedRevenue: 0, remainingContractedRevenue: 0 };
+  const total = Math.abs(getFinancialDocumentTotal(document));
+  const invoiced = sumLinkedDocuments({
+    parentDocumentId: document?.financialDocumentId,
+    childIndex,
+    allowedTypes: ["invoice"]
+  });
+  return {
+    contractedRevenue: roundMoney(total),
+    remainingContractedRevenue: roundMoney(Math.max(0, total - invoiced))
+  };
+}
+
 
 /* =========================================================
    INCURRED EFFECT
@@ -1248,6 +1268,12 @@ function createFinancialLifecycleSnapshot({
   let incurredCost =
     0;
 
+  let contractedRevenue =
+    0;
+
+  let remainingContractedRevenue =
+    0;
+
   let revenue =
     0;
 
@@ -1281,6 +1307,13 @@ function createFinancialLifecycleSnapshot({
         remainingCommitment +=
           effect.remainingCommitment;
 
+        return;
+      }
+
+      if (REVENUE_COMMITMENT_TYPES.has(type)) {
+        const effect = getRevenueCommitmentEffect({ document, childIndex });
+        contractedRevenue += effect.contractedRevenue;
+        remainingContractedRevenue += effect.remainingContractedRevenue;
         return;
       }
 
@@ -1427,6 +1460,15 @@ function createFinancialLifecycleSnapshot({
         projectedOutflow
       ),
 
+    contractedRevenue:
+      roundMoney(contractedRevenue),
+
+    remainingContractedRevenue:
+      roundMoney(remainingContractedRevenue),
+
+    projectedInflow:
+      roundMoney(revenue + remainingContractedRevenue),
+
     operatingNet:
       roundMoney(
         operatingNet
@@ -1520,6 +1562,12 @@ function createFinancialLifecycleFacts({
         let incurredCost =
           0;
 
+        let contractedRevenue =
+          0;
+
+        let remainingContractedRevenue =
+          0;
+
         let revenue =
           0;
 
@@ -1546,6 +1594,12 @@ function createFinancialLifecycleFacts({
 
           remainingCommitment =
             effect.remainingCommitment;
+        }
+
+        if (REVENUE_COMMITMENT_TYPES.has(type)) {
+          const effect = getRevenueCommitmentEffect({ document, childIndex });
+          contractedRevenue = effect.contractedRevenue;
+          remainingContractedRevenue = effect.remainingContractedRevenue;
         }
 
 
@@ -1632,6 +1686,12 @@ function createFinancialLifecycleFacts({
               remainingCommitment
             ),
 
+          contractedRevenue:
+            roundMoney(contractedRevenue),
+
+          remainingContractedRevenue:
+            roundMoney(remainingContractedRevenue),
+
           incurredCost:
             roundMoney(
               incurredCost
@@ -1664,6 +1724,7 @@ function createFinancialLifecycleFacts({
 module.exports = {
   OUTFLOW_INCURRED_TYPES,
   COMMITMENT_TYPES,
+  REVENUE_COMMITMENT_TYPES,
   REVENUE_TYPES,
   PAYMENT_TYPES,
   CREDIT_TYPES,

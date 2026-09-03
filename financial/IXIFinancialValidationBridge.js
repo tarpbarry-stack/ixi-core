@@ -65,6 +65,7 @@ const DOCUMENT_TYPES =
     "material-usage",
     "asset-acquisition",
     "rental-expense",
+    "rental-income",
     "bill",
     "supplier-invoice",
     "invoice",
@@ -1169,6 +1170,63 @@ function validateFinancialDocument(
       if (!clean(item.storageKey || item.key) || !["uploaded", "available", "verified"].includes(clean(item.status).toLowerCase())) {
         errors.push(`attachments[${index}] must reference durable uploaded evidence.`);
       }
+    });
+  }
+
+  if (documentType === "rental-income") {
+    const record = safeObject(source.rentalIncome);
+    const identity = safeObject(record.identity);
+    const context = safeObject(record.context);
+    const customer = safeObject(record.customer);
+    const asset = safeObject(record.ownedAsset);
+    const rentalPeriod = safeObject(record.period);
+    const rate = safeObject(record.rate);
+    const economics = safeObject(record.economics);
+    const treatment = safeObject(source.accountingTreatment);
+    const projectedRevenue = roundMoney(economics.projectedRevenue);
+
+    if (clean(record.schema) !== "ixi-rental-income-v2") errors.push("rental income schema is invalid.");
+    if (clean(identity.rentalIncomeId) !== financialDocumentId || clean(identity.financialDocumentId) !== financialDocumentId) {
+      errors.push("rental income identity must match financialDocumentId.");
+    }
+    if (clean(identity.number) !== clean(source.documentNumber)) errors.push("rental income number must match documentNumber.");
+    if (!clean(context.primaryPassportId)) errors.push("rental income asset Passport is required.");
+    else if (!normalizedReferences.some(reference => clean(reference.passportId) === clean(context.primaryPassportId) && clean(reference.role).toLowerCase() === "asset")) {
+      errors.push("rental income asset Passport must be referenced as the asset.");
+    }
+    if (!clean(context.entityPassportId)) errors.push("rental income entity Passport is required.");
+    if (!clean(context.actorPassportId || context.actorId)) errors.push("rental income actor identity is required.");
+    if (clean(context.entityPassportId) && !normalizedReferences.some(reference => clean(reference.passportId) === clean(context.entityPassportId) && clean(reference.role).toLowerCase() === "entity")) {
+      errors.push("rental income entity Passport must be referenced as the entity.");
+    }
+    if (clean(context.actorPassportId) && !normalizedReferences.some(reference => clean(reference.passportId) === clean(context.actorPassportId) && clean(reference.role).toLowerCase() === "employee")) {
+      errors.push("rental income actor Passport must be referenced as the employee.");
+    }
+    if (!clean(customer.name)) errors.push("rental income customer is required.");
+    if (!clean(asset.label) || clean(asset.passportId) !== clean(context.primaryPassportId)) errors.push("rental income must identify the selected owned asset.");
+    if (clean(asset.ownershipState) !== "owned" || !["customer-custody", "returned"].includes(clean(asset.custodyState))) {
+      errors.push("rental income asset must remain owned and be in customer custody or returned.");
+    }
+    if (!clean(rentalPeriod.startDate) || !isValidDate(rentalPeriod.startDate)) errors.push("rental income start date is required and must be valid.");
+    if (!clean(rentalPeriod.expectedReturnDate) || !isValidDate(rentalPeriod.expectedReturnDate)) errors.push("rental income expected return date is required and must be valid.");
+    if (clean(rentalPeriod.expectedReturnDate) && clean(rentalPeriod.startDate) && clean(rentalPeriod.expectedReturnDate) < clean(rentalPeriod.startDate)) {
+      errors.push("rental income expected return date cannot precede start date.");
+    }
+    if (!RENTAL_RATE_UNITS.has(clean(rate.unit).toLowerCase()) || !(Number(rate.baseRate) > 0)) errors.push("rental income requires a positive rate and valid rate basis.");
+    if (!RENTAL_STATUSES.has(clean(record.status).toLowerCase())) errors.push("rental income status is invalid.");
+    if (projectedRevenue === null || !(projectedRevenue > 0)) errors.push("rental income projected revenue must be greater than zero.");
+    if (normalizedLines.length !== 1 || Number(normalizedLines[0]?.amount) !== projectedRevenue || clean(normalizedLines[0]?.direction) !== "inflow") {
+      errors.push("rental income requires one matching inflow contract line.");
+    }
+    if (Number(source?.totals?.projectedRevenue) !== projectedRevenue || Number(source?.totals?.total) !== projectedRevenue) {
+      errors.push("rental income totals must match projected revenue.");
+    }
+    if (treatment.classification !== "rental-revenue-contract" || treatment.economicEvent !== true || treatment.createsRevenueCommitment !== true || treatment.createsBilledRevenue !== false || treatment.createsReceivable !== false || treatment.createsCashEvent !== false || treatment.invoiceConsumesRevenueCommitment !== true) {
+      errors.push("rental income accounting treatment must create one revenue commitment without billed revenue, receivable, or cash duplication.");
+    }
+    safeArray(source.attachments).forEach((attachment, index) => {
+      const item = safeObject(attachment);
+      if (!clean(item.storageKey || item.key) || !["uploaded", "available", "verified"].includes(clean(item.status).toLowerCase())) errors.push(`attachments[${index}] must reference durable uploaded evidence.`);
     });
   }
 

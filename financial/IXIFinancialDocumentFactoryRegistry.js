@@ -104,6 +104,13 @@ const {
     "./IXIFinancialRentalExpenseFactory"
   );
 
+const {
+  createRentalIncomeDocument
+} =
+  require(
+    "./IXIFinancialRentalIncomeFactory"
+  );
+
 
 const {
   createCostCreditDocument
@@ -169,6 +176,9 @@ const IXI_FINANCIAL_DOCUMENT_TYPES =
 
     RENTAL_EXPENSE:
       "rental-expense",
+
+    RENTAL_INCOME:
+      "rental-income",
 
     CREDIT:
       "credit",
@@ -263,6 +273,9 @@ const FACTORIES =
 
     [IXI_FINANCIAL_DOCUMENT_TYPES.RENTAL_EXPENSE]:
       createRentalExpenseDocument,
+
+    [IXI_FINANCIAL_DOCUMENT_TYPES.RENTAL_INCOME]:
+      createRentalIncomeDocument,
 
 
     [IXI_FINANCIAL_DOCUMENT_TYPES.CREDIT]:
