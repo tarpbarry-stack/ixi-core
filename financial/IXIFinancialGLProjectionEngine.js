@@ -1,5 +1,9 @@
 "use strict";
 
+const {
+  buildFinancialCloseControls
+} = require("./IXIFinancialCloseControlEngine");
+
 /*
  * IXI FINANCIAL GENERAL LEDGER PROJECTION ENGINE
  *
@@ -924,10 +928,9 @@ function resolvePeriodStatus({
             clean(
               period
             ) &&
-          clean(
-            document.status
-          ).toLowerCase() ===
-            "closed"
+          ["period-close", "period-reopen"].includes(
+            clean(document.documentType).toLowerCase()
+          )
       )
       .sort(
         (
@@ -935,10 +938,12 @@ function resolvePeriodStatus({
           b
         ) =>
           clean(
+            b.reopenedAt ||
             b.closedAt ||
             b.occurredAt
           ).localeCompare(
             clean(
+              a.reopenedAt ||
               a.closedAt ||
               a.occurredAt
             )
@@ -951,6 +956,13 @@ function resolvePeriodStatus({
     null;
 
 
+  const latestIsClose =
+    clean(
+      latest?.documentType
+    ).toLowerCase() ===
+      "period-close";
+
+
   return {
     period:
       clean(
@@ -958,13 +970,13 @@ function resolvePeriodStatus({
       ),
 
     status:
-      latest
+      latestIsClose
         ? "closed"
         : "open",
 
     closed:
       Boolean(
-        latest
+        latestIsClose
       ),
 
     closedAt:
@@ -981,10 +993,55 @@ function resolvePeriodStatus({
 
     closeDocumentId:
       clean(
-        latest
+        latestIsClose
+          ? latest
           ?.financialDocumentId
+          : latest
+            ?.priorCloseDocumentId
+      ),
+
+    reopenedAt:
+      clean(
+        latestIsClose
+          ? ""
+          : latest?.reopenedAt
+      ),
+
+    reopenedBy:
+      clean(
+        latestIsClose
+          ? ""
+          : latest?.reopenedBy
+      ),
+
+    reopenDocumentId:
+      clean(
+        latestIsClose
+          ? ""
+          : latest?.financialDocumentId
       )
   };
+}
+
+
+function buildActivePostingRules({ documents = [], period = "" } = {}) {
+  const latestByRule = new Map();
+  safeArray(documents)
+    .filter(document => clean(document.documentType).toLowerCase() === "posting-rule")
+    .filter(document => {
+      const effectivePeriod = clean(document?.postingRule?.control?.effectivePeriod);
+      return !effectivePeriod || !period || effectivePeriod <= period;
+    })
+    .forEach(document => {
+      const rule = safeObject(document.postingRule);
+      const ruleId = clean(rule?.identity?.ruleId);
+      const version = Number(rule?.identity?.version);
+      const current = latestByRule.get(ruleId);
+      if (ruleId && Number.isInteger(version) && (!current || version > Number(current?.identity?.version))) latestByRule.set(ruleId, rule);
+    });
+  return Array.from(latestByRule.values())
+    .filter(rule => rule?.control?.active !== false)
+    .sort((a, b) => clean(a?.identity?.ruleId).localeCompare(clean(b?.identity?.ruleId)));
 }
 
 
@@ -1129,11 +1186,20 @@ function buildFinancialGLProjection({
   const periodCloseDocuments =
     periodDocuments.filter(
       document =>
-        clean(
-          document.documentType
-        ) ===
-          "period-close"
+        ["period-close", "period-reopen"].includes(
+          clean(document.documentType).toLowerCase()
+        )
     );
+
+
+  const activePostingRules =
+    buildActivePostingRules({
+      documents:
+        throughPeriodDocuments,
+
+      period:
+        resolvedPeriod
+    });
 
 
   /*
@@ -1233,6 +1299,22 @@ function buildFinancialGLProjection({
     );
 
 
+  const closeControls =
+    buildFinancialCloseControls({
+      documents:
+        currencyDocuments,
+
+      journals,
+
+      endingTrialBalance,
+
+      chart,
+
+      period:
+        resolvedPeriod
+    });
+
+
   return {
     schema:
       "ixi-financial-gl-projection-v2",
@@ -1262,6 +1344,20 @@ function buildFinancialGLProjection({
         }))
     },
 
+    postingRules: {
+      schema:
+        "ixi-financial-posting-rules-v1",
+
+      source:
+        "ixi-core-dynamodb",
+
+      browserCalculated:
+        false,
+
+      rules:
+        activePostingRules
+    },
+
 
     counts: {
       sourceDocuments:
@@ -1271,7 +1367,10 @@ function buildFinancialGLProjection({
         journals.length,
 
       periodCloses:
-        periodCloseDocuments.length,
+        periodCloseDocuments.filter(document => clean(document.documentType).toLowerCase() === "period-close").length,
+
+      periodReopens:
+        periodCloseDocuments.filter(document => clean(document.documentType).toLowerCase() === "period-reopen").length,
 
       postingExceptions:
         postingExceptions.length,
@@ -1321,6 +1420,9 @@ function buildFinancialGLProjection({
       endingPostingExceptions:
         endingPostingExceptions.length,
 
+      closeCertification:
+        closeControls,
+
       ready:
         trialBalance.balanced &&
         endingTrialBalance.balanced &&
@@ -1328,7 +1430,9 @@ function buildFinancialGLProjection({
         postingExceptions.length ===
           0 &&
         endingPostingExceptions.length ===
-          0
+          0 &&
+        closeControls.ready ===
+          true
     }
   };
 }
@@ -1339,5 +1443,6 @@ module.exports = {
   buildTrialBalance,
   buildProfitAndLoss,
   buildBalanceSheet,
+  buildActivePostingRules,
   buildFinancialGLProjection
 };

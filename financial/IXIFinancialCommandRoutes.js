@@ -87,7 +87,9 @@ const {
 const {
   executeCreateFinancialDocumentCommand,
   executePostJournalEntryCommand,
-  executeCloseFinancialPeriodCommand
+  executeCloseFinancialPeriodCommand,
+  executeReopenFinancialPeriodCommand,
+  executeCreatePostingRuleCommand
 } =
   require(
     "./IXIFinancialCommandEngine"
@@ -1136,6 +1138,66 @@ router.post(
     }
   }
 );
+
+
+/* =========================================================
+   TRAN$ACT DESKTOP — REOPEN PERIOD / POSTING RULE CONTROLS
+   ========================================================= */
+
+router.post("/desktop/reopen-period", async (req, res) => {
+  try {
+    const body = safeObject(req.body);
+    const accessContext = await resolveFinancialAccessContextFromRequest(req);
+    const authorization = authorizeFinancialAction({ accessContext, action: IXI_FINANCIAL_ACTIONS.REOPEN_PERIOD });
+    if (!authorization.allowed) {
+      const response = createAuthorizationFailure({ accessContext, reason: authorization.reason, action: IXI_FINANCIAL_ACTIONS.REOPEN_PERIOD });
+      return res.status(getStatus(response)).json(response);
+    }
+    const result = await executeReopenFinancialPeriodCommand({
+      actorPassportId: accessContext.actorPassportId,
+      entityPassportId: accessContext.entityPassportId,
+      period: clean(body.period),
+      currency: clean(body.currency || "USD").toUpperCase(),
+      reopenReason: clean(body.reopenReason || body.reason),
+      commandId: clean(body.commandId),
+      idempotencyKey: clean(body.idempotencyKey),
+      requestId: clean(req.headers["x-request-id"]),
+      metadata: { ...safeObject(body.metadata), transactSurface: "desktop", accountingScope: "entity", periodControl: "reopen" }
+    });
+    return res.status(getStatus(result)).json(result);
+  } catch (error) {
+    console.error("TRAN$ACT period-reopen command failed:", error);
+    const response = createCommandRouteError(error);
+    return res.status(500).json(response);
+  }
+});
+
+router.post("/desktop/posting-rules", async (req, res) => {
+  try {
+    const body = safeObject(req.body);
+    const accessContext = await resolveFinancialAccessContextFromRequest(req);
+    const authorization = authorizeFinancialAction({ accessContext, action: IXI_FINANCIAL_ACTIONS.MANAGE_POSTING_RULES });
+    if (!authorization.allowed) {
+      const response = createAuthorizationFailure({ accessContext, reason: authorization.reason, action: IXI_FINANCIAL_ACTIONS.MANAGE_POSTING_RULES });
+      return res.status(getStatus(response)).json(response);
+    }
+    const result = await executeCreatePostingRuleCommand({
+      actorPassportId: accessContext.actorPassportId,
+      entityPassportId: accessContext.entityPassportId,
+      postingRule: safeObject(body.postingRule),
+      currency: clean(body.currency || "USD").toUpperCase(),
+      commandId: clean(body.commandId),
+      idempotencyKey: clean(body.idempotencyKey),
+      requestId: clean(req.headers["x-request-id"]),
+      metadata: { ...safeObject(body.metadata), transactSurface: "desktop", accountingScope: "entity", accountingControl: "posting-rule" }
+    });
+    return res.status(getStatus(result)).json(result);
+  } catch (error) {
+    console.error("TRAN$ACT posting-rule command failed:", error);
+    const response = createCommandRouteError(error);
+    return res.status(500).json(response);
+  }
+});
 
 
 /* =========================================================

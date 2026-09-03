@@ -5,7 +5,8 @@ const test = require("node:test");
 
 const {
   hasEconomicValue,
-  isNonEconomicOperationalWorkOrder
+  isNonEconomicOperationalWorkOrder,
+  executeCreateFinancialDocumentCommand
 } = require("./IXIFinancialCommandEngine");
 
 
@@ -70,4 +71,13 @@ test("zero-value accounting documents do not bypass period control", () => {
     isNonEconomicOperationalWorkOrder(expense),
     false
   );
+});
+
+test("generic create cannot bypass dedicated accounting-control commands", async () => {
+  for (const documentType of ["period-close", "period-reopen", "posting-rule"]) {
+    const result = await executeCreateFinancialDocumentCommand({ documentType });
+    assert.equal(result.ok, false);
+    assert.equal(result.stage, "period-control");
+    assert.equal(result.errors[0].name, "IXIFinancialAccountingControlCommandRequiredError");
+  }
 });

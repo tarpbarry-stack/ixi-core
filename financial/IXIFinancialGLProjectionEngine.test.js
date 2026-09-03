@@ -47,3 +47,18 @@ test("GL projection includes posted journals and excludes drafts and reversals",
   assert.equal(projection.chart.source, "ixi-core");
   assert.equal(projection.chart.accounts.length > 0, true);
 });
+
+test("GL projection resolves reopen state and latest active posting-rule version", () => {
+  const control = (type, id, occurredAt, extra = {}) => ({ financialDocumentId: id, documentType: type, financialState: type === "posting-rule" ? "approved" : "submitted", status: type === "period-close" ? "closed" : type === "period-reopen" ? "reopened" : "active", currency: "USD", period: "2026-09", occurredAt, ...extra });
+  const projection = buildFinancialGLProjection({ period: "2026-09", currency: "USD", records: [
+    control("period-close", "close-1", "2026-09-30T20:00:00.000Z", { closedAt: "2026-09-30T20:00:00.000Z", closedBy: "controller-1" }),
+    control("period-reopen", "reopen-1", "2026-09-30T21:00:00.000Z", { reopenedAt: "2026-09-30T21:00:00.000Z", reopenedBy: "controller-2", priorCloseDocumentId: "close-1" }),
+    control("posting-rule", "rule-v1", "2026-09-01T00:00:00.000Z", { postingRule: { identity: { ruleId: "invoice-standard", version: 1 }, control: { active: true }, match: {}, posting: {} } }),
+    control("posting-rule", "rule-v2", "2026-09-02T00:00:00.000Z", { postingRule: { identity: { ruleId: "invoice-standard", version: 2 }, control: { active: true }, match: {}, posting: {} } })
+  ] });
+  assert.equal(projection.period.closed, false);
+  assert.equal(projection.period.reopenDocumentId, "reopen-1");
+  assert.equal(projection.period.closeDocumentId, "close-1");
+  assert.equal(projection.postingRules.rules.length, 1);
+  assert.equal(projection.postingRules.rules[0].identity.version, 2);
+});
