@@ -97,6 +97,13 @@ const {
     "./IXIFinancialAssetAcquisitionFactory"
   );
 
+const {
+  createRentalExpenseDocument
+} =
+  require(
+    "./IXIFinancialRentalExpenseFactory"
+  );
+
 
 const {
   createCostCreditDocument
@@ -159,6 +166,9 @@ const IXI_FINANCIAL_DOCUMENT_TYPES =
 
     ASSET_ACQUISITION:
       "asset-acquisition",
+
+    RENTAL_EXPENSE:
+      "rental-expense",
 
     CREDIT:
       "credit",
@@ -250,6 +260,9 @@ const FACTORIES =
 
     [IXI_FINANCIAL_DOCUMENT_TYPES.ASSET_ACQUISITION]:
       createAssetAcquisitionDocument,
+
+    [IXI_FINANCIAL_DOCUMENT_TYPES.RENTAL_EXPENSE]:
+      createRentalExpenseDocument,
 
 
     [IXI_FINANCIAL_DOCUMENT_TYPES.CREDIT]:
