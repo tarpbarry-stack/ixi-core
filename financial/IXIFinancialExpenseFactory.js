@@ -151,6 +151,52 @@ function normalizeCurrency(
 }
 
 
+function normalizeExpenseDate(
+  value
+) {
+  const candidate =
+    clean(
+      value
+    );
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(candidate)) {
+    return `${candidate}T00:00:00.000Z`;
+  }
+
+  return candidate;
+}
+
+
+function normalizeAttachments(
+  attachments = []
+) {
+  return safeArray(attachments)
+    .map(attachment => {
+      const source = safeObject(attachment);
+      const fileName = clean(source.fileName);
+      const storageKey = clean(source.storageKey || source.key);
+
+      if (!fileName && !storageKey) return null;
+
+      return {
+        attachmentId:
+          clean(source.attachmentId) || randomId("ifa"),
+        type: clean(source.type || "receipt"),
+        fileName,
+        mimeType: clean(source.mimeType),
+        size: Math.max(0, safeNumber(source.size, 0)),
+        status: clean(source.status || "recorded"),
+        storageKey,
+        checksum: clean(source.checksum),
+        metadata: {
+          ...safeObject(source.metadata)
+        }
+      };
+    })
+    .filter(Boolean);
+}
+
+
 /* =========================================================
    REFERENCES
    ========================================================= */
@@ -408,7 +454,15 @@ function createExpenseDocument({
   costCode = "",
   vendorPassportId = "",
   employeePassportId = "",
+  vendor = "",
+  expenseDate = "",
   paymentMethod = "",
+  referenceNumber = "",
+  notes = "",
+  receiptRequired = false,
+  attachments = [],
+  relationships = {},
+  reimbursement = {},
   sourceSystem = "",
   sourceDocumentId = "",
   externalReference = "",
@@ -429,9 +483,33 @@ function createExpenseDocument({
 
   const resolvedOccurredAt =
     clean(
-      occurredAt
+      normalizeExpenseDate(
+        occurredAt || expenseDate
+      )
     ) ||
     nowIso();
+
+  const resolvedAttachments =
+    normalizeAttachments(
+      attachments
+    );
+
+  const reimbursementSource =
+    safeObject(
+      reimbursement
+    );
+
+  const reimbursementRequired =
+    reimbursementSource.required === true ||
+    clean(paymentMethod).toLowerCase() === "my-money";
+
+  const hasDurableReceipt =
+    resolvedAttachments.some(attachment =>
+      Boolean(attachment.storageKey) &&
+      ["uploaded", "available", "verified"].includes(
+        clean(attachment.status).toLowerCase()
+      )
+    );
 
 
   const documentReferences =
@@ -563,7 +641,11 @@ function createExpenseDocument({
     documentNumber:
       clean(
         documentNumber
-      ),
+      ) ||
+      `EXP-${resolvedDocumentId
+        .replace(/^ifd_/, "")
+        .slice(-8)
+        .toUpperCase()}`,
 
     financialState:
       clean(
@@ -584,13 +666,57 @@ function createExpenseDocument({
 
     memo:
       clean(
-        memo
+        memo || notes
       ),
 
     paymentMethod:
       clean(
         paymentMethod
       ),
+
+    externalReference:
+      clean(
+        externalReference || referenceNumber
+      ),
+
+    expense: {
+      vendor: clean(vendor),
+      category: clean(category),
+      expenseDate: clean(expenseDate) || resolvedOccurredAt.slice(0, 10),
+      paymentMethod: clean(paymentMethod).toLowerCase(),
+      referenceNumber: clean(referenceNumber || externalReference),
+      notes: clean(notes || memo),
+      receiptRequired: receiptRequired === true,
+      receiptStatus: hasDurableReceipt
+        ? "attached"
+        : resolvedAttachments.length
+          ? "pending-upload"
+          : "missing"
+    },
+
+    reimbursement: {
+      ...reimbursementSource,
+      required: reimbursementRequired,
+      employeePassportId: reimbursementRequired
+        ? clean(reimbursementSource.employeePassportId || employeePassportId)
+        : "",
+      amount: reimbursementRequired
+        ? roundMoney(reimbursementSource.amount ?? total)
+        : 0,
+      currency: resolvedCurrency,
+      status: reimbursementRequired
+        ? clean(reimbursementSource.status || "owed").toLowerCase()
+        : "not-applicable"
+    },
+
+    relationships: {
+      ...safeObject(
+        relationships
+      )
+    },
+
+    attachments:
+      resolvedAttachments,
 
     sourceSystem:
       clean(
@@ -600,11 +726,6 @@ function createExpenseDocument({
     sourceDocumentId:
       clean(
         sourceDocumentId
-      ),
-
-    externalReference:
-      clean(
-        externalReference
       ),
 
     references:
