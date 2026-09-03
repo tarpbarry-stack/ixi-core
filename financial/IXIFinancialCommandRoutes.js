@@ -124,6 +124,22 @@ function safeObject(
     : {};
 }
 
+function getCreateFinancialAction(documentType="") {
+  const type=clean(documentType).toLowerCase();
+  if(type==="payment") return IXI_FINANCIAL_ACTIONS.RECORD_PAYMENT;
+  if(type==="credit") return IXI_FINANCIAL_ACTIONS.APPLY_VENDOR_CREDIT;
+  if(type==="payables-control") return IXI_FINANCIAL_ACTIONS.MANAGE_PAYABLES;
+  return IXI_FINANCIAL_ACTIONS.CREATE_DOCUMENT;
+}
+
+function bindTrustedCommandInput({documentType="",input={},accessContext={}}={}) {
+  const type=clean(documentType).toLowerCase(),source={...safeObject(input)};
+  if(type==="payment") return {...source,payerPassportId:clean(accessContext.entityPassportId),employeePassportId:clean(accessContext.actorPassportId)};
+  if(type==="credit") return {...source,recordedByPassportId:clean(accessContext.actorPassportId)};
+  if(type==="payables-control") return {...source,entityPassportId:clean(accessContext.entityPassportId),actorPassportId:clean(accessContext.actorPassportId)};
+  return source;
+}
+
 
 /* =========================================================
    AUTH FAILURE
@@ -712,10 +728,9 @@ router.post(
         ).toLowerCase();
 
 
-      const commandInput =
-        safeObject(
-          body.input
-        );
+      const commandInput = bindTrustedCommandInput({documentType,input:body.input,accessContext});
+
+      const requiredAction=getCreateFinancialAction(documentType);
 
 
       let previewDocument;
@@ -763,9 +778,7 @@ router.post(
         authorizeFinancialDocumentWrite({
           accessContext,
 
-          action:
-            IXI_FINANCIAL_ACTIONS
-              .CREATE_DOCUMENT,
+          action: requiredAction,
 
           financialDocument:
             previewDocument,
@@ -786,9 +799,7 @@ router.post(
             reason:
               authorization.reason,
 
-            action:
-              IXI_FINANCIAL_ACTIONS
-                .CREATE_DOCUMENT
+            action: requiredAction
           });
 
 
@@ -931,10 +942,9 @@ router.post(
         ).toLowerCase();
 
 
-      const commandInput =
-        safeObject(
-          body.input
-        );
+      const commandInput = bindTrustedCommandInput({documentType,input:body.input,accessContext});
+
+      const requiredAction=getCreateFinancialAction(documentType);
 
 
       /*
@@ -987,9 +997,7 @@ router.post(
         authorizeFinancialDocumentWrite({
           accessContext,
 
-          action:
-            IXI_FINANCIAL_ACTIONS
-              .CREATE_DOCUMENT,
+          action: requiredAction,
 
           financialDocument:
             previewDocument
@@ -1007,9 +1015,7 @@ router.post(
             reason:
               authorization.reason,
 
-            action:
-              IXI_FINANCIAL_ACTIONS
-                .CREATE_DOCUMENT
+            action: requiredAction
           });
 
 
