@@ -113,7 +113,8 @@ const COMMITMENT_TYPES =
 
 const REVENUE_COMMITMENT_TYPES =
   new Set([
-    "rental-income"
+    "rental-income",
+    "service-quote"
   ]);
 
 
