@@ -855,6 +855,16 @@ function isNonEconomicOperationalWorkOrder(
   );
 }
 
+function isNonEconomicOperationalCapture(
+  financialDocument = {}
+) {
+  const documentType = clean(financialDocument?.documentType).toLowerCase();
+  return (
+    ["work-order", "time-entry"].includes(documentType) &&
+    !hasEconomicValue(financialDocument)
+  );
+}
+
 
 async function assertFinancialPeriodOpen({
   financialDocument = {},
@@ -890,7 +900,7 @@ async function assertFinancialPeriodOpen({
    * Order carries any economic value.
    */
   if (
-    isNonEconomicOperationalWorkOrder(
+    isNonEconomicOperationalCapture(
       financialDocument
     )
   ) {
@@ -2433,6 +2443,7 @@ module.exports = {
   resolveFinancialDocumentPeriod,
   hasEconomicValue,
   isNonEconomicOperationalWorkOrder,
+  isNonEconomicOperationalCapture,
   assertFinancialPeriodOpen,
   validateJournalAccounts,
 
