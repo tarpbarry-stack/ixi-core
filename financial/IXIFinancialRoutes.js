@@ -141,8 +141,17 @@ function safeObject(
 
 
 function getBillPatchAction(existing = {}, merged = {}) {
-  if (clean(merged.documentType).toLowerCase() === "payables-control") return IXI_FINANCIAL_ACTIONS.MANAGE_PAYABLES;
-  if (!["bill", "supplier-invoice"].includes(clean(merged.documentType).toLowerCase())) return IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT;
+  const type = clean(merged.documentType).toLowerCase();
+  if (type === "payables-control") return IXI_FINANCIAL_ACTIONS.MANAGE_PAYABLES;
+  if (type === "collection") return IXI_FINANCIAL_ACTIONS.MANAGE_COLLECTIONS;
+  if (type === "settlement") {
+    const beforeStatus = clean(existing?.assetSettlement?.status).toLowerCase();
+    const afterStatus = clean(merged?.assetSettlement?.status).toLowerCase();
+    return afterStatus === "approved" && beforeStatus !== "approved"
+      ? IXI_FINANCIAL_ACTIONS.APPROVE_SETTLEMENT
+      : IXI_FINANCIAL_ACTIONS.PREPARE_SETTLEMENT;
+  }
+  if (!["bill", "supplier-invoice"].includes(type)) return IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT;
   const before = safeObject(existing.billRecord);
   const after = safeObject(merged.billRecord);
   const beforeApproval = clean(before?.approval?.status).toLowerCase();
@@ -155,6 +164,82 @@ function getBillPatchAction(existing = {}, merged = {}) {
   if (["partially-paid", "paid"].includes(afterState) && beforeState !== afterState) return IXI_FINANCIAL_ACTIONS.RECORD_PAYMENT;
   if (clean(after?.purchaseMatch?.status).toLowerCase() === "matched" && clean(before?.purchaseMatch?.status).toLowerCase() === "exception") return IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT;
   return IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT;
+}
+
+async function bindOperationalControlEvidence({ patch = {}, merged = {}, existing = {}, action = "", accessContext = {} } = {}) {
+  const source = safeObject(patch);
+  const type = clean(merged.documentType).toLowerCase();
+  const actorPassportId = clean(accessContext.actorPassportId);
+  const entityPassportId = clean(accessContext.entityPassportId);
+  const timestamp = new Date().toISOString();
+
+  if (type === "collection") {
+    const record = { ...safeObject(merged.collectionCase) };
+    return {
+      ...source,
+      collectionCase: {
+        ...record,
+        context: { ...safeObject(record.context), entityPassportId },
+        audit: { ...safeObject(record.audit), updatedAt: timestamp, updatedBy: actorPassportId }
+      }
+    };
+  }
+
+  if (type === "settlement") {
+    const record = { ...safeObject(merged.assetSettlement) };
+    const approving = action === IXI_FINANCIAL_ACTIONS.APPROVE_SETTLEMENT;
+    const prior = safeObject(existing.assetSettlement);
+    if (approving && clean(prior.status).toLowerCase() !== "ready") throw Object.assign(new Error("Settlement approval requires a ready canonical Settlement."), { name: "IXIFinancialSettlementTransitionError" });
+    let status = approving ? "approved" : clean(prior.status || record.status).toLowerCase();
+    let paymentStatus = approving ? "unpaid" : clean(prior.paymentStatus || record.paymentStatus || "unpaid").toLowerCase();
+    let waterfall = safeObject(record.waterfall);
+    let ownerPayments = Array.isArray(prior.ownerPayments) ? prior.ownerPayments : [];
+    if (!approving && ["approved", "partially-paid", "settled"].includes(clean(prior.status).toLowerCase())) {
+      const listed = await providerService.listDocumentsByPassport({ passportId: entityPassportId });
+      if (!listed?.ok) throw Object.assign(new Error("Settlement payment state could not be verified."), { name: "IXIFinancialSettlementReadError" });
+      const settlementId = clean(existing.financialDocumentId);
+      const payments = (Array.isArray(listed?.data?.documents) ? listed.data.documents : []).map(item => {
+        const envelope = safeObject(item?.record || item), document = safeObject(envelope.financialDocument || envelope);
+        return { ...document, metadata: { ...safeObject(envelope.metadata), ...safeObject(document.metadata) } };
+      }).filter(document => clean(document.documentType).toLowerCase() === "payment" && clean(document.paymentDirection).toLowerCase() === "outflow" && clean(document.sourceFinancialDocumentId) === settlementId && !["void", "reversed"].includes(clean(document.financialState).toLowerCase()));
+      const paidByOwner = new Map();
+      payments.forEach(document => { const ownerId = clean(document?.metadata?.ownerId); if (ownerId) paidByOwner.set(ownerId, (paidByOwner.get(ownerId) || 0) + Math.abs(Number(document?.totals?.total || document?.totals?.subtotal || 0))); });
+      const owners = (Array.isArray(waterfall.owners) ? waterfall.owners : []).map(owner => { const ownerId = clean(owner?.ownerId), paid = Math.round((paidByOwner.get(ownerId) || 0) * 100) / 100, finalDue = Number(owner?.finalDue || 0); return { ...owner, paid, balanceDue: Math.round(Math.max(0, finalDue - paid) * 100) / 100 }; });
+      const totalPaid = owners.reduce((sum, owner) => sum + Number(owner.paid || 0), 0), totalBalance = owners.reduce((sum, owner) => sum + Number(owner.balanceDue || 0), 0);
+      status = totalBalance <= 0.005 ? "settled" : totalPaid > 0 ? "partially-paid" : "approved";
+      paymentStatus = status === "settled" ? "paid" : status === "partially-paid" ? "partial" : "unpaid";
+      waterfall = { ...waterfall, owners };
+      ownerPayments = payments.map(document => ({ paymentId: clean(document.financialDocumentId), ownerId: clean(document?.metadata?.ownerId), amount: Math.abs(Number(document?.totals?.total || document?.totals?.subtotal || 0)), date: clean(document.occurredAt), method: clean(document.paymentMethod), reference: clean(document.transactionReference) }));
+    }
+    return {
+      ...source,
+      status,
+      financialState: status === "settled" ? "paid" : "submitted",
+      assetSettlement: {
+        ...record,
+        status,
+        paymentStatus,
+        waterfall,
+        ownerPayments,
+        context: { ...safeObject(record.context), entityPassportId },
+        controls: approving ? {
+          ...safeObject(record.controls),
+          approvedById: actorPassportId,
+          approvedAt: timestamp,
+          permissionEvidence: {
+            action: IXI_FINANCIAL_ACTIONS.APPROVE_SETTLEMENT,
+            actorPassportId,
+            entityPassportId,
+            allowed: true,
+            recordedAt: timestamp
+          }
+        } : safeObject(prior.controls || record.controls),
+        audit: { ...safeObject(record.audit), updatedAt: timestamp, updatedBy: actorPassportId }
+      }
+    };
+  }
+
+  return source;
 }
 
 
@@ -851,6 +936,14 @@ router.patch(
         billPatchAction,
         accessContext.actorPassportId
       );
+
+    boundPatch = await bindOperationalControlEvidence({
+      patch: boundPatch,
+      merged: mergedDocument,
+      existing: safeObject(existing?.financialDocument),
+      action: billPatchAction,
+      accessContext
+    });
 
     if (clean(mergedDocument.documentType).toLowerCase() === "payables-control") {
       boundPatch={...boundPatch,payablesControl:mergedDocument.payablesControl};
