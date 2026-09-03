@@ -485,6 +485,7 @@ function createWorkOrderDocument({
   externalReference = "",
 
   workOrder = {},
+  techWorkOrder = {},
 
   metadata = {}
 } = {}) {
@@ -655,17 +656,31 @@ function createWorkOrderDocument({
       workOrder
     );
 
+  const resolvedTechWorkOrder =
+    safeObject(
+      techWorkOrder
+    );
+
+  const technologyWorkOrder =
+    clean(workOrderType).toLowerCase() === "technology" ||
+    clean(resolvedTechWorkOrder.schema) === "ixi-tech-work-order-v1";
+
+  const resolvedOperationalRecord =
+    technologyWorkOrder
+      ? resolvedTechWorkOrder
+      : resolvedWorkOrder;
+
 
   const resolvedDocumentNumber =
     clean(
       documentNumber ||
-      resolvedWorkOrder
+      resolvedOperationalRecord
         ?.identity
         ?.number
     ) ||
-    `WO-${resolvedDocumentId
+    `${technologyWorkOrder ? "TECHWO" : "WO"}-${resolvedDocumentId
       .replace(/^ifd_/, "")
-      .slice(-8)
+      .slice(technologyWorkOrder ? -6 : -8)
       .toUpperCase()}`;
 
 
@@ -714,32 +729,35 @@ function createWorkOrderDocument({
     priority:
       clean(
         priority ||
-        resolvedWorkOrder
+        resolvedOperationalRecord
           ?.work
           ?.priority
       ),
 
-    workOrder: {
-      ...resolvedWorkOrder,
-
-      identity: {
-        ...safeObject(
-          resolvedWorkOrder
-            ?.identity
-        ),
-
-        workOrderId:
-          clean(
-            resolvedWorkOrder
-              ?.identity
-              ?.workOrderId
-          ) ||
-          resolvedDocumentId,
-
-        number:
-          resolvedDocumentNumber
-      }
-    },
+    ...(technologyWorkOrder
+      ? {
+          techWorkOrder: {
+            ...resolvedTechWorkOrder,
+            identity: {
+              ...safeObject(resolvedTechWorkOrder?.identity),
+              techWorkOrderId: resolvedDocumentId,
+              workOrderId: resolvedDocumentId,
+              number: resolvedDocumentNumber
+            }
+          }
+        }
+      : {
+          workOrder: {
+            ...resolvedWorkOrder,
+            identity: {
+              ...safeObject(resolvedWorkOrder?.identity),
+              workOrderId:
+                clean(resolvedWorkOrder?.identity?.workOrderId) ||
+                resolvedDocumentId,
+              number: resolvedDocumentNumber
+            }
+          }
+        }),
 
     sourceSystem:
       clean(
