@@ -64,6 +64,7 @@ const DOCUMENT_TYPES =
     "time-entry",
     "material-usage",
     "asset-acquisition",
+    "rental-expense",
     "bill",
     "supplier-invoice",
     "invoice",
@@ -119,6 +120,8 @@ const MATERIAL_UNITS = new Set(["EA", "FT", "YD", "GAL", "QT", "LB", "OZ", "SET"
 const ASSET_ACQUISITION_TYPES = new Set([
   "direct-purchase", "auction", "trade-in", "dealer", "private-seller", "entity-transfer", "other"
 ]);
+const RENTAL_RATE_UNITS = new Set(["hour", "day", "week", "month"]);
+const RENTAL_STATUSES = new Set(["active", "off-rent", "closed", "cancelled"]);
 
 
 const EXPENSE_PAYMENT_METHODS =
@@ -1095,6 +1098,71 @@ function validateFinancialDocument(
     if (clean(makeReady.status).toLowerCase() === "closed") {
       if (!clean(makeReady.inServiceDate) || !isValidDate(makeReady.inServiceDate)) errors.push("closed asset acquisition requires a valid in-service date.");
       if (clean(makeReady.inServiceDate) < clean(acquisition.purchaseDate)) errors.push("asset acquisition in-service date cannot precede purchase date.");
+    }
+    safeArray(source.attachments).forEach((attachment, index) => {
+      const item = safeObject(attachment);
+      if (!clean(item.storageKey || item.key) || !["uploaded", "available", "verified"].includes(clean(item.status).toLowerCase())) {
+        errors.push(`attachments[${index}] must reference durable uploaded evidence.`);
+      }
+    });
+  }
+
+  if (documentType === "rental-expense") {
+    const record = safeObject(source.rentalExpense);
+    const identity = safeObject(record.identity);
+    const context = safeObject(record.context);
+    const vendor = safeObject(record.vendor);
+    const asset = safeObject(record.rentedAsset);
+    const rentalPeriod = safeObject(record.period);
+    const rate = safeObject(record.rate);
+    const economics = safeObject(record.economics);
+    const treatment = safeObject(source.accountingTreatment);
+    const projectedTotal = roundMoney(economics.projectedTotal);
+
+    if (clean(record.schema) !== "ixi-rental-expense-v2") errors.push("rental expense schema is invalid.");
+    if (clean(identity.rentalExpenseId) !== financialDocumentId || clean(identity.financialDocumentId) !== financialDocumentId) {
+      errors.push("rental expense identity must match financialDocumentId.");
+    }
+    if (clean(identity.number) !== clean(source.documentNumber)) errors.push("rental expense number must match documentNumber.");
+    if (!clean(context.primaryPassportId)) {
+      errors.push("rental expense primary Passport is required.");
+    } else if (!normalizedReferences.some(reference => clean(reference.passportId) === clean(context.primaryPassportId))) {
+      errors.push("rental expense primary Passport must be referenced by the financial document.");
+    }
+    if (!clean(context.entityPassportId)) errors.push("rental expense entity Passport is required.");
+    if (!clean(context.actorPassportId || context.actorId)) errors.push("rental expense actor identity is required.");
+    if (clean(context.entityPassportId) && !normalizedReferences.some(reference => clean(reference.passportId) === clean(context.entityPassportId) && clean(reference.role).toLowerCase() === "entity")) {
+      errors.push("rental expense entity Passport must be referenced as the entity.");
+    }
+    if (clean(context.actorPassportId) && !normalizedReferences.some(reference => clean(reference.passportId) === clean(context.actorPassportId) && clean(reference.role).toLowerCase() === "employee")) {
+      errors.push("rental expense actor Passport must be referenced as the employee.");
+    }
+    if (clean(context.workOrderFinancialDocumentId) && clean(source.sourceFinancialDocumentId) !== clean(context.workOrderFinancialDocumentId)) {
+      errors.push("rental expense Work Order lineage must match sourceFinancialDocumentId.");
+    }
+    if (!clean(vendor.name)) errors.push("rental expense vendor is required.");
+    if (!clean(asset.description)) errors.push("rental expense asset description is required.");
+    if (clean(asset.ownershipState) !== "external-owned" || clean(asset.custodyState) !== "rented-in") {
+      errors.push("rental expense asset must be externally owned and rented-in.");
+    }
+    if (!clean(rentalPeriod.startDate) || !isValidDate(rentalPeriod.startDate)) errors.push("rental expense start date is required and must be valid.");
+    if (!clean(rentalPeriod.expectedReturnDate) || !isValidDate(rentalPeriod.expectedReturnDate)) errors.push("rental expense expected return date is required and must be valid.");
+    if (clean(rentalPeriod.expectedReturnDate) && clean(rentalPeriod.startDate) && clean(rentalPeriod.expectedReturnDate) < clean(rentalPeriod.startDate)) {
+      errors.push("rental expense expected return date cannot precede start date.");
+    }
+    if (!RENTAL_RATE_UNITS.has(clean(rate.unit).toLowerCase()) || !(Number(rate.baseRate) > 0)) {
+      errors.push("rental expense requires a positive rate and valid rate basis.");
+    }
+    if (!RENTAL_STATUSES.has(clean(record.status).toLowerCase())) errors.push("rental expense status is invalid.");
+    if (projectedTotal === null || !(projectedTotal > 0)) errors.push("rental expense projected total must be greater than zero.");
+    if (normalizedLines.length !== 1 || Number(normalizedLines[0]?.amount) !== projectedTotal || clean(normalizedLines[0]?.direction) !== "outflow") {
+      errors.push("rental expense requires one matching outflow commitment line.");
+    }
+    if (Number(source?.totals?.projectedCommitment) !== projectedTotal || Number(source?.totals?.total) !== projectedTotal) {
+      errors.push("rental expense totals must match projected commitment.");
+    }
+    if (treatment.classification !== "rental-commitment" || treatment.economicEvent !== true || treatment.createsCommitment !== true || treatment.createsIncurredExpense !== false || treatment.createsPayable !== false || treatment.createsCashEvent !== false || treatment.billConsumesCommitment !== true) {
+      errors.push("rental expense accounting treatment must create one commitment without expense, payable, or cash duplication.");
     }
     safeArray(source.attachments).forEach((attachment, index) => {
       const item = safeObject(attachment);
