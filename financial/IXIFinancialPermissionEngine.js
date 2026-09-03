@@ -84,6 +84,30 @@ const IXI_FINANCIAL_ACTIONS =
     REVERSE_DOCUMENT:
       "financial.document.reverse",
 
+    VIEW_GENERAL_LEDGER:
+      "financial.gl.view",
+
+    CREATE_JOURNAL:
+      "financial.gl.journal.create",
+
+    POST_JOURNAL:
+      "financial.gl.journal.post",
+
+    REVERSE_JOURNAL:
+      "financial.gl.journal.reverse",
+
+    CLOSE_PERIOD:
+      "financial.gl.period.close",
+
+    REOPEN_PERIOD:
+      "financial.gl.period.reopen",
+
+    MANAGE_POSTING_RULES:
+      "financial.gl.posting-rules.manage",
+
+    VIEW_FINANCIAL_REPORTS:
+      "financial.reporting.view",
+
     RECORD_PAYMENT:
       "financial.payment.create",
 
@@ -255,6 +279,21 @@ const ROLE_PERMISSIONS =
 
         IXI_FINANCIAL_ACTIONS
           .REVERSE_DOCUMENT,
+
+        IXI_FINANCIAL_ACTIONS
+          .VIEW_GENERAL_LEDGER,
+
+        IXI_FINANCIAL_ACTIONS
+          .CREATE_JOURNAL,
+
+        IXI_FINANCIAL_ACTIONS
+          .POST_JOURNAL,
+
+        IXI_FINANCIAL_ACTIONS
+          .REVERSE_JOURNAL,
+
+        IXI_FINANCIAL_ACTIONS
+          .VIEW_FINANCIAL_REPORTS,
 
         IXI_FINANCIAL_ACTIONS
           .RECORD_PAYMENT,
