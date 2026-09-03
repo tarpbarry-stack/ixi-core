@@ -101,6 +101,15 @@ const DIRECTIONS =
   ]);
 
 
+const EXPENSE_PAYMENT_METHODS =
+  new Set([
+    "company-card",
+    "company-cash",
+    "my-money",
+    "other"
+  ]);
+
+
 /* =========================================================
    HELPERS
    ========================================================= */
@@ -776,6 +785,57 @@ function validateFinancialDocument(
     warnings.push(
       "document contains no Passport references."
     );
+  }
+
+  if (documentType === "expense") {
+    const expense = safeObject(source.expense);
+    const paymentMethod = clean(
+      expense.paymentMethod || source.paymentMethod
+    ).toLowerCase();
+    const vendor = clean(expense.vendor);
+    const category = clean(
+      expense.category || normalizedLines[0]?.category
+    );
+
+    if (!clean(source.description)) {
+      errors.push("expense description is required.");
+    }
+
+    if (!vendor) {
+      errors.push("expense vendor is required.");
+    }
+
+    if (!category) {
+      errors.push("expense category is required.");
+    }
+
+    if (!EXPENSE_PAYMENT_METHODS.has(paymentMethod)) {
+      errors.push("expense paymentMethod is invalid.");
+    }
+
+    if (!normalizedLines.some(line => Number(line?.amount) > 0)) {
+      errors.push("expense amount must be greater than zero.");
+    }
+
+    if (
+      expense.receiptRequired === true &&
+      !safeArray(source.attachments).some(attachment => {
+        const item = safeObject(attachment);
+        return Boolean(clean(item.storageKey || item.key)) &&
+          ["uploaded", "available", "verified"].includes(
+            clean(item.status).toLowerCase()
+          );
+      })
+    ) {
+      errors.push("expense receipt is required by policy.");
+    }
+
+    if (
+      paymentMethod === "my-money" &&
+      safeObject(source.reimbursement).required !== true
+    ) {
+      errors.push("employee-paid expense requires reimbursement lineage.");
+    }
   }
 
   const calculatedTotal =
