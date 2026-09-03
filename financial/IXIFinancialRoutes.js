@@ -141,6 +141,7 @@ function safeObject(
 
 
 function getBillPatchAction(existing = {}, merged = {}) {
+  if (clean(merged.documentType).toLowerCase() === "payables-control") return IXI_FINANCIAL_ACTIONS.MANAGE_PAYABLES;
   if (!["bill", "supplier-invoice"].includes(clean(merged.documentType).toLowerCase())) return IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT;
   const before = safeObject(existing.billRecord);
   const after = safeObject(merged.billRecord);
@@ -769,7 +770,7 @@ router.patch(
         );
 
 
-    const mergedDocument = {
+    let mergedDocument = {
       ...safeObject(
         existing
           ?.financialDocument
@@ -784,6 +785,10 @@ router.patch(
         req.params
           .financialDocumentId
     };
+
+    if (clean(mergedDocument.documentType).toLowerCase() === "payables-control") {
+      mergedDocument={...mergedDocument,payablesControl:{...safeObject(mergedDocument.payablesControl),context:{...safeObject(mergedDocument?.payablesControl?.context),entityPassportId:clean(accessContext.entityPassportId),updatedByPassportId:clean(accessContext.actorPassportId)}}};
+    }
 
 
     const billPatchAction =
@@ -835,12 +840,16 @@ router.patch(
       );
 
 
-    const boundPatch =
+    let boundPatch =
       bindBillActorEvidence(
         safeObject(req.body?.patch),
         billPatchAction,
         accessContext.actorPassportId
       );
+
+    if (clean(mergedDocument.documentType).toLowerCase() === "payables-control") {
+      boundPatch={...boundPatch,payablesControl:mergedDocument.payablesControl};
+    }
 
 
     return sendEnvelope(

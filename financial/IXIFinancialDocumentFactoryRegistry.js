@@ -115,6 +115,8 @@ const {
   createServiceQuoteDocument
 } = require("./IXIFinancialServiceQuoteFactory");
 
+const { createPayablesControlDocument } = require("./IXIFinancialPayablesControlFactory");
+
 
 const {
   createCostCreditDocument
@@ -186,6 +188,9 @@ const IXI_FINANCIAL_DOCUMENT_TYPES =
 
     SERVICE_QUOTE:
       "service-quote",
+
+    PAYABLES_CONTROL:
+      "payables-control",
 
     CREDIT:
       "credit",
@@ -286,6 +291,9 @@ const FACTORIES =
 
     [IXI_FINANCIAL_DOCUMENT_TYPES.SERVICE_QUOTE]:
       createServiceQuoteDocument,
+
+    [IXI_FINANCIAL_DOCUMENT_TYPES.PAYABLES_CONTROL]:
+      createPayablesControlDocument,
 
 
     [IXI_FINANCIAL_DOCUMENT_TYPES.CREDIT]:

@@ -87,6 +87,15 @@ const IXI_FINANCIAL_ACTIONS =
     RECORD_PAYMENT:
       "financial.payment.create",
 
+    APPLY_VENDOR_CREDIT:
+      "financial.vendor-credit.apply",
+
+    SCHEDULE_PAYMENT:
+      "financial.payment.schedule",
+
+    MANAGE_PAYABLES:
+      "financial.payables.manage",
+
     VIEW_HISTORY:
       "financial.document.history.view",
 
@@ -240,6 +249,15 @@ const ROLE_PERMISSIONS =
 
         IXI_FINANCIAL_ACTIONS
           .RECORD_PAYMENT,
+
+        IXI_FINANCIAL_ACTIONS
+          .APPLY_VENDOR_CREDIT,
+
+        IXI_FINANCIAL_ACTIONS
+          .SCHEDULE_PAYMENT,
+
+        IXI_FINANCIAL_ACTIONS
+          .MANAGE_PAYABLES,
 
         IXI_FINANCIAL_ACTIONS
           .VIEW_HISTORY,

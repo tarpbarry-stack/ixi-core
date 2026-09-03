@@ -141,6 +141,48 @@ function safeObject(
     : {};
 }
 
+function financialDocumentFromRecord(value={}) {
+  return safeObject(value?.financialDocument||value?.record?.financialDocument||value);
+}
+
+function financialAmount(document={}) {
+  const source=safeObject(document);
+  const total=Number(source?.totals?.total??source?.totals?.subtotal);
+  if(Number.isFinite(total)) return Math.round(Math.abs(total)*100)/100;
+  return Math.round(safeArray(source.lines).reduce((sum,line)=>sum+Math.abs(Number(line?.amount)||0),0)*100)/100;
+}
+
+async function assertPayablesSettlementAvailable({financialDocument={},entityPassportId=""}={}) {
+  const settlement=financialDocumentFromRecord(financialDocument),type=clean(settlement.documentType).toLowerCase();
+  const sourceId=clean(settlement.sourceFinancialDocumentId);
+  if(!["payment","credit"].includes(type)||!sourceId) return {checked:false};
+  if(type==="payment"&&clean(settlement.paymentDirection).toLowerCase()!=="outflow") return {checked:false};
+  const sourceResult=await providerService.getDocument({financialDocumentId:sourceId});
+  const bill=financialDocumentFromRecord(sourceResult?.data?.record);
+  const approval=clean(bill?.billRecord?.approval?.status).toLowerCase();
+  const recognized=["billed","incurred","partially-paid","paid"].includes(clean(bill.financialState).toLowerCase());
+  if(!sourceResult?.ok||!["bill","supplier-invoice"].includes(clean(bill.documentType).toLowerCase())) throw Object.assign(new Error("A/P settlement source must be a canonical Bill."),{name:"IXIFinancialSettlementSourceError"});
+  if(approval!=="approved"||!recognized) throw Object.assign(new Error("A/P settlement requires an approved, recognized Bill."),{name:"IXIFinancialSettlementStateError"});
+  const billEntity=clean(bill?.billRecord?.context?.entityPassportId);
+  if(!billEntity||billEntity!==clean(entityPassportId)) throw Object.assign(new Error("A/P settlement Bill is outside the authenticated Entity."),{name:"IXIFinancialSettlementScopeError"});
+  const listed=await providerService.listDocumentsByPassport({passportId:billEntity});
+  if(!listed?.ok) throw Object.assign(new Error("A/P settlement balance could not be verified."),{name:"IXIFinancialSettlementReadError"});
+  const existing=safeArray(listed?.data?.documents).map(financialDocumentFromRecord).filter(item=>clean(item.sourceFinancialDocumentId)===sourceId&&!["void","reversed"].includes(clean(item.financialState).toLowerCase())&&((clean(item.documentType)==="credit")||(clean(item.documentType)==="payment"&&clean(item.paymentDirection)==="outflow")));
+  const settled=Math.round(existing.reduce((sum,item)=>sum+financialAmount(item),0)*100)/100,newAmount=financialAmount(settlement),billAmount=financialAmount(bill);
+  if(!(newAmount>0)) throw Object.assign(new Error("A/P settlement amount must be greater than zero."),{name:"IXIFinancialSettlementAmountError"});
+  if(settled+newAmount>billAmount+0.005) throw Object.assign(new Error("A/P settlement exceeds the canonical open Bill balance."),{name:"IXIFinancialSettlementOverpaymentError",details:{billAmount,settled,newAmount,openBalance:Math.max(0,billAmount-settled)}});
+  return{checked:true,billAmount,settled,newAmount};
+}
+
+async function assertPayablesControlSource({financialDocument={},entityPassportId=""}={}) {
+  const control=financialDocumentFromRecord(financialDocument);
+  if(clean(control.documentType).toLowerCase()!=="payables-control") return {checked:false};
+  const sourceId=clean(control.sourceFinancialDocumentId),sourceResult=await providerService.getDocument({financialDocumentId:sourceId}),bill=financialDocumentFromRecord(sourceResult?.data?.record);
+  if(!sourceResult?.ok||!["bill","supplier-invoice"].includes(clean(bill.documentType).toLowerCase())) throw Object.assign(new Error("A/P control source must be a canonical Bill."),{name:"IXIFinancialSettlementSourceError"});
+  if(clean(bill?.billRecord?.context?.entityPassportId)!==clean(entityPassportId)) throw Object.assign(new Error("A/P control Bill is outside the authenticated Entity."),{name:"IXIFinancialSettlementScopeError"});
+  return{checked:true,sourceFinancialDocumentId:sourceId};
+}
+
 
 function randomId(
   prefix
@@ -1235,6 +1277,13 @@ async function executeCreateFinancialDocumentCommand(
       warnings:
         validation.warnings
     };
+  }
+
+  try {
+    await assertPayablesSettlementAvailable({financialDocument:validation.normalized,entityPassportId:command.entityPassportId});
+    await assertPayablesControlSource({financialDocument:validation.normalized,entityPassportId:command.entityPassportId});
+  } catch (error) {
+    return {ok:false,commandId:command.commandId,idempotencyKey:command.idempotencyKey,stage:"settlement-control",financialDocument:validation.normalized,errors:[{name:clean(error?.name||"IXIFinancialSettlementControlError"),message:clean(error?.message||"A/P settlement control failed."),details:safeObject(error?.details)}],warnings:validation.warnings};
   }
 
 
@@ -2448,6 +2497,8 @@ module.exports = {
   isNonEconomicOperationalCapture,
   assertFinancialPeriodOpen,
   validateJournalAccounts,
+  assertPayablesSettlementAvailable,
+  assertPayablesControlSource,
 
   executeCreateFinancialDocumentCommand,
   executePostJournalEntryCommand,

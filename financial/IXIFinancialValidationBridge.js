@@ -67,6 +67,7 @@ const DOCUMENT_TYPES =
     "rental-expense",
     "rental-income",
     "service-quote",
+    "payables-control",
     "bill",
     "supplier-invoice",
     "invoice",
@@ -908,6 +909,26 @@ function validateFinancialDocument(
       const item = safeObject(attachment);
       if (!clean(item.storageKey || item.key) || !["uploaded", "available", "verified"].includes(clean(item.status).toLowerCase())) errors.push(`attachments[${index}] must reference durable uploaded evidence.`);
     });
+  }
+
+  if (documentType === "payment") {
+    if (!normalizedLines.some(line => Number(line?.amount) > 0)) errors.push("payment amount must be greater than zero.");
+    if (clean(source.paymentDirection).toLowerCase() === "outflow" && clean(source.sourceFinancialDocumentId) && !clean(source.transactionReference)) errors.push("linked outgoing payment transactionReference is required.");
+  }
+
+  if (documentType === "credit") {
+    if (!normalizedLines.some(line => Number(line?.amount) > 0)) errors.push("credit amount must be greater than zero.");
+    if (clean(source.sourceFinancialDocumentId) && !clean(source.reasonCode)) errors.push("linked vendor credit reasonCode is required.");
+  }
+
+  if (documentType === "payables-control") {
+    const control=safeObject(source.payablesControl),identity=safeObject(control.identity),context=safeObject(control.context),payable=safeObject(control.payable),treatment=safeObject(source.accountingTreatment);
+    if(clean(control.schema)!=="ixi-payables-control-v1") errors.push("payables control schema is invalid.");
+    if(clean(identity.payablesControlId)!==financialDocumentId) errors.push("payables control identity must match financialDocumentId.");
+    if(!clean(context.entityPassportId)) errors.push("payables control entity Passport is required.");
+    if(!clean(payable.billId)||clean(payable.billId)!==clean(source.sourceFinancialDocumentId)) errors.push("payables control requires canonical Bill lineage.");
+    if(normalizedLines.length!==0||Number(source?.totals?.total)!==0) errors.push("payables control must remain non-economic.");
+    if(treatment.economicEvent!==false||treatment.createsPayable!==false||treatment.createsCashEvent!==false) errors.push("payables control accounting treatment must remain non-economic.");
   }
 
   if (
