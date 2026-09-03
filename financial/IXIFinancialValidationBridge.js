@@ -66,6 +66,7 @@ const DOCUMENT_TYPES =
     "asset-acquisition",
     "rental-expense",
     "rental-income",
+    "service-quote",
     "bill",
     "supplier-invoice",
     "invoice",
@@ -123,6 +124,8 @@ const ASSET_ACQUISITION_TYPES = new Set([
 ]);
 const RENTAL_RATE_UNITS = new Set(["hour", "day", "week", "month"]);
 const RENTAL_STATUSES = new Set(["active", "off-rent", "closed", "cancelled"]);
+const SERVICE_QUOTE_STATUSES = new Set(["draft", "sent", "viewed", "changes-requested", "accepted", "declined", "expired", "superseded", "converted"]);
+const SERVICE_QUOTE_PRICING_TYPES = new Set(["estimate", "fixed-price", "not-to-exceed"]);
 
 
 const EXPENSE_PAYMENT_METHODS =
@@ -1224,6 +1227,58 @@ function validateFinancialDocument(
     if (treatment.classification !== "rental-revenue-contract" || treatment.economicEvent !== true || treatment.createsRevenueCommitment !== true || treatment.createsBilledRevenue !== false || treatment.createsReceivable !== false || treatment.createsCashEvent !== false || treatment.invoiceConsumesRevenueCommitment !== true) {
       errors.push("rental income accounting treatment must create one revenue commitment without billed revenue, receivable, or cash duplication.");
     }
+    safeArray(source.attachments).forEach((attachment, index) => {
+      const item = safeObject(attachment);
+      if (!clean(item.storageKey || item.key) || !["uploaded", "available", "verified"].includes(clean(item.status).toLowerCase())) errors.push(`attachments[${index}] must reference durable uploaded evidence.`);
+    });
+  }
+
+  if (documentType === "service-quote") {
+    const record = safeObject(source.serviceQuote);
+    const identity = safeObject(record.identity);
+    const context = safeObject(record.context);
+    const customer = safeObject(record.customer);
+    const asset = safeObject(record.asset);
+    const request = safeObject(record.request);
+    const commercial = safeObject(record.commercial);
+    const economics = safeObject(record.economics);
+    const acceptance = safeObject(record.acceptance);
+    const treatment = safeObject(source.accountingTreatment);
+    const status = clean(record.status).toLowerCase();
+    const accepted = ["accepted", "converted"].includes(status);
+    const quotedSubtotal = roundMoney(economics.quotedServiceRevenue);
+    const authorizedSubtotal = roundMoney(economics.authorizedServiceRevenue);
+    const tax = roundMoney(accepted ? economics.authorizedTax : commercial.taxAmount);
+    const total = roundMoney(accepted ? authorizedSubtotal : quotedSubtotal);
+
+    if (clean(record.schema) !== "ixi-service-quote-v2") errors.push("service quote schema is invalid.");
+    if (clean(identity.serviceQuoteId) !== financialDocumentId || clean(identity.financialDocumentId) !== financialDocumentId) errors.push("service quote identity must match financialDocumentId.");
+    if (clean(identity.number) !== clean(source.documentNumber)) errors.push("service quote number must match documentNumber.");
+    if (!clean(context.primaryPassportId)) errors.push("service quote asset Passport is required.");
+    else if (!normalizedReferences.some(reference => clean(reference.passportId) === clean(context.primaryPassportId) && clean(reference.role).toLowerCase() === "asset")) errors.push("service quote asset Passport must be referenced as the asset.");
+    if (!clean(context.entityPassportId)) errors.push("service quote entity Passport is required.");
+    if (!clean(context.actorPassportId || context.actorId)) errors.push("service quote actor identity is required.");
+    if (clean(context.entityPassportId) && !normalizedReferences.some(reference => clean(reference.passportId) === clean(context.entityPassportId) && clean(reference.role).toLowerCase() === "entity")) errors.push("service quote entity Passport must be referenced as the entity.");
+    if (clean(context.actorPassportId) && !normalizedReferences.some(reference => clean(reference.passportId) === clean(context.actorPassportId) && clean(reference.role).toLowerCase() === "employee")) errors.push("service quote actor Passport must be referenced as the employee.");
+    if (!clean(customer.name)) errors.push("service quote customer is required.");
+    if (!clean(asset.label) || clean(asset.passportId) !== clean(context.primaryPassportId)) errors.push("service quote must identify the selected asset.");
+    if (!clean(request.problem) || !clean(request.customerScope)) errors.push("service quote problem and customer-facing scope are required.");
+    if (!SERVICE_QUOTE_STATUSES.has(status)) errors.push("service quote status is invalid.");
+    if (!SERVICE_QUOTE_PRICING_TYPES.has(clean(commercial.pricingType).toLowerCase())) errors.push("service quote pricing type is invalid.");
+    if (!clean(commercial.quoteDate) || !isValidDate(commercial.quoteDate) || !clean(commercial.validThrough) || !isValidDate(commercial.validThrough)) errors.push("service quote dates are required and must be valid.");
+    if (clean(commercial.validThrough) < clean(commercial.quoteDate)) errors.push("service quote valid-through date cannot precede quote date.");
+    if (quotedSubtotal === null || !(quotedSubtotal > 0)) errors.push("service quote subtotal must be greater than zero.");
+    if (tax === null || tax < 0) errors.push("service quote tax must be a non-negative amount.");
+    if (normalizedLines.length !== 1 || Number(normalizedLines[0]?.amount) !== total || clean(normalizedLines[0]?.direction) !== "inflow") errors.push("service quote requires one matching inflow offer or commitment line.");
+    if (Number(source?.totals?.total) !== total || Number(source?.totals?.tax) !== tax) errors.push("service quote totals must separate service value from tax.");
+    if (accepted) {
+      if (!(authorizedSubtotal > 0) || acceptance.status !== "accepted" || Number(acceptance.acceptedRevision) !== Number(identity.revision) || !clean(acceptance.acceptedBy) || !clean(acceptance.method) || !clean(acceptance.acceptedAt) || !isValidDate(acceptance.acceptedAt)) errors.push("accepted service quote requires complete acceptance evidence for the current revision.");
+      if (Number(economics.authorizedCustomerTotal) !== roundMoney(authorizedSubtotal + tax)) errors.push("accepted service quote customer total must equal authorized service value plus tax.");
+      if (treatment.classification !== "service-revenue-contract" || treatment.economicEvent !== true || treatment.createsRevenueCommitment !== true) errors.push("accepted service quote must create one revenue commitment.");
+    } else if (treatment.classification !== "service-revenue-offer" || treatment.economicEvent !== false || treatment.createsRevenueCommitment !== false) {
+      errors.push("unaccepted service quote must remain a non-economic offer.");
+    }
+    if (treatment.createsBilledRevenue !== false || treatment.createsReceivable !== false || treatment.createsCashEvent !== false || treatment.invoiceConsumesRevenueCommitment !== true) errors.push("service quote cannot create billed revenue, receivable, or cash.");
     safeArray(source.attachments).forEach((attachment, index) => {
       const item = safeObject(attachment);
       if (!clean(item.storageKey || item.key) || !["uploaded", "available", "verified"].includes(clean(item.status).toLowerCase())) errors.push(`attachments[${index}] must reference durable uploaded evidence.`);
