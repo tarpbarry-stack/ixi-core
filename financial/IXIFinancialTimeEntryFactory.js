@@ -482,6 +482,10 @@ function createTimeEntryDocument({
   sourceDocumentId = "",
   externalReference = "",
 
+  timeEntry = {},
+
+  attachments = [],
+
   metadata = {}
 } = {}) {
 
@@ -678,6 +682,21 @@ function createTimeEntryDocument({
       sourceFinancialDocumentId
     );
 
+  const resolvedTimeEntry =
+    safeObject(
+      timeEntry
+    );
+
+  const resolvedDocumentNumber =
+    clean(
+      documentNumber ||
+      resolvedTimeEntry?.identity?.number
+    ) ||
+    `TIME-${resolvedDocumentId
+      .replace(/^ifd_/, "")
+      .slice(-6)
+      .toUpperCase()}`;
+
 
   return {
     financialDocumentId:
@@ -687,9 +706,7 @@ function createTimeEntryDocument({
       "time-entry",
 
     documentNumber:
-      clean(
-        documentNumber
-      ),
+      resolvedDocumentNumber,
 
     financialState:
       clean(
@@ -705,12 +722,14 @@ function createTimeEntryDocument({
 
     startedAt:
       clean(
-        startedAt
+        startedAt ||
+        resolvedTimeEntry?.time?.startedAt
       ),
 
     endedAt:
       clean(
-        endedAt
+        endedAt ||
+        resolvedTimeEntry?.time?.endedAt
       ),
 
     description:
@@ -722,6 +741,20 @@ function createTimeEntryDocument({
       clean(
         memo
       ),
+
+    timeEntry: {
+      ...resolvedTimeEntry,
+      identity: {
+        ...safeObject(resolvedTimeEntry?.identity),
+        timeEntryId: resolvedDocumentId,
+        number: resolvedDocumentNumber
+      }
+    },
+
+    attachments:
+      safeArray(
+        attachments
+      ).map(item => ({ ...safeObject(item) })),
 
     laborClass:
       clean(

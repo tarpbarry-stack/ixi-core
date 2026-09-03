@@ -159,6 +159,126 @@ function idempotencyPk(
 }
 
 
+function activeTimeEmployeeKey(
+  record = {}
+) {
+  const document =
+    safeObject(
+      record?.financialDocument
+    );
+
+  if (
+    clean(document.documentType).toLowerCase() !==
+      "time-entry"
+  ) {
+    return "";
+  }
+
+  const timeEntry =
+    safeObject(
+      document.timeEntry
+    );
+
+  if (
+    !["running", "paused", "stopped"].includes(
+      clean(timeEntry.status).toLowerCase()
+    )
+  ) {
+    return "";
+  }
+
+  return clean(
+    timeEntry?.context?.employeePassportId ||
+    timeEntry?.context?.employeeId
+  );
+}
+
+
+function activeTimePk(
+  employeeKey
+) {
+  return `TIME-ACTIVE#${clean(employeeKey)}`;
+}
+
+
+function createActiveTimeLockPut({
+  employeeKey,
+  financialDocumentId,
+  updatedAt,
+  allowSameDocument = false
+} = {}) {
+  return {
+    Put: {
+      TableName:
+        TABLE_NAME,
+
+      Item: {
+        PK:
+          activeTimePk(employeeKey),
+
+        SK:
+          "CURRENT",
+
+        entityType:
+          "financial-active-time-lock",
+
+        employeeKey:
+          clean(employeeKey),
+
+        financialDocumentId:
+          clean(financialDocumentId),
+
+        updatedAt:
+          clean(updatedAt) || nowIso()
+      },
+
+      ConditionExpression:
+        allowSameDocument
+          ? "attribute_not_exists(PK) OR financialDocumentId = :financialDocumentId"
+          : "attribute_not_exists(PK)",
+
+      ...(allowSameDocument
+        ? {
+            ExpressionAttributeValues: {
+              ":financialDocumentId":
+                clean(financialDocumentId)
+            }
+          }
+        : {})
+    }
+  };
+}
+
+
+function createActiveTimeLockDelete({
+  employeeKey,
+  financialDocumentId
+} = {}) {
+  return {
+    Delete: {
+      TableName:
+        TABLE_NAME,
+
+      Key: {
+        PK:
+          activeTimePk(employeeKey),
+
+        SK:
+          "CURRENT"
+      },
+
+      ConditionExpression:
+        "attribute_not_exists(PK) OR financialDocumentId = :financialDocumentId",
+
+      ExpressionAttributeValues: {
+        ":financialDocumentId":
+          clean(financialDocumentId)
+      }
+    }
+  };
+}
+
+
 async function getCurrentDocumentRecord(
   financialDocumentId
 ) {
@@ -581,6 +701,23 @@ async function createDocumentRecord({
     }
   ];
 
+  const activeEmployeeKey =
+    activeTimeEmployeeKey(source);
+
+  if (activeEmployeeKey) {
+    transactItems.push(
+      createActiveTimeLockPut({
+        employeeKey:
+          activeEmployeeKey,
+
+        financialDocumentId,
+
+        updatedAt:
+          timestamp
+      })
+    );
+  }
+
   const idem =
     clean(
       idempotencyKey
@@ -927,6 +1064,43 @@ async function replaceDocumentRecord({
       }
     }
   ];
+
+  const previousActiveEmployeeKey =
+    activeTimeEmployeeKey(previousRecord);
+
+  const activeEmployeeKey =
+    activeTimeEmployeeKey(source);
+
+  if (
+    previousActiveEmployeeKey &&
+    previousActiveEmployeeKey !== activeEmployeeKey
+  ) {
+    transactItems.push(
+      createActiveTimeLockDelete({
+        employeeKey:
+          previousActiveEmployeeKey,
+
+        financialDocumentId
+      })
+    );
+  }
+
+  if (activeEmployeeKey) {
+    transactItems.push(
+      createActiveTimeLockPut({
+        employeeKey:
+          activeEmployeeKey,
+
+        financialDocumentId,
+
+        updatedAt:
+          timestamp,
+
+        allowSameDocument:
+          activeEmployeeKey === previousActiveEmployeeKey
+      })
+    );
+  }
 
   transactItems.push({
     Put: {
@@ -1532,5 +1706,8 @@ module.exports = {
   appendAuditEvent,
   getAuditEvents,
 
-  getDynamoFinancialHealth
+  getDynamoFinancialHealth,
+  activeTimeEmployeeKey,
+  createActiveTimeLockPut,
+  createActiveTimeLockDelete
 };
