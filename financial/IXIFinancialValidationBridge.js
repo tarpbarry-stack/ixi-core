@@ -126,6 +126,9 @@ const RENTAL_RATE_UNITS = new Set(["hour", "day", "week", "month"]);
 const RENTAL_STATUSES = new Set(["active", "off-rent", "closed", "cancelled"]);
 const SERVICE_QUOTE_STATUSES = new Set(["draft", "sent", "viewed", "changes-requested", "accepted", "declined", "expired", "superseded", "converted"]);
 const SERVICE_QUOTE_PRICING_TYPES = new Set(["estimate", "fixed-price", "not-to-exceed"]);
+const BILL_APPROVAL_STATUSES = new Set(["pending", "returned", "approved", "rejected"]);
+const BILL_CAPTURE_STATES = new Set(["draft", "submitted"]);
+const BILL_RECOGNIZED_STATES = new Set(["billed", "incurred", "partially-paid", "paid"]);
 
 
 const EXPENSE_PAYMENT_METHODS =
@@ -863,6 +866,48 @@ function validateFinancialDocument(
     ) {
       errors.push("employee-paid expense requires reimbursement lineage.");
     }
+  }
+
+  if (documentType === "bill" || documentType === "supplier-invoice") {
+    const billRecord = safeObject(source.billRecord);
+    const identity = safeObject(billRecord.identity);
+    const context = safeObject(billRecord.context);
+    const bill = safeObject(billRecord.bill);
+    const approval = safeObject(billRecord.approval);
+    const treatment = safeObject(source.accountingTreatment);
+    const invoiceNumber = clean(source.invoiceNumber || identity.invoiceNumber || source.documentNumber);
+    const invoiceDate = clean(bill.invoiceDate || source.occurredAt).slice(0, 10);
+    const dueDate = clean(bill.dueDate || source.dueDate).slice(0, 10);
+    const approvalStatus = clean(approval.status).toLowerCase();
+    const recognized = BILL_RECOGNIZED_STATES.has(financialState);
+
+    if (clean(billRecord.schema) !== "ixi-bill-record-v2") errors.push("bill record schema is invalid.");
+    if (clean(identity.billDocumentId || identity.financialDocumentId) !== financialDocumentId) errors.push("bill identity must match financialDocumentId.");
+    if (!clean(context.entityPassportId)) errors.push("bill entity Passport is required.");
+    if (!normalizedReferences.some(reference => clean(reference.passportId) === clean(context.entityPassportId) && clean(reference.role).toLowerCase() === "entity")) errors.push("bill entity Passport must be referenced as the entity.");
+    if (!clean(context.primaryPassportId)) errors.push("bill originating AOS Passport is required.");
+    if (!normalizedReferences.some(reference => clean(reference.passportId) === clean(context.primaryPassportId))) errors.push("bill originating AOS Passport must be referenced.");
+    if (!clean(bill.vendorLabel || source.vendorName)) errors.push("bill vendor is required.");
+    if (!invoiceNumber) errors.push("bill vendor invoice number is required.");
+    if (!clean(source.invoiceFingerprint) || clean(source.sourceDocumentId).toLowerCase() !== clean(source.invoiceFingerprint).toLowerCase()) errors.push("bill invoice fingerprint is required as sourceDocumentId.");
+    if (!clean(bill.description || source.description)) errors.push("bill description is required.");
+    if (!isValidDate(invoiceDate)) errors.push("bill invoice date is invalid.");
+    if (dueDate && (!isValidDate(dueDate) || dueDate < invoiceDate)) errors.push("bill due date cannot precede invoice date.");
+    if (normalizedLines.length !== 1 || !(Number(normalizedLines[0]?.amount) > 0) || clean(normalizedLines[0]?.direction) !== "outflow") errors.push("bill requires one positive outflow line.");
+    if (Number(bill.amount) !== Number(calculateLineTotal(normalizedLines))) errors.push("bill amount must equal financial document total.");
+    if (!BILL_APPROVAL_STATUSES.has(approvalStatus)) errors.push("bill approval status is invalid.");
+    if (approvalStatus === "approved") {
+      if (!recognized || !clean(approval.approvedById) || !clean(approval.approvedAt) || !isValidDate(approval.approvedAt)) errors.push("approved bill requires server-bound approval evidence and a recognized financial state.");
+    } else if (approvalStatus === "rejected") {
+      if (!["rejected", "void"].includes(financialState) || !clean(approval.rejectedById) || !clean(approval.rejectedAt)) errors.push("rejected bill requires rejection evidence and a non-economic state.");
+    } else if (!BILL_CAPTURE_STATES.has(financialState)) {
+      errors.push("unapproved bill must remain draft or submitted.");
+    }
+    if (treatment.classification !== (recognized ? "vendor-obligation" : "vendor-bill-capture") || treatment.economicEvent !== recognized || treatment.createsCommitment !== false || treatment.createsIncurredExpense !== recognized || treatment.createsPayable !== recognized || treatment.createsCashEvent !== false || treatment.paymentSettlesPayable !== true) errors.push("bill accounting treatment does not match its approval state.");
+    safeArray(source.attachments).forEach((attachment, index) => {
+      const item = safeObject(attachment);
+      if (!clean(item.storageKey || item.key) || !["uploaded", "available", "verified"].includes(clean(item.status).toLowerCase())) errors.push(`attachments[${index}] must reference durable uploaded evidence.`);
+    });
   }
 
   if (
