@@ -140,6 +140,38 @@ function safeObject(
 }
 
 
+function getBillPatchAction(existing = {}, merged = {}) {
+  if (!["bill", "supplier-invoice"].includes(clean(merged.documentType).toLowerCase())) return IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT;
+  const before = safeObject(existing.billRecord);
+  const after = safeObject(merged.billRecord);
+  const beforeApproval = clean(before?.approval?.status).toLowerCase();
+  const afterApproval = clean(after?.approval?.status).toLowerCase();
+  const beforeState = clean(existing.financialState).toLowerCase();
+  const afterState = clean(merged.financialState).toLowerCase();
+  if (afterApproval === "approved" && beforeApproval !== "approved") return IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT;
+  if (["rejected", "returned"].includes(afterApproval) && beforeApproval !== afterApproval) return IXI_FINANCIAL_ACTIONS.REJECT_DOCUMENT;
+  if (afterState === "void" && beforeState !== "void") return IXI_FINANCIAL_ACTIONS.VOID_DOCUMENT;
+  if (["partially-paid", "paid"].includes(afterState) && beforeState !== afterState) return IXI_FINANCIAL_ACTIONS.RECORD_PAYMENT;
+  if (clean(after?.purchaseMatch?.status).toLowerCase() === "matched" && clean(before?.purchaseMatch?.status).toLowerCase() === "exception") return IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT;
+  return IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT;
+}
+
+
+function bindBillActorEvidence(patch = {}, action = "", actorPassportId = "") {
+  const source = safeObject(patch);
+  if (!["bill", "supplier-invoice"].includes(clean(source.documentType).toLowerCase()) && !source.billRecord) return source;
+  const record = safeObject(source.billRecord);
+  if (!Object.keys(record).length) return source;
+  const approval = { ...safeObject(record.approval) };
+  const purchaseMatch = { ...safeObject(record.purchaseMatch) };
+  if (action === IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT && clean(approval.status).toLowerCase() === "approved") approval.approvedById = clean(actorPassportId);
+  if (action === IXI_FINANCIAL_ACTIONS.REJECT_DOCUMENT && clean(approval.status).toLowerCase() === "rejected") approval.rejectedById = clean(actorPassportId);
+  if (action === IXI_FINANCIAL_ACTIONS.REJECT_DOCUMENT && clean(approval.status).toLowerCase() === "returned") approval.returnedById = clean(actorPassportId);
+  if (action === IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT && purchaseMatch.varianceApproval) purchaseMatch.varianceApproval = { ...safeObject(purchaseMatch.varianceApproval), approvedById: clean(actorPassportId) };
+  return { ...source, billRecord: { ...record, approval, purchaseMatch } };
+}
+
+
 function firstError(
   envelope
 ) {
@@ -754,13 +786,19 @@ router.patch(
     };
 
 
+    const billPatchAction =
+      getBillPatchAction(
+        safeObject(existing?.financialDocument),
+        mergedDocument
+      );
+
+
     const authorization =
       authorizeFinancialDocumentWrite({
         accessContext,
 
         action:
-          IXI_FINANCIAL_ACTIONS
-            .PATCH_DOCUMENT,
+          billPatchAction,
 
         financialDocument:
           mergedDocument
@@ -778,9 +816,8 @@ router.patch(
           operation:
             "financial.document.patch",
 
-          action:
-            IXI_FINANCIAL_ACTIONS
-              .PATCH_DOCUMENT,
+            action:
+              billPatchAction,
 
           reason:
             authorization.reason,
@@ -798,6 +835,14 @@ router.patch(
       );
 
 
+    const boundPatch =
+      bindBillActorEvidence(
+        safeObject(req.body?.patch),
+        billPatchAction,
+        accessContext.actorPassportId
+      );
+
+
     return sendEnvelope(
       res,
       await providerService
@@ -805,6 +850,9 @@ router.patch(
           ...safeObject(
             req.body
           ),
+
+          patch:
+            boundPatch,
 
           financialDocumentId:
             req.params

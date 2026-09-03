@@ -158,6 +158,27 @@ function normalizeCurrency(
 }
 
 
+function normalizeBillState(value) {
+  const state = clean(value || "submitted").toLowerCase();
+  return state || "submitted";
+}
+
+
+function createBillAccountingTreatment(financialState = "submitted") {
+  const state = normalizeBillState(financialState);
+  const recognized = ["billed", "incurred", "partially-paid", "paid"].includes(state);
+  return {
+    classification: recognized ? "vendor-obligation" : "vendor-bill-capture",
+    economicEvent: recognized,
+    createsCommitment: false,
+    createsIncurredExpense: recognized,
+    createsPayable: recognized,
+    createsCashEvent: false,
+    paymentSettlesPayable: true
+  };
+}
+
+
 /* =========================================================
    REFERENCES
    ========================================================= */
@@ -425,7 +446,7 @@ function createBillDocument({
 
   documentNumber = "",
 
-  financialState = "billed",
+  financialState = "submitted",
 
   currency = "USD",
 
@@ -466,6 +487,16 @@ function createBillDocument({
   sourceDocumentId = "",
 
   externalReference = "",
+
+  vendorName = "",
+
+  invoiceNumber = "",
+
+  invoiceFingerprint = "",
+
+  billRecord = {},
+
+  attachments = [],
 
   metadata = {}
 } = {}) {
@@ -630,6 +661,33 @@ function createBillDocument({
     );
 
 
+  const resolvedState =
+    normalizeBillState(
+      financialState
+    );
+
+
+  const sourceBillRecord =
+    safeObject(
+      billRecord
+    );
+
+
+  const canonicalBillRecord =
+    Object.keys(sourceBillRecord).length
+      ? {
+          ...sourceBillRecord,
+          identity: {
+            ...safeObject(sourceBillRecord.identity),
+            billDocumentId: resolvedDocumentId,
+            financialDocumentId: resolvedDocumentId,
+            billNumber: clean(sourceBillRecord?.identity?.billNumber) || `BILL-${resolvedDocumentId.slice(-8).toUpperCase()}`,
+            invoiceNumber: clean(sourceBillRecord?.identity?.invoiceNumber || invoiceNumber || documentNumber)
+          }
+        }
+      : {};
+
+
   return {
     financialDocumentId:
       resolvedDocumentId,
@@ -643,10 +701,7 @@ function createBillDocument({
       ),
 
     financialState:
-      clean(
-        financialState ||
-        "billed"
-      ).toLowerCase(),
+      resolvedState,
 
     currency:
       resolvedCurrency,
@@ -688,6 +743,24 @@ function createBillDocument({
       clean(
         externalReference
       ),
+
+    vendorName:
+      clean(vendorName || sourceBillRecord?.bill?.vendorLabel),
+
+    invoiceNumber:
+      clean(invoiceNumber || sourceBillRecord?.identity?.invoiceNumber || documentNumber),
+
+    invoiceFingerprint:
+      clean(invoiceFingerprint || sourceDocumentId).toLowerCase(),
+
+    billRecord:
+      canonicalBillRecord,
+
+    attachments:
+      safeArray(attachments),
+
+    accountingTreatment:
+      createBillAccountingTreatment(resolvedState),
 
     /*
      * This is the lifecycle link to the PO.
@@ -850,6 +923,7 @@ function createSimpleBill({
 module.exports = {
   normalizeReference,
   normalizeReferences,
+  createBillAccountingTreatment,
 
   createBillLine,
   createBillDocument,
