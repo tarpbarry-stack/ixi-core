@@ -153,6 +153,20 @@ function bindTrustedCommandInput({documentType="",input={},accessContext={}}={})
     const settlement={...safeObject(source.settlement),...safeObject(source.assetSettlement)};
     return {...source,entityPassportId:clean(accessContext.entityPassportId),actorPassportId:clean(accessContext.actorPassportId),settlement:{...settlement,context:{...safeObject(settlement.context),entityPassportId:clean(accessContext.entityPassportId),actorPassportId:clean(accessContext.actorPassportId)}}};
   }
+  if(type==="purchase-order") {
+    const purchaseOrderRecord={...safeObject(source.purchaseOrderRecord)};
+    return {
+      ...source,
+      purchaseOrderRecord:{
+        ...purchaseOrderRecord,
+        context:{
+          ...safeObject(purchaseOrderRecord.context),
+          entityPassportId:clean(accessContext.entityPassportId),
+          employeePassportId:clean(accessContext.actorPassportId)
+        }
+      }
+    };
+  }
   if(["treasury-account","treasury-reconciliation"].includes(type)) return {...source,entityPassportId:clean(accessContext.entityPassportId),actorPassportId:clean(accessContext.actorPassportId)};
   return source;
 }

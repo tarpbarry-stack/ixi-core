@@ -491,6 +491,8 @@ function createPurchaseOrderDocument({
 
   externalReference = "",
 
+  purchaseOrderRecord = {},
+
   metadata = {}
 } = {}) {
 
@@ -706,6 +708,12 @@ function createPurchaseOrderDocument({
       clean(
         externalReference
       ),
+
+    purchaseOrderRecord: {
+      ...safeObject(
+        purchaseOrderRecord
+      )
+    },
 
     references:
       documentReferences,
