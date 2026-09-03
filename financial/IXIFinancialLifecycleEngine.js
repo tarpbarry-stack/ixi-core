@@ -107,7 +107,8 @@ const OUTFLOW_INCURRED_TYPES =
 
 const COMMITMENT_TYPES =
   new Set([
-    "purchase-order"
+    "purchase-order",
+    "rental-expense"
   ]);
 
 
