@@ -151,6 +151,18 @@ function getBillPatchAction(existing = {}, merged = {}) {
       ? IXI_FINANCIAL_ACTIONS.APPROVE_SETTLEMENT
       : IXI_FINANCIAL_ACTIONS.PREPARE_SETTLEMENT;
   }
+  if (type === "purchase-order") {
+    const before = safeObject(existing.purchaseOrderRecord);
+    const after = safeObject(merged.purchaseOrderRecord);
+    const beforeApproval = clean(before?.approval?.status).toLowerCase();
+    const afterApproval = clean(after?.approval?.status).toLowerCase();
+    const beforeStatus = clean(before?.status).toLowerCase();
+    const afterStatus = clean(after?.status).toLowerCase();
+    if (afterApproval === "approved" && beforeApproval !== "approved") return IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT;
+    if (["returned", "denied", "rejected"].includes(afterApproval) && beforeApproval !== afterApproval) return IXI_FINANCIAL_ACTIONS.REJECT_DOCUMENT;
+    if (["cancelled", "void"].includes(afterStatus) && beforeStatus !== afterStatus) return IXI_FINANCIAL_ACTIONS.VOID_DOCUMENT;
+    return IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT;
+  }
   if (!["bill", "supplier-invoice"].includes(type)) return IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT;
   const before = safeObject(existing.billRecord);
   const after = safeObject(merged.billRecord);
@@ -164,6 +176,44 @@ function getBillPatchAction(existing = {}, merged = {}) {
   if (["partially-paid", "paid"].includes(afterState) && beforeState !== afterState) return IXI_FINANCIAL_ACTIONS.RECORD_PAYMENT;
   if (clean(after?.purchaseMatch?.status).toLowerCase() === "matched" && clean(before?.purchaseMatch?.status).toLowerCase() === "exception") return IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT;
   return IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT;
+}
+
+function bindPurchaseOrderActorEvidence(patch = {}, action = "", accessContext = {}) {
+  const source = safeObject(patch);
+  const record = safeObject(source.purchaseOrderRecord);
+  if (!Object.keys(record).length) return source;
+  const actorPassportId = clean(accessContext.actorPassportId);
+  const entityPassportId = clean(accessContext.entityPassportId);
+  const timestamp = new Date().toISOString();
+  const approval = { ...safeObject(record.approval) };
+  const receiving = { ...safeObject(record.receiving) };
+  if (action === IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT) {
+    approval.approvedById = actorPassportId;
+    approval.approvedAt = timestamp;
+  }
+  if (action === IXI_FINANCIAL_ACTIONS.REJECT_DOCUMENT) {
+    approval.decidedById = actorPassportId;
+    approval.decidedAt = timestamp;
+  }
+  if (receiving.lastReceivedAt) receiving.lastReceivedById = actorPassportId;
+  return {
+    ...source,
+    purchaseOrderRecord: {
+      ...record,
+      context: {
+        ...safeObject(record.context),
+        entityPassportId,
+        employeePassportId: actorPassportId
+      },
+      approval,
+      receiving,
+      audit: {
+        ...safeObject(record.audit),
+        updatedAt: timestamp,
+        updatedBy: actorPassportId
+      }
+    }
+  };
 }
 
 async function bindOperationalControlEvidence({ patch = {}, merged = {}, existing = {}, action = "", accessContext = {} } = {}) {
@@ -936,6 +986,12 @@ router.patch(
         billPatchAction,
         accessContext.actorPassportId
       );
+
+    boundPatch = bindPurchaseOrderActorEvidence(
+      boundPatch,
+      billPatchAction,
+      accessContext
+    );
 
     boundPatch = await bindOperationalControlEvidence({
       patch: boundPatch,
