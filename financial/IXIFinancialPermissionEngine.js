@@ -120,6 +120,15 @@ const IXI_FINANCIAL_ACTIONS =
     MANAGE_PAYABLES:
       "financial.payables.manage",
 
+    MANAGE_COLLECTIONS:
+      "financial.collections.manage",
+
+    PREPARE_SETTLEMENT:
+      "financial.settlement.prepare",
+
+    APPROVE_SETTLEMENT:
+      "financial.settlement.approve",
+
     MANAGE_TREASURY:
       "financial.treasury.manage",
 
@@ -238,6 +247,9 @@ const ROLE_PERMISSIONS =
           .REJECT_DOCUMENT,
 
         IXI_FINANCIAL_ACTIONS
+          .MANAGE_COLLECTIONS,
+
+        IXI_FINANCIAL_ACTIONS
           .VIEW_HISTORY,
 
         IXI_FINANCIAL_ACTIONS
@@ -306,6 +318,12 @@ const ROLE_PERMISSIONS =
 
         IXI_FINANCIAL_ACTIONS
           .MANAGE_PAYABLES,
+
+        IXI_FINANCIAL_ACTIONS
+          .MANAGE_COLLECTIONS,
+
+        IXI_FINANCIAL_ACTIONS
+          .PREPARE_SETTLEMENT,
 
         IXI_FINANCIAL_ACTIONS
           .MANAGE_TREASURY,

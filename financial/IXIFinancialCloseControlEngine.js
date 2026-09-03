@@ -26,7 +26,7 @@ function economicDocument(document = {}) {
   const source = object(document);
   const type = clean(source.documentType).toLowerCase();
   const state = clean(source.financialState).toLowerCase();
-  if (!activeState(source) || ["journal-entry", "period-close", "period-reopen", "posting-rule", "payables-control", "treasury-account", "treasury-reconciliation", "purchase-order", "service-quote", "work-order", "time-entry"].includes(type)) return false;
+  if (!activeState(source) || ["journal-entry", "period-close", "period-reopen", "posting-rule", "payables-control", "collection", "settlement", "treasury-account", "treasury-reconciliation", "purchase-order", "service-quote", "work-order", "time-entry"].includes(type)) return false;
   if (source?.accountingTreatment?.economicEvent === false) return false;
   if (source?.accountingTreatment?.economicEvent === true) return true;
   if (["invoice", "payment", "credit"].includes(type)) return !["draft", "submitted"].includes(state);

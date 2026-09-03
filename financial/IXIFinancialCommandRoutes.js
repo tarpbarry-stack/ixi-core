@@ -132,6 +132,8 @@ function getCreateFinancialAction(documentType="",input={}) {
   if(type==="payment") return IXI_FINANCIAL_ACTIONS.RECORD_PAYMENT;
   if(type==="credit") return IXI_FINANCIAL_ACTIONS.APPLY_VENDOR_CREDIT;
   if(type==="payables-control") return IXI_FINANCIAL_ACTIONS.MANAGE_PAYABLES;
+  if(type==="collection") return IXI_FINANCIAL_ACTIONS.MANAGE_COLLECTIONS;
+  if(type==="settlement") return IXI_FINANCIAL_ACTIONS.PREPARE_SETTLEMENT;
   if(type==="treasury-account") return IXI_FINANCIAL_ACTIONS.MANAGE_TREASURY;
   if(type==="treasury-reconciliation") return IXI_FINANCIAL_ACTIONS.RECONCILE_TREASURY;
   if(type==="journal-entry") return IXI_FINANCIAL_ACTIONS.CREATE_JOURNAL;
@@ -146,6 +148,11 @@ function bindTrustedCommandInput({documentType="",input={},accessContext={}}={})
   }
   if(type==="credit") return {...source,recordedByPassportId:clean(accessContext.actorPassportId)};
   if(type==="payables-control") return {...source,entityPassportId:clean(accessContext.entityPassportId),actorPassportId:clean(accessContext.actorPassportId)};
+  if(type==="collection") return {...source,entityPassportId:clean(accessContext.entityPassportId),actorPassportId:clean(accessContext.actorPassportId),collectionCase:{...safeObject(source.collectionCase),context:{...safeObject(source?.collectionCase?.context),entityPassportId:clean(accessContext.entityPassportId),actorPassportId:clean(accessContext.actorPassportId)}}};
+  if(type==="settlement") {
+    const settlement={...safeObject(source.settlement),...safeObject(source.assetSettlement)};
+    return {...source,entityPassportId:clean(accessContext.entityPassportId),actorPassportId:clean(accessContext.actorPassportId),settlement:{...settlement,context:{...safeObject(settlement.context),entityPassportId:clean(accessContext.entityPassportId),actorPassportId:clean(accessContext.actorPassportId)}}};
+  }
   if(["treasury-account","treasury-reconciliation"].includes(type)) return {...source,entityPassportId:clean(accessContext.entityPassportId),actorPassportId:clean(accessContext.actorPassportId)};
   return source;
 }

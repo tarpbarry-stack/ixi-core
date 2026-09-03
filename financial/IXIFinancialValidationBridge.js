@@ -67,6 +67,8 @@ const DOCUMENT_TYPES =
     "rental-expense",
     "rental-income",
     "service-quote",
+    "collection",
+    "settlement",
     "payables-control",
     "treasury-account",
     "treasury-reconciliation",
@@ -131,6 +133,9 @@ const RENTAL_RATE_UNITS = new Set(["hour", "day", "week", "month"]);
 const RENTAL_STATUSES = new Set(["active", "off-rent", "closed", "cancelled"]);
 const SERVICE_QUOTE_STATUSES = new Set(["draft", "sent", "viewed", "changes-requested", "accepted", "declined", "expired", "superseded", "converted"]);
 const SERVICE_QUOTE_PRICING_TYPES = new Set(["estimate", "fixed-price", "not-to-exceed"]);
+const COLLECTION_STATUSES = new Set(["open", "promise-pending", "disputed", "escalated", "resolved", "closed"]);
+const SETTLEMENT_STATUSES = new Set(["ready", "approved", "partially-paid", "settled"]);
+const SETTLEMENT_PAYMENT_STATUSES = new Set(["unpaid", "partial", "paid"]);
 const BILL_APPROVAL_STATUSES = new Set(["pending", "returned", "approved", "rejected"]);
 const BILL_CAPTURE_STATES = new Set(["draft", "submitted"]);
 const BILL_RECOGNIZED_STATES = new Set(["billed", "incurred", "partially-paid", "paid"]);
@@ -948,6 +953,56 @@ function validateFinancialDocument(
     if(!clean(payable.billId)||clean(payable.billId)!==clean(source.sourceFinancialDocumentId)) errors.push("payables control requires canonical Bill lineage.");
     if(normalizedLines.length!==0||Number(source?.totals?.total)!==0) errors.push("payables control must remain non-economic.");
     if(treatment.economicEvent!==false||treatment.createsPayable!==false||treatment.createsCashEvent!==false) errors.push("payables control accounting treatment must remain non-economic.");
+  }
+
+  if (documentType === "collection") {
+    const record = safeObject(source.collectionCase);
+    const identity = safeObject(record.identity);
+    const receivable = safeObject(record.receivable);
+    const customer = safeObject(record.customer);
+    const context = safeObject(record.context);
+    const treatment = safeObject(source.accountingTreatment);
+    const status = clean(record.status || source.status).toLowerCase();
+    const originalAmount = Number(receivable.originalAmount);
+    const openBalance = Number(receivable.openBalance);
+
+    if (clean(record.schema) !== "ixi-collections-case-v1") errors.push("collection case schema is invalid.");
+    if (clean(identity.collectionId) !== financialDocumentId || clean(identity.financialDocumentId) !== financialDocumentId) errors.push("collection case identity must match financialDocumentId.");
+    if (!clean(receivable.invoiceId) || clean(receivable.invoiceId) !== clean(source.sourceFinancialDocumentId)) errors.push("collection case requires canonical Invoice lineage.");
+    if (!Number.isFinite(originalAmount) || !(originalAmount > 0)) errors.push("collection case original receivable amount must be greater than zero.");
+    if (!Number.isFinite(openBalance) || openBalance < 0 || openBalance > originalAmount + 0.005) errors.push("collection case open balance is invalid.");
+    if (!clean(customer.label)) errors.push("collection case customer is required.");
+    if (!clean(context.entityPassportId) || !clean(context.actorPassportId)) errors.push("collection case requires trusted Entity and actor lineage.");
+    if (!normalizedReferences.some(reference => clean(reference.passportId) === clean(context.entityPassportId) && clean(reference.role).toLowerCase() === "entity")) errors.push("collection case Entity must be referenced.");
+    if (!COLLECTION_STATUSES.has(status) || financialState !== "submitted") errors.push("collection case state is invalid.");
+    if (normalizedLines.length !== 0 || Number(source?.totals?.total) !== 0 || treatment.economicEvent !== false || treatment.createsReceivable !== false || treatment.createsCashEvent !== false) errors.push("collection case must remain a non-economic A/R control.");
+  }
+
+  if (documentType === "settlement") {
+    const record = safeObject(source.assetSettlement);
+    const identity = safeObject(record.identity);
+    const context = safeObject(record.context);
+    const referencesRecord = safeObject(record.references);
+    const waterfall = safeObject(record.waterfall);
+    const controls = safeObject(record.controls);
+    const treatment = safeObject(source.accountingTreatment);
+    const owners = safeArray(waterfall.owners);
+    const status = clean(record.status || source.status).toLowerCase();
+    const paymentStatus = clean(record.paymentStatus).toLowerCase();
+
+    if (clean(record.schema) !== "ixi-asset-settlement-v1") errors.push("asset settlement schema is invalid.");
+    if (clean(identity.settlementId) !== financialDocumentId || clean(identity.financialDocumentId) !== financialDocumentId) errors.push("asset settlement identity must match financialDocumentId.");
+    if (!clean(referencesRecord.saleId) || clean(referencesRecord.saleId) !== clean(source.sourceFinancialDocumentId)) errors.push("asset settlement requires canonical Sale lineage.");
+    if (!clean(context.assetPassportId || context.assetObjectId)) errors.push("asset settlement requires asset identity.");
+    if (!clean(context.entityPassportId) || !clean(context.actorPassportId)) errors.push("asset settlement requires trusted Entity and actor lineage.");
+    if (!normalizedReferences.some(reference => clean(reference.passportId) === clean(context.entityPassportId) && clean(reference.role).toLowerCase() === "entity")) errors.push("asset settlement Entity must be referenced.");
+    if (!SETTLEMENT_STATUSES.has(status) || !SETTLEMENT_PAYMENT_STATUSES.has(paymentStatus)) errors.push("asset settlement state is invalid.");
+    if (!Number.isFinite(Number(waterfall.shareTotal)) || Math.abs(Number(waterfall.shareTotal) - 100) > 0.01 || waterfall.balanced !== true) errors.push("asset settlement waterfall must be balanced and total 100 percent.");
+    if (!owners.length || owners.some(owner => !clean(owner?.ownerId) || !clean(owner?.label) || Number(owner?.finalDue) < 0 || Number(owner?.balanceDue) < 0)) errors.push("asset settlement owner waterfall is invalid.");
+    if (!Number.isFinite(Number(waterfall.totalFinalDue)) || Number(waterfall.totalFinalDue) < 0) errors.push("asset settlement total due is invalid.");
+    if (["approved", "partially-paid", "settled"].includes(status) && (!clean(controls.approvedById) || !isValidDate(clean(controls.approvedAt)) || clean(controls.approvalNote).length < 3)) errors.push("approved asset settlement requires actor, timestamp, and approval-note evidence.");
+    if (status === "settled" && paymentStatus !== "paid") errors.push("settled asset settlement must have paid status.");
+    if (normalizedLines.length !== 0 || Number(source?.totals?.total) !== 0 || treatment.economicEvent !== false || treatment.createsPayable !== false || treatment.createsCashEvent !== false) errors.push("asset settlement must remain a non-economic owner-distribution control.");
   }
 
   if(documentType==="treasury-account"){

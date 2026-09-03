@@ -142,7 +142,8 @@ function safeObject(
 }
 
 function financialDocumentFromRecord(value={}) {
-  return safeObject(value?.financialDocument||value?.record?.financialDocument||value);
+  const record=safeObject(value?.record||value),document=safeObject(record?.financialDocument||record);
+  return {...document,metadata:{...safeObject(record.metadata),...safeObject(document.metadata)}};
 }
 
 function financialAmount(document={}) {
@@ -159,6 +160,8 @@ async function assertPayablesSettlementAvailable({financialDocument={},entityPas
   if(type==="payment"&&clean(settlement.paymentDirection).toLowerCase()!=="outflow") return {checked:false};
   const sourceResult=await providerService.getDocument({financialDocumentId:sourceId});
   const bill=financialDocumentFromRecord(sourceResult?.data?.record);
+  const sourceType=clean(bill.documentType).toLowerCase();
+  if((type==="payment"&&sourceType==="settlement")||(type==="credit"&&sourceType==="invoice")) return {checked:false};
   const approval=clean(bill?.billRecord?.approval?.status).toLowerCase();
   const recognized=["billed","incurred","partially-paid","paid"].includes(clean(bill.financialState).toLowerCase());
   if(!sourceResult?.ok||!["bill","supplier-invoice"].includes(clean(bill.documentType).toLowerCase())) throw Object.assign(new Error("A/P settlement source must be a canonical Bill."),{name:"IXIFinancialSettlementSourceError"});
@@ -172,6 +175,79 @@ async function assertPayablesSettlementAvailable({financialDocument={},entityPas
   if(!(newAmount>0)) throw Object.assign(new Error("A/P settlement amount must be greater than zero."),{name:"IXIFinancialSettlementAmountError"});
   if(settled+newAmount>billAmount+0.005) throw Object.assign(new Error("A/P settlement exceeds the canonical open Bill balance."),{name:"IXIFinancialSettlementOverpaymentError",details:{billAmount,settled,newAmount,openBalance:Math.max(0,billAmount-settled)}});
   return{checked:true,billAmount,settled,newAmount};
+}
+
+function documentEntityPassportId(document={}) {
+  const source=financialDocumentFromRecord(document);
+  return clean(
+    source?.collectionCase?.context?.entityPassportId||
+    source?.assetSettlement?.context?.entityPassportId||
+    source?.billRecord?.context?.entityPassportId||
+    safeArray(source.references).find(reference=>clean(reference?.role).toLowerCase()==="entity")?.passportId
+  );
+}
+
+async function readCanonicalSource({sourceId="",entityPassportId="",documentTypes=[],errorPrefix="Financial control"}={}) {
+  const sourceResult=await providerService.getDocument({financialDocumentId:clean(sourceId)});
+  const document=financialDocumentFromRecord(sourceResult?.data?.record);
+  if(!sourceResult?.ok||!documentTypes.includes(clean(document.documentType).toLowerCase())) throw Object.assign(new Error(`${errorPrefix} source is not a canonical ${documentTypes.join(" or ")}.`),{name:"IXIFinancialOperationalSourceError",details:{sourceFinancialDocumentId:clean(sourceId)}});
+  if(documentEntityPassportId(document)!==clean(entityPassportId)) throw Object.assign(new Error(`${errorPrefix} source is outside the authenticated Entity.`),{name:"IXIFinancialOperationalScopeError",details:{sourceFinancialDocumentId:clean(sourceId)}});
+  return document;
+}
+
+async function assertCollectionControlSource({financialDocument={},entityPassportId=""}={}) {
+  const control=financialDocumentFromRecord(financialDocument);
+  if(clean(control.documentType).toLowerCase()!=="collection") return {checked:false};
+  const invoice=await readCanonicalSource({sourceId:control.sourceFinancialDocumentId,entityPassportId,documentTypes:["invoice"],errorPrefix:"Collection"});
+  return {checked:true,sourceFinancialDocumentId:clean(invoice.financialDocumentId)};
+}
+
+async function assertSettlementControlSource({financialDocument={},entityPassportId=""}={}) {
+  const control=financialDocumentFromRecord(financialDocument);
+  if(clean(control.documentType).toLowerCase()!=="settlement") return {checked:false};
+  const sale=await readCanonicalSource({sourceId:control.sourceFinancialDocumentId,entityPassportId,documentTypes:["invoice"],errorPrefix:"Settlement"});
+  const assetSale=sale?.metadata?.assetSale===true||clean(sale?.metadata?.invoiceType).toLowerCase()==="asset-sale"||clean(sale?.invoiceType).toLowerCase()==="asset-sale";
+  if(!assetSale) throw Object.assign(new Error("Settlement requires a canonical asset-sale Invoice."),{name:"IXIFinancialSettlementSaleSourceError",details:{sourceFinancialDocumentId:clean(control.sourceFinancialDocumentId)}});
+  return {checked:true,sourceFinancialDocumentId:clean(sale.financialDocumentId)};
+}
+
+async function assertReceivablesSettlementAvailable({financialDocument={},entityPassportId=""}={}) {
+  const settlement=financialDocumentFromRecord(financialDocument),type=clean(settlement.documentType).toLowerCase();
+  const isReceivable=(type==="payment"&&clean(settlement.paymentDirection).toLowerCase()==="inflow")||type==="credit";
+  if(!isReceivable) return {checked:false};
+  const sourceId=clean(settlement.sourceFinancialDocumentId);
+  if(!sourceId) return {checked:false};
+  const sourceResult=await providerService.getDocument({financialDocumentId:sourceId}),source=financialDocumentFromRecord(sourceResult?.data?.record);
+  if(type==="credit"&&sourceResult?.ok&&["bill","supplier-invoice"].includes(clean(source.documentType).toLowerCase())) return {checked:false};
+  const invoice=await readCanonicalSource({sourceId,entityPassportId,documentTypes:["invoice"],errorPrefix:"A/R settlement"});
+  if(type==="payment"&&clean(settlement.paymentDirection).toLowerCase()!=="inflow") throw Object.assign(new Error("A/R payment direction must be inflow."),{name:"IXIFinancialReceivablesDirectionError"});
+  const listed=await providerService.listDocumentsByPassport({passportId:clean(entityPassportId)});
+  if(!listed?.ok) throw Object.assign(new Error("A/R settlement balance could not be verified."),{name:"IXIFinancialReceivablesReadError"});
+  const existing=safeArray(listed?.data?.documents).map(financialDocumentFromRecord).filter(item=>clean(item.sourceFinancialDocumentId)===sourceId&&!['void','reversed'].includes(clean(item.financialState).toLowerCase())&&((clean(item.documentType).toLowerCase()==="payment"&&clean(item.paymentDirection).toLowerCase()==="inflow")||clean(item.documentType).toLowerCase()==="credit"));
+  const settled=Math.round(existing.reduce((sum,item)=>sum+financialAmount(item),0)*100)/100,newAmount=financialAmount(settlement),invoiceAmount=financialAmount(invoice);
+  if(!(newAmount>0)) throw Object.assign(new Error("A/R settlement amount must be greater than zero."),{name:"IXIFinancialReceivablesAmountError"});
+  if(settled+newAmount>invoiceAmount+0.005) throw Object.assign(new Error("A/R settlement exceeds the canonical open Invoice balance."),{name:"IXIFinancialReceivablesOverpaymentError",details:{invoiceAmount,settled,newAmount,openBalance:Math.max(0,invoiceAmount-settled)}});
+  return {checked:true,invoiceAmount,settled,newAmount};
+}
+
+async function assertOwnerSettlementPaymentAvailable({financialDocument={},entityPassportId=""}={}) {
+  const payment=financialDocumentFromRecord(financialDocument);
+  if(clean(payment.documentType).toLowerCase()!=="payment"||clean(payment.paymentDirection).toLowerCase()!=="outflow"||!clean(payment.sourceFinancialDocumentId)) return {checked:false};
+  const sourceResult=await providerService.getDocument({financialDocumentId:clean(payment.sourceFinancialDocumentId)}),source=financialDocumentFromRecord(sourceResult?.data?.record);
+  if(!sourceResult?.ok||clean(source.documentType).toLowerCase()!=="settlement") return {checked:false};
+  if(clean(payment.paymentDirection).toLowerCase()!=="outflow") throw Object.assign(new Error("Settlement owner payment direction must be outflow."),{name:"IXIFinancialSettlementOwnerDirectionError"});
+  const settlement=await readCanonicalSource({sourceId:payment.sourceFinancialDocumentId,entityPassportId,documentTypes:["settlement"],errorPrefix:"Owner payment"});
+  const record=safeObject(settlement.assetSettlement),status=clean(record.status).toLowerCase();
+  if(!["approved","partially-paid"].includes(status)) throw Object.assign(new Error("Owner payments require an approved Settlement."),{name:"IXIFinancialSettlementApprovalRequiredError"});
+  const ownerId=clean(payment?.metadata?.ownerId),owner=safeArray(record?.waterfall?.owners||record.owners).find(item=>clean(item?.ownerId||item?.passportId)===ownerId);
+  if(!ownerId||!owner) throw Object.assign(new Error("Owner payment must reference a canonical Settlement owner."),{name:"IXIFinancialSettlementOwnerError",details:{ownerId}});
+  const entitlement=Math.abs(Number(owner?.finalDue??owner?.amount??owner?.entitlement??owner?.distributionAmount)||0);
+  const listed=await providerService.listDocumentsByPassport({passportId:clean(entityPassportId)});
+  if(!listed?.ok) throw Object.assign(new Error("Settlement owner balance could not be verified."),{name:"IXIFinancialSettlementReadError"});
+  const paid=safeArray(listed?.data?.documents).map(financialDocumentFromRecord).filter(item=>clean(item.documentType).toLowerCase()==="payment"&&clean(item.paymentDirection).toLowerCase()==="outflow"&&clean(item.sourceFinancialDocumentId)===clean(settlement.financialDocumentId)&&clean(item?.metadata?.ownerId)===ownerId&&!['void','reversed'].includes(clean(item.financialState).toLowerCase())).reduce((sum,item)=>sum+financialAmount(item),0);
+  const newAmount=financialAmount(payment);
+  if(!(newAmount>0)||newAmount+paid>entitlement+0.005) throw Object.assign(new Error("Owner payment exceeds the canonical unpaid entitlement."),{name:"IXIFinancialSettlementOwnerOverpaymentError",details:{ownerId,entitlement,paid,newAmount,openBalance:Math.max(0,entitlement-paid)}});
+  return {checked:true,ownerId,entitlement,paid,newAmount};
 }
 
 async function assertPayablesControlSource({financialDocument={},entityPassportId=""}={}) {
@@ -1351,6 +1427,10 @@ async function executeCreateFinancialDocumentCommand(
   try {
     await assertPayablesSettlementAvailable({financialDocument:validation.normalized,entityPassportId:command.entityPassportId});
     await assertPayablesControlSource({financialDocument:validation.normalized,entityPassportId:command.entityPassportId});
+    await assertCollectionControlSource({financialDocument:validation.normalized,entityPassportId:command.entityPassportId});
+    await assertSettlementControlSource({financialDocument:validation.normalized,entityPassportId:command.entityPassportId});
+    await assertReceivablesSettlementAvailable({financialDocument:validation.normalized,entityPassportId:command.entityPassportId});
+    await assertOwnerSettlementPaymentAvailable({financialDocument:validation.normalized,entityPassportId:command.entityPassportId});
     await assertTreasuryControl({financialDocument:validation.normalized,entityPassportId:command.entityPassportId});
   } catch (error) {
     return {ok:false,commandId:command.commandId,idempotencyKey:command.idempotencyKey,stage:"settlement-control",financialDocument:validation.normalized,errors:[{name:clean(error?.name||"IXIFinancialSettlementControlError"),message:clean(error?.message||"A/P settlement control failed."),details:safeObject(error?.details)}],warnings:validation.warnings};
@@ -2821,6 +2901,10 @@ module.exports = {
   validateJournalAccounts,
   assertPayablesSettlementAvailable,
   assertPayablesControlSource,
+  assertCollectionControlSource,
+  assertSettlementControlSource,
+  assertReceivablesSettlementAvailable,
+  assertOwnerSettlementPaymentAvailable,
   assertTreasuryControl,
 
   executeCreateFinancialDocumentCommand,
