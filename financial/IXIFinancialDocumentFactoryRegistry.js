@@ -144,6 +144,11 @@ const {
     "./IXIFinancialPeriodCloseFactory"
   );
 
+const {
+  createPeriodReopenDocument,
+  createPostingRuleDocument
+} = require("./IXIFinancialAccountingControlFactory");
+
 
 /* =========================================================
    TYPES
@@ -206,7 +211,13 @@ const IXI_FINANCIAL_DOCUMENT_TYPES =
       "journal-entry",
 
     PERIOD_CLOSE:
-      "period-close"
+      "period-close",
+
+    PERIOD_REOPEN:
+      "period-reopen",
+
+    POSTING_RULE:
+      "posting-rule"
   });
 
 
@@ -318,7 +329,13 @@ const FACTORIES =
 
 
     [IXI_FINANCIAL_DOCUMENT_TYPES.PERIOD_CLOSE]:
-      createPeriodCloseDocument
+      createPeriodCloseDocument,
+
+    [IXI_FINANCIAL_DOCUMENT_TYPES.PERIOD_REOPEN]:
+      createPeriodReopenDocument,
+
+    [IXI_FINANCIAL_DOCUMENT_TYPES.POSTING_RULE]:
+      createPostingRuleDocument
   });
 
 

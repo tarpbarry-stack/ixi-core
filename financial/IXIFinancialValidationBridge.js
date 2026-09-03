@@ -77,7 +77,9 @@ const DOCUMENT_TYPES =
     "credit",
     "adjustment",
     "journal-entry",
-    "period-close"
+    "period-close",
+    "period-reopen",
+    "posting-rule"
   ]);
 
 
@@ -721,7 +723,8 @@ function validateFinancialDocument(
     "updatedAt",
     "approvedAt",
     "paidAt",
-    "voidedAt"
+    "voidedAt",
+    "reopenedAt"
   ];
 
   dateFields.forEach(
@@ -971,6 +974,28 @@ function validateFinancialDocument(
     const expected=roundMoney(Number(statement.balance||0)+Number(reconciling.depositsInTransit||0)-Number(reconciling.outstandingPayments||0)+Number(reconciling.otherReconcilingItems||0));
     if(Number(reconciling.adjustedBankBalance)!==expected) errors.push("treasury reconciliation adjusted bank balance is invalid.");
     if(normalizedLines.length!==0||Number(source?.totals?.total)!==0||treatment.economicEvent!==false||treatment.createsCashEvent!==false) errors.push("treasury reconciliation must remain non-economic.");
+  }
+
+  if(documentType==="period-reopen"){
+    const evidence=safeObject(source.permissionEvidence),treatment=safeObject(source.accountingTreatment);
+    if(!/^\d{4}-\d{2}$/.test(clean(source.period))) errors.push("period reopen period is invalid.");
+    if(clean(source.status).toLowerCase()!=="reopened"||financialState!=="submitted") errors.push("period reopen state is invalid.");
+    if(!isValidDate(clean(source.reopenedAt))||!clean(source.reopenedBy)) errors.push("period reopen requires actor and timestamp evidence.");
+    if(clean(source.reopenReason).length<10) errors.push("period reopen reason is insufficient.");
+    if(!clean(source.priorCloseDocumentId)) errors.push("period reopen requires prior close lineage.");
+    if(evidence.action!=="financial.gl.period.reopen"||evidence.allowed!==true||clean(evidence.actorPassportId)!==clean(source.reopenedBy)) errors.push("period reopen permission evidence is invalid.");
+    if(normalizedLines.length!==0||Number(source?.totals?.total)!==0||treatment.economicEvent!==false) errors.push("period reopen must remain non-economic.");
+  }
+
+  if(documentType==="posting-rule"){
+    const rule=safeObject(source.postingRule),identity=safeObject(rule.identity),match=safeObject(rule.match),posting=safeObject(rule.posting),control=safeObject(rule.control),treatment=safeObject(source.accountingTreatment);
+    if(clean(rule.schema)!=="ixi-financial-posting-rule-v1") errors.push("posting rule schema is invalid.");
+    if(clean(identity.postingRuleDocumentId)!==financialDocumentId||!clean(identity.ruleId)||!Number.isInteger(Number(identity.version))||Number(identity.version)<1) errors.push("posting rule identity or version is invalid.");
+    if(!clean(match.documentType)) errors.push("posting rule source document type is required.");
+    if(!clean(posting.debitAccountCode)||!clean(posting.creditAccountCode)||clean(posting.debitAccountCode)===clean(posting.creditAccountCode)) errors.push("posting rule requires different debit and credit accounts.");
+    if(!clean(control.entityPassportId)||!clean(control.approvedByPassportId)||clean(control.changeReason).length<10) errors.push("posting rule requires Entity, approver, and specific change reason evidence.");
+    if(financialState!=="approved"||!["active","inactive"].includes(clean(source.status).toLowerCase())) errors.push("posting rule state is invalid.");
+    if(normalizedLines.length!==0||Number(source?.totals?.total)!==0||treatment.economicEvent!==false) errors.push("posting rule must remain non-economic.");
   }
 
   if (

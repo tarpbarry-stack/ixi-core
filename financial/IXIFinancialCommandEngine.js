@@ -250,6 +250,11 @@ function randomId(
     .toString("hex")}`;
 }
 
+function accountingControlDocumentId(prefix, ...parts) {
+  const digest = crypto.createHash("sha256").update(parts.map(clean).join("|")).digest("hex").slice(0, 32);
+  return `ifd_${clean(prefix)}_${digest}`;
+}
+
 
 /* =========================================================
    COMMAND IDS
@@ -892,12 +897,15 @@ function resolveFinancialDocumentPeriod(
 function isPeriodControlDocument(
   financialDocument = {}
 ) {
-  return (
+  return [
+    "period-close",
+    "period-reopen",
+    "posting-rule"
+  ].includes(
     clean(
       financialDocument
         ?.documentType
-    ).toLowerCase() ===
-      "period-close"
+    ).toLowerCase()
   );
 }
 
@@ -1191,15 +1199,18 @@ async function executeCreateFinancialDocumentCommand(
    * PERIOD CONTROL DOCUMENT GATE
    * ----------------------------
    *
-   * period-close is not an ordinary Financial
-   * Document creation operation.
+   * Accounting control documents are not ordinary
+   * Financial Document creation operations.
    *
    * Only the server-side close command may
    * authorize its creation.
    */
   if (
-    command.documentType ===
-      "period-close" &&
+    [
+      "period-close",
+      "period-reopen",
+      "posting-rule"
+    ].includes(command.documentType) &&
     options
       ?.allowPeriodControl !==
         true
@@ -1220,10 +1231,10 @@ async function executeCreateFinancialDocumentCommand(
       errors: [
         {
           name:
-            "IXIFinancialPeriodCloseCommandRequiredError",
+            "IXIFinancialAccountingControlCommandRequiredError",
 
           message:
-            "Accounting periods may only be closed through the dedicated period-close control command."
+            "Accounting controls may only be changed through their dedicated authenticated command."
         }
       ],
 
@@ -2094,6 +2105,24 @@ async function executeCloseFinancialPeriodCommand(
     );
 
 
+  const closeCertification =
+    safeObject(
+      controls.closeCertification
+    );
+
+
+  const closeCertificationCounts =
+    safeObject(
+      closeCertification.counts
+    );
+
+
+  const closeReconciliations =
+    safeObject(
+      closeCertification.reconciliations
+    );
+
+
   const closeChecks = [
     {
       key:
@@ -2159,6 +2188,106 @@ async function executeCloseFinancialPeriodCommand(
           0
         ) ===
           0
+    },
+
+    {
+      key:
+        "no-unposted-journals",
+
+      label:
+        "No Unposted Journal Drafts",
+
+      ok:
+        Number(
+          closeCertificationCounts.draftJournals ||
+          0
+        ) === 0
+    },
+
+    {
+      key:
+        "no-unposted-economic-documents",
+
+      label:
+        "All Economic Documents Posted",
+
+      ok:
+        Number(
+          closeCertificationCounts.unpostedEconomicDocuments ||
+          0
+        ) === 0
+    },
+
+    {
+      key:
+        "no-suspense-or-unclassified-activity",
+
+      label:
+        "No Suspense Or Unclassified Activity",
+
+      ok:
+        Number(
+          closeCertificationCounts.suspenseLines ||
+          0
+        ) === 0 &&
+        Number(
+          closeCertificationCounts.unclassifiedLines ||
+          0
+        ) === 0
+    },
+
+    {
+      key:
+        "accounts-receivable-reconciled",
+
+      label:
+        "Accounts Receivable Subledger Reconciled",
+
+      ok:
+        closeReconciliations
+          ?.accountsReceivable
+          ?.balanced === true
+    },
+
+    {
+      key:
+        "accounts-payable-reconciled",
+
+      label:
+        "Accounts Payable Subledger Reconciled",
+
+      ok:
+        closeReconciliations
+          ?.accountsPayable
+          ?.balanced === true
+    },
+
+    {
+      key:
+        "treasury-reconciled",
+
+      label:
+        "Treasury And Bank Accounts Reconciled",
+
+      ok:
+        closeReconciliations
+          ?.treasury
+          ?.balancedToGL === true &&
+        closeReconciliations
+          ?.treasury
+          ?.allAccountsReconciled === true
+    },
+
+    {
+      key:
+        "close-certification-ready",
+
+      label:
+        "Accounting Close Certification Ready",
+
+      ok:
+        closeCertification.ready ===
+          true
     },
 
     {
@@ -2311,6 +2440,9 @@ async function executeCloseFinancialPeriodCommand(
         },
 
         input: {
+          financialDocumentId:
+            accountingControlDocumentId("close", entityPassportId, period, clean(periodState.reopenDocumentId || "initial")),
+
           documentNumber:
             `CLOSE-${period}`,
 
@@ -2395,7 +2527,10 @@ async function executeCloseFinancialPeriodCommand(
               balanceSheet,
 
             controls:
-              controls
+              controls,
+
+            closeCertification:
+              closeCertification
           }
         }
       },
@@ -2537,6 +2672,134 @@ async function executeCloseFinancialPeriodCommand(
 
 
 /* =========================================================
+   REOPEN ACCOUNTING PERIOD COMMAND
+   ========================================================= */
+
+async function executeReopenFinancialPeriodCommand(input = {}) {
+  const source = safeObject(input);
+  const entityPassportId = clean(source.entityPassportId);
+  const actorPassportId = clean(source.actorPassportId);
+  const period = clean(source.period);
+  const currency = clean(source.currency || "USD").toUpperCase();
+  const reopenReason = clean(source.reopenReason || source.reason);
+  const commandId = clean(source.commandId) || createFinancialCommandId();
+  const idempotencyKey = clean(source.idempotencyKey) || createFinancialIdempotencyKey();
+  const failure = (name, message, stage = "reopen-control", details = {}) => ({ ok: false, stage, commandId, idempotencyKey, errors: [{ name, message, details }], warnings: [] });
+
+  if (!entityPassportId) return failure("IXIFinancialEntityRequiredError", "Accounting period reopen requires entityPassportId.");
+  if (!actorPassportId) return failure("IXIFinancialActorRequiredError", "Accounting period reopen requires actorPassportId.");
+  if (!/^\d{4}-\d{2}$/.test(period)) return failure("IXIFinancialPeriodReopenError", "Accounting period reopen requires period in YYYY-MM format.");
+  if (reopenReason.length < 10) return failure("IXIFinancialPeriodReopenReasonError", "Accounting period reopen requires a specific reason of at least 10 characters.");
+
+  let gl;
+  try {
+    gl = await getFinancialGLProjection({ entityPassportId, period, currency });
+  } catch (error) {
+    return failure(clean(error?.name || "IXIFinancialPeriodReopenReadError"), clean(error?.message || "Accounting period reopen could not read authoritative GL."), "reopen-read", safeObject(error?.details));
+  }
+
+  const projection = safeObject(gl?.projection);
+  const periodState = safeObject(projection.period);
+  if (periodState.closed !== true) {
+    if (clean(periodState.reopenDocumentId)) {
+      return { ok: true, stage: "already-reopened", commandId, idempotencyKey, reopened: true, created: false, idempotentReplay: true, reopenDocumentId: clean(periodState.reopenDocumentId), closeDocumentId: clean(periodState.closeDocumentId), period: periodState, projection, storageProvider: clean(gl?.storageProvider), warnings: [], errors: [] };
+    }
+    return failure("IXIFinancialPeriodNotClosedError", `Accounting period ${period} is not closed and cannot be reopened.`);
+  }
+
+  const priorCloseDocumentId = clean(periodState.closeDocumentId);
+  if (!priorCloseDocumentId) return failure("IXIFinancialPeriodReopenEvidenceError", "Accounting period reopen requires immutable prior-close lineage.");
+
+  const created = await executeCreateFinancialDocumentCommand({
+    documentType: "period-reopen",
+    actorPassportId,
+    entityPassportId,
+    commandId,
+    idempotencyKey,
+    requestId: clean(source.requestId),
+    source: "ixi-transact-period-reopen",
+    metadata: { ...safeObject(source.metadata), transactSurface: "desktop", accountingScope: "entity", periodControl: "reopen" },
+    input: {
+      financialDocumentId: accountingControlDocumentId("reopen", entityPassportId, period, priorCloseDocumentId),
+      period,
+      currency,
+      reopenedAt: new Date().toISOString(),
+      reopenedBy: actorPassportId,
+      reopenReason,
+      priorCloseDocumentId,
+      permissionEvidence: { action: "financial.gl.period.reopen", actorPassportId, entityPassportId, allowed: true },
+      references: [{ role: "entity", passportId: entityPassportId, label: clean(source.entityLabel || entityPassportId) }],
+      metadata: { accountingControlDocument: true, reopenCommandVersion: "ixi-period-reopen-command-v1", priorCloseDocumentId }
+    }
+  }, { allowPeriodControl: true });
+
+  if (!created.ok) return { ...created, stage: created.stage || "reopen-persistence" };
+  const verified = await getFinancialGLProjection({ entityPassportId, period, currency });
+  const verifiedPeriod = safeObject(verified?.projection?.period);
+  if (verifiedPeriod.closed === true || !clean(verifiedPeriod.reopenDocumentId)) return failure("IXIFinancialPeriodReopenVerificationError", "Accounting period reopen was persisted but could not be verified.", "reopen-verification");
+  return { ok: true, stage: "reopened", commandId, idempotencyKey, reopened: true, created: true, financialDocument: created.financialDocument, reopenDocumentId: clean(verifiedPeriod.reopenDocumentId), closeDocumentId: priorCloseDocumentId, period: verifiedPeriod, projection: verified.projection, storageProvider: clean(created.storageProvider || verified.storageProvider), warnings: safeArray(created.warnings), errors: [] };
+}
+
+
+/* =========================================================
+   MANAGE VERSIONED POSTING RULE COMMAND
+   ========================================================= */
+
+async function executeCreatePostingRuleCommand(input = {}) {
+  const source = safeObject(input);
+  const entityPassportId = clean(source.entityPassportId);
+  const actorPassportId = clean(source.actorPassportId);
+  const postingRule = safeObject(source.postingRule);
+  const identity = safeObject(postingRule.identity);
+  const posting = safeObject(postingRule.posting);
+  const ruleId = clean(identity.ruleId || postingRule.ruleId);
+  const version = Number(identity.version || postingRule.version);
+  const commandId = clean(source.commandId) || createFinancialCommandId();
+  const idempotencyKey = clean(source.idempotencyKey) || createFinancialIdempotencyKey();
+  const failure = (name, message, stage = "posting-rule-control", details = {}) => ({ ok: false, stage, commandId, idempotencyKey, errors: [{ name, message, details }], warnings: [] });
+  if (!entityPassportId) return failure("IXIFinancialEntityRequiredError", "Posting Rule requires entityPassportId.");
+  if (!actorPassportId) return failure("IXIFinancialActorRequiredError", "Posting Rule requires actorPassportId.");
+  if (!ruleId) return failure("IXIFinancialPostingRuleIdentityError", "Posting Rule requires a stable ruleId.");
+  if (!Number.isInteger(version) || version < 1) return failure("IXIFinancialPostingRuleVersionError", "Posting Rule version must be a positive integer.");
+  if (clean(postingRule.changeReason).length < 10) return failure("IXIFinancialPostingRuleReasonError", "Posting Rule requires a specific change reason of at least 10 characters.");
+
+  try {
+    await validateJournalAccounts({ financialDocument: { documentType: "journal-entry", lines: [{ accountCode: clean(posting.debitAccountCode) }, { accountCode: clean(posting.creditAccountCode) }] }, entityPassportId });
+  } catch (error) {
+    return failure(clean(error?.name || "IXIFinancialPostingRuleAccountError"), clean(error?.message || "Posting Rule account validation failed."), "account-control", safeObject(error?.details));
+  }
+
+  const listed = await providerService.listDocumentsByPassport({ passportId: entityPassportId, requestId: clean(source.requestId) });
+  if (!listed?.ok) return failure("IXIFinancialPostingRuleReadError", "Existing Posting Rules could not be verified.", "posting-rule-read");
+  const existing = safeArray(listed?.data?.documents).map(financialDocumentFromRecord).filter(document => clean(document.documentType).toLowerCase() === "posting-rule" && clean(document?.postingRule?.identity?.ruleId) === ruleId);
+  const versions = existing.map(document => Number(document?.postingRule?.identity?.version)).filter(Number.isInteger);
+  const latestVersion = versions.length ? Math.max(...versions) : 0;
+  if (versions.includes(version)) return failure("IXIFinancialPostingRuleVersionConflictError", `Posting Rule ${ruleId} version ${version} already exists.`);
+  if (version !== latestVersion + 1) return failure("IXIFinancialPostingRuleSequenceError", `Posting Rule ${ruleId} must advance from version ${latestVersion} to ${latestVersion + 1}.`, "posting-rule-control", { latestVersion, requestedVersion: version });
+
+  return executeCreateFinancialDocumentCommand({
+    documentType: "posting-rule",
+    actorPassportId,
+    entityPassportId,
+    commandId,
+    idempotencyKey,
+    requestId: clean(source.requestId),
+    source: "ixi-transact-posting-rule",
+    metadata: { ...safeObject(source.metadata), transactSurface: "desktop", accountingScope: "entity", accountingControl: "posting-rule" },
+    input: {
+      financialDocumentId: accountingControlDocumentId("posting_rule", entityPassportId, ruleId, version),
+      currency: clean(source.currency || "USD").toUpperCase(),
+      actorPassportId,
+      entityPassportId,
+      postingRule,
+      references: [{ role: "entity", passportId: entityPassportId, label: clean(source.entityLabel || entityPassportId) }],
+      metadata: { accountingControlDocument: true, postingRuleCommandVersion: "ixi-posting-rule-command-v1" }
+    }
+  }, { allowPeriodControl: true });
+}
+
+
+/* =========================================================
    EXPORTS
    ========================================================= */
 
@@ -2562,5 +2825,7 @@ module.exports = {
 
   executeCreateFinancialDocumentCommand,
   executePostJournalEntryCommand,
-  executeCloseFinancialPeriodCommand
+  executeCloseFinancialPeriodCommand,
+  executeReopenFinancialPeriodCommand,
+  executeCreatePostingRuleCommand
 };
