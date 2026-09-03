@@ -63,6 +63,7 @@ const DOCUMENT_TYPES =
     "work-order",
     "time-entry",
     "material-usage",
+    "asset-acquisition",
     "bill",
     "supplier-invoice",
     "invoice",
@@ -115,6 +116,9 @@ const TIME_ENTRY_MODES = new Set(["live", "manual"]);
 const TIME_ENTRY_STATUSES = new Set(["running", "paused", "stopped", "recorded", "posted"]);
 const MATERIAL_SOURCES = new Set(["inventory", "manual", "purchase-order", "existing-supply"]);
 const MATERIAL_UNITS = new Set(["EA", "FT", "YD", "GAL", "QT", "LB", "OZ", "SET", "BOX", "ROLL", "LOT"]);
+const ASSET_ACQUISITION_TYPES = new Set([
+  "direct-purchase", "auction", "trade-in", "dealer", "private-seller", "entity-transfer", "other"
+]);
 
 
 const EXPENSE_PAYMENT_METHODS =
@@ -1016,6 +1020,88 @@ function validateFinancialDocument(
     } else if (receiving.required === true) {
       errors.push("non-purchase-order material usage cannot require receiving consumption.");
     }
+  }
+
+  if (documentType === "asset-acquisition") {
+    const record = safeObject(source.assetAcquisition);
+    const identity = safeObject(record.identity);
+    const context = safeObject(record.context);
+    const acquisition = safeObject(record.acquisition);
+    const ownership = safeObject(record.ownership);
+    const funding = safeObject(record.funding);
+    const makeReady = safeObject(record.makeReady);
+    const treatment = safeObject(source.accountingTreatment);
+    const purchasePrice = roundMoney(acquisition.purchasePrice);
+    const costs = ["buyerPremium", "tax", "titleFees", "brokerFees", "otherAcquisitionFees"]
+      .map(field => roundMoney(acquisition[field]));
+    const directCost = roundMoney(acquisition.directAcquisitionCost);
+    const expectedDirectCost = purchasePrice === null || costs.some(value => value === null)
+      ? null
+      : roundMoney(purchasePrice + costs.reduce((sum, value) => sum + value, 0));
+    const owners = safeArray(ownership.owners);
+    const payments = safeArray(funding.payments);
+
+    if (clean(record.schema) !== "ixi-asset-acquisition-v2") errors.push("asset acquisition schema is invalid.");
+    if (clean(identity.acquisitionId) !== financialDocumentId || clean(identity.financialDocumentId) !== financialDocumentId) {
+      errors.push("asset acquisition identity must match financialDocumentId.");
+    }
+    if (clean(identity.number) !== clean(source.documentNumber)) errors.push("asset acquisition number must match documentNumber.");
+    if (!clean(context.primaryPassportId)) {
+      errors.push("asset acquisition primary Passport is required.");
+    } else if (!normalizedReferences.some(reference => clean(reference.passportId) === clean(context.primaryPassportId) && clean(reference.role).toLowerCase() === "asset")) {
+      errors.push("asset acquisition primary Passport must be referenced as the asset.");
+    }
+    if (!clean(context.entityPassportId)) errors.push("asset acquisition entity Passport is required.");
+    if (!clean(context.actorPassportId || context.actorId)) errors.push("asset acquisition actor identity is required.");
+    if (clean(context.entityPassportId) && !normalizedReferences.some(reference => clean(reference.passportId) === clean(context.entityPassportId) && clean(reference.role).toLowerCase() === "entity")) {
+      errors.push("asset acquisition entity Passport must be referenced as the entity.");
+    }
+    if (clean(context.actorPassportId) && !normalizedReferences.some(reference => clean(reference.passportId) === clean(context.actorPassportId) && clean(reference.role).toLowerCase() === "employee")) {
+      errors.push("asset acquisition actor Passport must be referenced as the employee.");
+    }
+    if (!ASSET_ACQUISITION_TYPES.has(clean(acquisition.type).toLowerCase())) errors.push("asset acquisition type is invalid.");
+    if (!clean(acquisition.sellerLabel)) errors.push("asset acquisition seller is required.");
+    if (!clean(acquisition.purchaseDate) || !isValidDate(acquisition.purchaseDate)) errors.push("asset acquisition purchase date is required and must be valid.");
+    if (purchasePrice === null || !(purchasePrice > 0)) errors.push("asset acquisition purchase price must be greater than zero.");
+    if (costs.some(value => value === null || value < 0)) errors.push("asset acquisition capitalized costs must be valid non-negative amounts.");
+    if (directCost === null || expectedDirectCost === null || directCost !== expectedDirectCost) errors.push("asset acquisition basis must equal purchase price plus capitalized acquisition costs.");
+    if (Number(source?.totals?.purchasePrice) !== purchasePrice || Number(source?.totals?.acquisitionBasis) !== directCost) {
+      errors.push("asset acquisition totals must match its canonical basis.");
+    }
+    if (normalizedLines.length !== 1 || Number(normalizedLines[0]?.amount) !== directCost || clean(normalizedLines[0]?.direction) !== "neutral" || clean(normalizedLines[0]?.lineType) !== "asset-basis") {
+      errors.push("asset acquisition requires one matching neutral asset-basis line.");
+    }
+    if (treatment.classification !== "asset-basis" || treatment.capitalized !== true || treatment.economicEvent !== true || treatment.nonExpense !== true || treatment.nonCash !== true || treatment.createsObligation !== false) {
+      errors.push("asset acquisition accounting treatment must capitalize basis without creating expense, cash, or obligation duplication.");
+    }
+    if (!owners.length || owners.some(owner => !clean(owner?.partyLabel))) errors.push("asset acquisition ownership requires named owners.");
+    if (owners.some(owner => Number(owner?.legalOwnershipPercent) < 0 || Number(owner?.legalOwnershipPercent) > 100 || Number(owner?.settlementSharePercent) < 0 || Number(owner?.settlementSharePercent) > 100)) {
+      errors.push("asset acquisition ownership percentages must be between zero and 100.");
+    }
+    if (Math.abs(Number(ownership.legalOwnershipTotal) - 100) > 0.01) errors.push("asset acquisition legal ownership must total 100 percent.");
+    if (Math.abs(Number(ownership.settlementShareTotal) - 100) > 0.01) errors.push("asset acquisition settlement shares must total 100 percent.");
+    if (payments.some(payment => !clean(payment?.date) || !isValidDate(payment.date) || !(Number(payment?.amount) > 0))) {
+      errors.push("asset acquisition funding evidence must have a valid date and positive amount.");
+    }
+    const expectedAmountPaid = roundMoney(payments.reduce((sum, payment) => sum + Number(payment?.amount || 0), 0));
+    if (Number(funding.amountPaid) !== expectedAmountPaid || Number(funding.balanceDue) !== roundMoney(Math.max(0, directCost - expectedAmountPaid))) {
+      errors.push("asset acquisition funding totals must match its payment evidence.");
+    }
+    if (Number(funding.amountPaid) > directCost + 0.005) errors.push("asset acquisition funding evidence cannot exceed direct acquisition cost.");
+    if (funding.financed === true && !clean(funding.lenderLabel)) errors.push("financed asset acquisition requires a lender.");
+    if (funding.createsCashEvent !== false || funding.createsPayable !== false || clean(funding.treatment) !== "deal-evidence-only") {
+      errors.push("asset acquisition funding must remain evidence-only; cash and payable events are separate TRAN$ACT records.");
+    }
+    if (clean(makeReady.status).toLowerCase() === "closed") {
+      if (!clean(makeReady.inServiceDate) || !isValidDate(makeReady.inServiceDate)) errors.push("closed asset acquisition requires a valid in-service date.");
+      if (clean(makeReady.inServiceDate) < clean(acquisition.purchaseDate)) errors.push("asset acquisition in-service date cannot precede purchase date.");
+    }
+    safeArray(source.attachments).forEach((attachment, index) => {
+      const item = safeObject(attachment);
+      if (!clean(item.storageKey || item.key) || !["uploaded", "available", "verified"].includes(clean(item.status).toLowerCase())) {
+        errors.push(`attachments[${index}] must reference durable uploaded evidence.`);
+      }
+    });
   }
 
   const calculatedTotal =
