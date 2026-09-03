@@ -132,6 +132,7 @@ function getCreateFinancialAction(documentType="",input={}) {
   if(type==="payables-control") return IXI_FINANCIAL_ACTIONS.MANAGE_PAYABLES;
   if(type==="treasury-account") return IXI_FINANCIAL_ACTIONS.MANAGE_TREASURY;
   if(type==="treasury-reconciliation") return IXI_FINANCIAL_ACTIONS.RECONCILE_TREASURY;
+  if(type==="journal-entry") return IXI_FINANCIAL_ACTIONS.CREATE_JOURNAL;
   return IXI_FINANCIAL_ACTIONS.CREATE_DOCUMENT;
 }
 
@@ -396,7 +397,7 @@ router.post(
 
           action:
             IXI_FINANCIAL_ACTIONS
-              .POST_DOCUMENT
+              .POST_JOURNAL
         });
 
       if (
@@ -409,7 +410,7 @@ router.post(
               authorization.reason,
             action:
               IXI_FINANCIAL_ACTIONS
-                .POST_DOCUMENT
+                .POST_JOURNAL
           });
 
         return res
@@ -583,7 +584,7 @@ router.post(
 
           action:
             IXI_FINANCIAL_ACTIONS
-              .CREATE_DOCUMENT
+              .CLOSE_PERIOD
         });
 
 
@@ -600,7 +601,7 @@ router.post(
 
             action:
               IXI_FINANCIAL_ACTIONS
-                .CREATE_DOCUMENT
+                .CLOSE_PERIOD
           });
 
 

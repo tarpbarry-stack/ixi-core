@@ -1247,6 +1247,21 @@ function buildFinancialGLProjection({
     currency:
       resolvedCurrency,
 
+    chart: {
+      schema:
+        "ixi-financial-chart-of-accounts-v1",
+
+      source:
+        "ixi-core",
+
+      accounts:
+        safeArray(
+          chart
+        ).map(account => ({
+          ...safeObject(account)
+        }))
+    },
+
 
     counts: {
       sourceDocuments:

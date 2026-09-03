@@ -44,4 +44,6 @@ test("GL projection includes posted journals and excludes drafts and reversals",
   );
   assert.equal(projection.trialBalance.debits, 50);
   assert.equal(projection.trialBalance.credits, 50);
+  assert.equal(projection.chart.source, "ixi-core");
+  assert.equal(projection.chart.accounts.length > 0, true);
 });

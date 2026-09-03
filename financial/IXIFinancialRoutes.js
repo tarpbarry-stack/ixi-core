@@ -1718,7 +1718,7 @@ router.get(
 
         action:
           IXI_FINANCIAL_ACTIONS
-            .VIEW_SCOPE_SNAPSHOT
+            .VIEW_GENERAL_LEDGER
       });
 
 
@@ -1735,7 +1735,7 @@ router.get(
 
           action:
             IXI_FINANCIAL_ACTIONS
-              .VIEW_SCOPE_SNAPSHOT,
+              .VIEW_GENERAL_LEDGER,
 
           reason:
             authorization.reason
