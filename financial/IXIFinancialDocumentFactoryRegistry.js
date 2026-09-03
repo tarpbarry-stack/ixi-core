@@ -111,6 +111,10 @@ const {
     "./IXIFinancialRentalIncomeFactory"
   );
 
+const {
+  createServiceQuoteDocument
+} = require("./IXIFinancialServiceQuoteFactory");
+
 
 const {
   createCostCreditDocument
@@ -179,6 +183,9 @@ const IXI_FINANCIAL_DOCUMENT_TYPES =
 
     RENTAL_INCOME:
       "rental-income",
+
+    SERVICE_QUOTE:
+      "service-quote",
 
     CREDIT:
       "credit",
@@ -276,6 +283,9 @@ const FACTORIES =
 
     [IXI_FINANCIAL_DOCUMENT_TYPES.RENTAL_INCOME]:
       createRentalIncomeDocument,
+
+    [IXI_FINANCIAL_DOCUMENT_TYPES.SERVICE_QUOTE]:
+      createServiceQuoteDocument,
 
 
     [IXI_FINANCIAL_DOCUMENT_TYPES.CREDIT]:
