@@ -183,6 +183,64 @@ async function assertPayablesControlSource({financialDocument={},entityPassportI
   return{checked:true,sourceFinancialDocumentId:sourceId};
 }
 
+function treasuryMovementDelta(document={},accountId="") {
+  const source=financialDocumentFromRecord(document),movement=safeObject(source.treasuryMovement),type=clean(movement.transactionClass).toLowerCase(),amount=financialAmount(source);
+  if(clean(source.documentType).toLowerCase()!=="payment"||!type||["void","reversed"].includes(clean(source.financialState).toLowerCase())) return 0;
+  if(type==="account-transfer") {
+    if(clean(movement.fromCashAccountFinancialDocumentId)===accountId) return -amount;
+    if(clean(movement.toCashAccountFinancialDocumentId)===accountId) return amount;
+    return 0;
+  }
+  if(clean(movement.cashAccountFinancialDocumentId)!==accountId) return 0;
+  return clean(source.paymentDirection).toLowerCase()==="inflow"?amount:-amount;
+}
+
+async function getTreasuryAccount({accountId="",entityPassportId=""}={}) {
+  const result=await providerService.getDocument({financialDocumentId:clean(accountId)}),document=financialDocumentFromRecord(result?.data?.record),account=safeObject(document.treasuryAccount);
+  if(!result?.ok||clean(document.documentType).toLowerCase()!=="treasury-account") throw Object.assign(new Error("Treasury movement requires a canonical Treasury account."),{name:"IXITreasuryAccountNotFoundError",details:{accountId:clean(accountId)}});
+  if(clean(account?.context?.entityPassportId)!==clean(entityPassportId)) throw Object.assign(new Error("Treasury account is outside the authenticated Entity."),{name:"IXITreasuryScopeError",details:{accountId:clean(accountId)}});
+  if(account?.account?.active===false) throw Object.assign(new Error("Treasury account is inactive."),{name:"IXITreasuryAccountInactiveError",details:{accountId:clean(accountId)}});
+  return{document,account};
+}
+
+async function getTreasuryBook({accountId="",entityPassportId=""}={}) {
+  const accountResult=await getTreasuryAccount({accountId,entityPassportId}),listed=await providerService.listDocumentsByPassport({passportId:clean(entityPassportId)});
+  if(!listed?.ok) throw Object.assign(new Error("Treasury book balance could not be verified."),{name:"IXITreasuryReadError"});
+  const documents=safeArray(listed?.data?.documents).map(financialDocumentFromRecord),balance=Math.round(documents.reduce((sum,item)=>sum+treasuryMovementDelta(item,clean(accountId)),0)*100)/100;
+  return{...accountResult,documents,balance};
+}
+
+async function assertTreasuryControl({financialDocument={},entityPassportId=""}={}) {
+  const document=financialDocumentFromRecord(financialDocument),type=clean(document.documentType).toLowerCase();
+  if(type==="treasury-account") {
+    if(clean(document?.treasuryAccount?.context?.entityPassportId)!==clean(entityPassportId)) throw Object.assign(new Error("Treasury account is outside the authenticated Entity."),{name:"IXITreasuryScopeError"});
+    return{checked:true,operation:"account-create"};
+  }
+  if(type==="treasury-reconciliation") {
+    const reconciliation=safeObject(document.treasuryReconciliation),book=await getTreasuryBook({accountId:clean(reconciliation.accountId),entityPassportId});
+    if(Math.abs(Number(reconciliation?.book?.balance)-book.balance)>0.005) throw Object.assign(new Error("Reconciliation book balance is stale; refresh Treasury and try again."),{name:"IXITreasuryReconciliationStaleBookError",details:{submittedBookBalance:Number(reconciliation?.book?.balance),canonicalBookBalance:book.balance}});
+    return{checked:true,operation:"reconciliation",bookBalance:book.balance};
+  }
+  const movement=safeObject(document.treasuryMovement),transactionClass=clean(movement.transactionClass).toLowerCase();
+  if(type!=="payment"||!transactionClass) return{checked:false};
+  if(clean(movement.entityPassportId)!==clean(entityPassportId)) throw Object.assign(new Error("Treasury movement is outside the authenticated Entity."),{name:"IXITreasuryScopeError"});
+  if(transactionClass==="account-transfer") {
+    const fromId=clean(movement.fromCashAccountFinancialDocumentId),toId=clean(movement.toCashAccountFinancialDocumentId),fromBook=await getTreasuryBook({accountId:fromId,entityPassportId}),toAccount=await getTreasuryAccount({accountId:toId,entityPassportId});
+    if(clean(fromBook.account?.account?.currency)!==clean(toAccount.account?.account?.currency)||clean(document.currency)!==clean(fromBook.account?.account?.currency)) throw Object.assign(new Error("Treasury transfers require matching account and document currencies."),{name:"IXITreasuryCurrencyMismatchError"});
+    if(fromBook.account?.control?.allowNegative!==true&&fromBook.balance-financialAmount(document)<-0.005) throw Object.assign(new Error("Treasury transfer exceeds canonical source book cash."),{name:"IXITreasuryInsufficientCashError",details:{accountId:fromId,bookBalance:fromBook.balance,amount:financialAmount(document)}});
+    return{checked:true,operation:"transfer",bookBalance:fromBook.balance};
+  }
+  const accountId=clean(movement.cashAccountFinancialDocumentId),book=await getTreasuryBook({accountId,entityPassportId});
+  if(clean(document.currency)!==clean(book.account?.account?.currency)) throw Object.assign(new Error("Treasury movement currency must match the canonical account."),{name:"IXITreasuryCurrencyMismatchError"});
+  if(transactionClass==="opening-balance") {
+    const alreadyPosted=book.documents.some(item=>clean(item?.treasuryMovement?.transactionClass).toLowerCase()==="opening-balance"&&clean(item?.treasuryMovement?.cashAccountFinancialDocumentId)===accountId&&!["void","reversed"].includes(clean(item.financialState).toLowerCase()));
+    if(alreadyPosted) throw Object.assign(new Error("A Treasury account may have only one opening balance."),{name:"IXITreasuryDuplicateOpeningBalanceError",details:{accountId}});
+    if(clean(document.paymentDirection).toLowerCase()==="outflow"&&book.account?.control?.allowNegative!==true) throw Object.assign(new Error("A negative opening balance requires explicit negative-cash authority on the account."),{name:"IXITreasuryNegativeOpeningBalanceError",details:{accountId}});
+  }
+  if(transactionClass==="cash-adjustment"&&clean(document.paymentDirection).toLowerCase()==="outflow"&&book.account?.control?.allowNegative!==true&&book.balance-financialAmount(document)<-0.005) throw Object.assign(new Error("Treasury cash-out adjustment exceeds canonical book cash."),{name:"IXITreasuryInsufficientCashError",details:{accountId,bookBalance:book.balance,amount:financialAmount(document)}});
+  return{checked:true,operation:transactionClass,bookBalance:book.balance};
+}
+
 
 function randomId(
   prefix
@@ -1282,6 +1340,7 @@ async function executeCreateFinancialDocumentCommand(
   try {
     await assertPayablesSettlementAvailable({financialDocument:validation.normalized,entityPassportId:command.entityPassportId});
     await assertPayablesControlSource({financialDocument:validation.normalized,entityPassportId:command.entityPassportId});
+    await assertTreasuryControl({financialDocument:validation.normalized,entityPassportId:command.entityPassportId});
   } catch (error) {
     return {ok:false,commandId:command.commandId,idempotencyKey:command.idempotencyKey,stage:"settlement-control",financialDocument:validation.normalized,errors:[{name:clean(error?.name||"IXIFinancialSettlementControlError"),message:clean(error?.message||"A/P settlement control failed."),details:safeObject(error?.details)}],warnings:validation.warnings};
   }
@@ -2499,6 +2558,7 @@ module.exports = {
   validateJournalAccounts,
   assertPayablesSettlementAvailable,
   assertPayablesControlSource,
+  assertTreasuryControl,
 
   executeCreateFinancialDocumentCommand,
   executePostJournalEntryCommand,

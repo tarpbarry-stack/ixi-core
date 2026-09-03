@@ -96,6 +96,15 @@ const IXI_FINANCIAL_ACTIONS =
     MANAGE_PAYABLES:
       "financial.payables.manage",
 
+    MANAGE_TREASURY:
+      "financial.treasury.manage",
+
+    POST_TREASURY_MOVEMENT:
+      "financial.treasury.movement.post",
+
+    RECONCILE_TREASURY:
+      "financial.treasury.reconcile",
+
     VIEW_HISTORY:
       "financial.document.history.view",
 
@@ -258,6 +267,15 @@ const ROLE_PERMISSIONS =
 
         IXI_FINANCIAL_ACTIONS
           .MANAGE_PAYABLES,
+
+        IXI_FINANCIAL_ACTIONS
+          .MANAGE_TREASURY,
+
+        IXI_FINANCIAL_ACTIONS
+          .POST_TREASURY_MOVEMENT,
+
+        IXI_FINANCIAL_ACTIONS
+          .RECONCILE_TREASURY,
 
         IXI_FINANCIAL_ACTIONS
           .VIEW_HISTORY,

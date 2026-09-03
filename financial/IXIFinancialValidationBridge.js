@@ -68,6 +68,8 @@ const DOCUMENT_TYPES =
     "rental-income",
     "service-quote",
     "payables-control",
+    "treasury-account",
+    "treasury-reconciliation",
     "bill",
     "supplier-invoice",
     "invoice",
@@ -914,6 +916,20 @@ function validateFinancialDocument(
   if (documentType === "payment") {
     if (!normalizedLines.some(line => Number(line?.amount) > 0)) errors.push("payment amount must be greater than zero.");
     if (clean(source.paymentDirection).toLowerCase() === "outflow" && clean(source.sourceFinancialDocumentId) && !clean(source.transactionReference)) errors.push("linked outgoing payment transactionReference is required.");
+    const movement=safeObject(source.treasuryMovement),transactionClass=clean(movement.transactionClass).toLowerCase();
+    if(transactionClass){
+      if(clean(movement.schema)!=="ixi-treasury-movement-v2") errors.push("treasury movement schema is invalid.");
+      if(!["opening-balance","cash-adjustment","account-transfer"].includes(transactionClass)) errors.push("treasury movement transaction class is invalid.");
+      if(!clean(movement.entityPassportId)||!clean(movement.actorPassportId)) errors.push("treasury movement requires trusted Entity and actor lineage.");
+      if(!normalizedReferences.some(reference=>clean(reference.passportId)===clean(movement.entityPassportId)&&clean(reference.role).toLowerCase()==="entity")) errors.push("treasury movement Entity must be referenced.");
+      if(movement.nonRevenue!==true||movement.nonExpense!==true||movement.bookEntryStatus!=="posted") errors.push("treasury movement accounting flags are invalid.");
+      if(transactionClass==="account-transfer"){
+        if(!clean(movement.fromCashAccountFinancialDocumentId)||!clean(movement.toCashAccountFinancialDocumentId)||clean(movement.fromCashAccountFinancialDocumentId)===clean(movement.toCashAccountFinancialDocumentId)) errors.push("treasury transfer requires two different canonical accounts.");
+        if(Number(source?.accountingTreatment?.companyCashNetChange)!==0) errors.push("treasury transfer must be company-net-zero.");
+      }else if(!clean(movement.cashAccountFinancialDocumentId)) errors.push("treasury movement requires a canonical cash account.");
+      if(transactionClass==="cash-adjustment"&&!clean(movement.reason)) errors.push("treasury adjustment reason is required.");
+      if(transactionClass!=="opening-balance"&&!clean(source.transactionReference)) errors.push("treasury movement transaction reference is required.");
+    }
   }
 
   if (documentType === "credit") {
@@ -929,6 +945,32 @@ function validateFinancialDocument(
     if(!clean(payable.billId)||clean(payable.billId)!==clean(source.sourceFinancialDocumentId)) errors.push("payables control requires canonical Bill lineage.");
     if(normalizedLines.length!==0||Number(source?.totals?.total)!==0) errors.push("payables control must remain non-economic.");
     if(treatment.economicEvent!==false||treatment.createsPayable!==false||treatment.createsCashEvent!==false) errors.push("payables control accounting treatment must remain non-economic.");
+  }
+
+  if(documentType==="treasury-account"){
+    const account=safeObject(source.treasuryAccount),identity=safeObject(account.identity),details=safeObject(account.account),context=safeObject(account.context),opening=safeObject(account.opening),control=safeObject(account.control),treatment=safeObject(source.accountingTreatment);
+    if(clean(account.schema)!=="ixi-treasury-account-v2") errors.push("treasury account schema is invalid.");
+    if(clean(identity.accountId)!==financialDocumentId) errors.push("treasury account identity must match financialDocumentId.");
+    if(!clean(context.entityPassportId)) errors.push("treasury account Entity Passport is required.");
+    if(!normalizedReferences.some(reference=>clean(reference.passportId)===clean(context.entityPassportId)&&clean(reference.role).toLowerCase()==="entity")) errors.push("treasury account Entity must be referenced.");
+    if(!clean(details.name)) errors.push("treasury account name is required.");
+    if(!["checking","savings","cash","clearing","money-market"].includes(clean(details.accountType).toLowerCase())) errors.push("treasury account type is invalid.");
+    if(!isValidDate(clean(opening.effectiveDate))) errors.push("treasury account opening date is invalid.");
+    if(!Number.isFinite(Number(opening.amount))) errors.push("treasury account opening amount is invalid.");
+    if(Number(control.minimumCash)<0) errors.push("treasury account minimum cash cannot be negative.");
+    if(normalizedLines.length!==0||Number(source?.totals?.total)!==0||treatment.economicEvent!==false||treatment.createsCashEvent!==false) errors.push("treasury account control must remain non-economic.");
+  }
+
+  if(documentType==="treasury-reconciliation"){
+    const reconciliation=safeObject(source.treasuryReconciliation),identity=safeObject(reconciliation.identity),context=safeObject(reconciliation.context),statement=safeObject(reconciliation.statement),reconciling=safeObject(reconciliation.reconciling),treatment=safeObject(source.accountingTreatment);
+    if(clean(reconciliation.schema)!=="ixi-treasury-reconciliation-v2") errors.push("treasury reconciliation schema is invalid.");
+    if(clean(identity.reconciliationId)!==financialDocumentId) errors.push("treasury reconciliation identity must match financialDocumentId.");
+    if(!clean(reconciliation.accountId)) errors.push("treasury reconciliation account is required.");
+    if(!clean(context.entityPassportId)) errors.push("treasury reconciliation Entity Passport is required.");
+    if(!isValidDate(clean(statement.date))||!Number.isFinite(Number(statement.balance))) errors.push("treasury reconciliation statement is invalid.");
+    const expected=roundMoney(Number(statement.balance||0)+Number(reconciling.depositsInTransit||0)-Number(reconciling.outstandingPayments||0)+Number(reconciling.otherReconcilingItems||0));
+    if(Number(reconciling.adjustedBankBalance)!==expected) errors.push("treasury reconciliation adjusted bank balance is invalid.");
+    if(normalizedLines.length!==0||Number(source?.totals?.total)!==0||treatment.economicEvent!==false||treatment.createsCashEvent!==false) errors.push("treasury reconciliation must remain non-economic.");
   }
 
   if (

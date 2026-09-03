@@ -124,19 +124,26 @@ function safeObject(
     : {};
 }
 
-function getCreateFinancialAction(documentType="") {
+function getCreateFinancialAction(documentType="",input={}) {
   const type=clean(documentType).toLowerCase();
+  if(type==="payment"&&clean(input?.treasuryMovement?.transactionClass)) return IXI_FINANCIAL_ACTIONS.POST_TREASURY_MOVEMENT;
   if(type==="payment") return IXI_FINANCIAL_ACTIONS.RECORD_PAYMENT;
   if(type==="credit") return IXI_FINANCIAL_ACTIONS.APPLY_VENDOR_CREDIT;
   if(type==="payables-control") return IXI_FINANCIAL_ACTIONS.MANAGE_PAYABLES;
+  if(type==="treasury-account") return IXI_FINANCIAL_ACTIONS.MANAGE_TREASURY;
+  if(type==="treasury-reconciliation") return IXI_FINANCIAL_ACTIONS.RECONCILE_TREASURY;
   return IXI_FINANCIAL_ACTIONS.CREATE_DOCUMENT;
 }
 
 function bindTrustedCommandInput({documentType="",input={},accessContext={}}={}) {
   const type=clean(documentType).toLowerCase(),source={...safeObject(input)};
-  if(type==="payment") return {...source,payerPassportId:clean(accessContext.entityPassportId),employeePassportId:clean(accessContext.actorPassportId)};
+  if(type==="payment") {
+    const treasury=clean(source?.treasuryMovement?.transactionClass);
+    return {...source,payerPassportId:clean(accessContext.entityPassportId),employeePassportId:clean(accessContext.actorPassportId),...(treasury?{references:[...(Array.isArray(source.references)?source.references:[]),{passportId:clean(accessContext.entityPassportId),role:"entity"},{passportId:clean(accessContext.actorPassportId),role:"recorded-by"}],treasuryMovement:{...safeObject(source.treasuryMovement),entityPassportId:clean(accessContext.entityPassportId),actorPassportId:clean(accessContext.actorPassportId)}}:{})};
+  }
   if(type==="credit") return {...source,recordedByPassportId:clean(accessContext.actorPassportId)};
   if(type==="payables-control") return {...source,entityPassportId:clean(accessContext.entityPassportId),actorPassportId:clean(accessContext.actorPassportId)};
+  if(["treasury-account","treasury-reconciliation"].includes(type)) return {...source,entityPassportId:clean(accessContext.entityPassportId),actorPassportId:clean(accessContext.actorPassportId)};
   return source;
 }
 
@@ -730,7 +737,7 @@ router.post(
 
       const commandInput = bindTrustedCommandInput({documentType,input:body.input,accessContext});
 
-      const requiredAction=getCreateFinancialAction(documentType);
+      const requiredAction=getCreateFinancialAction(documentType,commandInput);
 
 
       let previewDocument;

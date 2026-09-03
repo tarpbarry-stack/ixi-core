@@ -116,6 +116,7 @@ const {
 } = require("./IXIFinancialServiceQuoteFactory");
 
 const { createPayablesControlDocument } = require("./IXIFinancialPayablesControlFactory");
+const { createTreasuryAccountDocument, createTreasuryReconciliationDocument } = require("./IXIFinancialTreasuryFactory");
 
 
 const {
@@ -191,6 +192,12 @@ const IXI_FINANCIAL_DOCUMENT_TYPES =
 
     PAYABLES_CONTROL:
       "payables-control",
+
+    TREASURY_ACCOUNT:
+      "treasury-account",
+
+    TREASURY_RECONCILIATION:
+      "treasury-reconciliation",
 
     CREDIT:
       "credit",
@@ -294,6 +301,12 @@ const FACTORIES =
 
     [IXI_FINANCIAL_DOCUMENT_TYPES.PAYABLES_CONTROL]:
       createPayablesControlDocument,
+
+    [IXI_FINANCIAL_DOCUMENT_TYPES.TREASURY_ACCOUNT]:
+      createTreasuryAccountDocument,
+
+    [IXI_FINANCIAL_DOCUMENT_TYPES.TREASURY_RECONCILIATION]:
+      createTreasuryReconciliationDocument,
 
 
     [IXI_FINANCIAL_DOCUMENT_TYPES.CREDIT]:

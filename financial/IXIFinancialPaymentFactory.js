@@ -459,6 +459,8 @@ function createPaymentDocument({
 
   externalReference = "",
 
+  treasuryMovement = {},
+
   metadata = {}
 } = {}) {
 
@@ -654,6 +656,25 @@ function createPaymentDocument({
       )
     );
 
+  const movementSource = safeObject(treasuryMovement);
+  const transactionClass = clean(movementSource.transactionClass).toLowerCase();
+  const normalizedTreasuryMovement = transactionClass ? {
+    schema: "ixi-treasury-movement-v2",
+    transactionClass,
+    cashAccountFinancialDocumentId: clean(movementSource.cashAccountFinancialDocumentId),
+    fromCashAccountFinancialDocumentId: clean(movementSource.fromCashAccountFinancialDocumentId),
+    toCashAccountFinancialDocumentId: clean(movementSource.toCashAccountFinancialDocumentId),
+    entityPassportId: clean(movementSource.entityPassportId),
+    actorPassportId: clean(movementSource.actorPassportId),
+    reason: clean(movementSource.reason),
+    evidenceReference: clean(movementSource.evidenceReference || transactionReference),
+    openingSource: clean(movementSource.openingSource),
+    bookEntryStatus: "posted",
+    bankSettlementStatus: clean(bankReference) ? "referenced" : "unverified",
+    nonRevenue: true,
+    nonExpense: true
+  } : null;
+
 
   return {
     financialDocumentId:
@@ -760,8 +781,20 @@ function createPaymentDocument({
         total,
 
       total:
-        total
+      total
     },
+
+    ...(normalizedTreasuryMovement ? {
+      treasuryMovement: normalizedTreasuryMovement,
+      accountingTreatment: {
+        classification: transactionClass === "account-transfer" ? "internal-cash-transfer" : "treasury-cash-event",
+        economicEvent: true,
+        createsCashEvent: true,
+        createsRevenue: false,
+        createsExpense: false,
+        companyCashNetChange: transactionClass === "account-transfer" ? 0 : (resolvedDirection === "inflow" ? total : -total)
+      }
+    } : {}),
 
     metadata: {
       ...safeObject(

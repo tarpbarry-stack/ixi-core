@@ -200,6 +200,39 @@ function activeTimePk(
   return `TIME-ACTIVE#${clean(employeeKey)}`;
 }
 
+function treasuryPk(entityPassportId) {
+  return `TREASURY#${clean(entityPassportId)}`;
+}
+
+function treasuryAccountSk(accountId) {
+  return `ACCOUNT#${clean(accountId)}`;
+}
+
+function createTreasuryTransactionItems({record={},updatedAt=""}={}) {
+  const document=safeObject(record?.financialDocument),documentType=clean(document.documentType).toLowerCase(),items=[];
+  if(documentType==="treasury-account") {
+    const account=safeObject(document.treasuryAccount),entityPassportId=clean(account?.context?.entityPassportId),accountId=clean(document.financialDocumentId);
+    if(entityPassportId&&accountId) items.push({Put:{TableName:TABLE_NAME,Item:{PK:treasuryPk(entityPassportId),SK:treasuryAccountSk(accountId),entityType:"treasury-account-balance",entityPassportId,accountId,currency:clean(document.currency),balance:0,allowNegative:account?.control?.allowNegative===true,updatedAt},ConditionExpression:"attribute_not_exists(PK)"}});
+    return items;
+  }
+  if(documentType==="treasury-reconciliation") {
+    const reconciliation=safeObject(document.treasuryReconciliation),entityPassportId=clean(reconciliation?.context?.entityPassportId),accountId=clean(reconciliation.accountId),bookBalance=Number(reconciliation?.book?.balance);
+    if(entityPassportId&&accountId&&Number.isFinite(bookBalance)) items.push({ConditionCheck:{TableName:TABLE_NAME,Key:{PK:treasuryPk(entityPassportId),SK:treasuryAccountSk(accountId)},ConditionExpression:"attribute_exists(PK) AND #currency = :currency AND #balance = :bookBalance",ExpressionAttributeNames:{"#currency":"currency","#balance":"balance"},ExpressionAttributeValues:{":currency":clean(document.currency),":bookBalance":bookBalance}}});
+    return items;
+  }
+  const movement=safeObject(document.treasuryMovement),transactionClass=clean(movement.transactionClass).toLowerCase(),entityPassportId=clean(movement.entityPassportId),amount=Math.round(Math.abs(Number(document?.totals?.total)||0)*100)/100;
+  if(documentType!=="payment"||!transactionClass||!entityPassportId||!(amount>0)) return items;
+  const update=(accountId,delta)=>({Update:{TableName:TABLE_NAME,Key:{PK:treasuryPk(entityPassportId),SK:treasuryAccountSk(accountId)},UpdateExpression:"SET #balance = #balance + :delta, updatedAt = :updatedAt",ConditionExpression:`attribute_exists(PK) AND #currency = :currency${delta<0?" AND (allowNegative = :true OR #balance >= :required)":""}`,ExpressionAttributeNames:{"#balance":"balance","#currency":"currency"},ExpressionAttributeValues:{":delta":delta,":updatedAt":updatedAt,":currency":clean(document.currency),...(delta<0?{":true":true,":required":Math.abs(delta)}:{})}}});
+  if(transactionClass==="account-transfer") {
+    items.push(update(clean(movement.fromCashAccountFinancialDocumentId),-amount),update(clean(movement.toCashAccountFinancialDocumentId),amount));
+  } else {
+    const accountId=clean(movement.cashAccountFinancialDocumentId),delta=clean(document.paymentDirection).toLowerCase()==="inflow"?amount:-amount;
+    items.push(update(accountId,delta));
+    if(transactionClass==="opening-balance") items.push({Put:{TableName:TABLE_NAME,Item:{PK:treasuryPk(entityPassportId),SK:`OPENING#${accountId}`,entityType:"treasury-opening-lock",accountId,financialDocumentId:clean(document.financialDocumentId),createdAt:updatedAt},ConditionExpression:"attribute_not_exists(PK)"}});
+  }
+  return items;
+}
+
 
 function createActiveTimeLockPut({
   employeeKey,
@@ -700,6 +733,8 @@ async function createDocumentRecord({
       }
     }
   ];
+
+  transactItems.push(...createTreasuryTransactionItems({record:source,updatedAt:timestamp}));
 
   const activeEmployeeKey =
     activeTimeEmployeeKey(source);
@@ -1709,5 +1744,6 @@ module.exports = {
   getDynamoFinancialHealth,
   activeTimeEmployeeKey,
   createActiveTimeLockPut,
-  createActiveTimeLockDelete
+  createActiveTimeLockDelete,
+  createTreasuryTransactionItems
 };
