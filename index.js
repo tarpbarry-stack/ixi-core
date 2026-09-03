@@ -96,6 +96,12 @@ const {
 );
 
 const {
+  ixiInternalFinancialRequest
+} = require(
+  "./identity/IXIInternalFinancialRequest"
+);
+
+const {
   ixiOptionalMosAuthorityRequest
 } = require(
   "./authority/IXIAuthorityMosRequest"
@@ -108,6 +114,7 @@ app.use(express.json());
 
 app.use(
   "/financial",
+  ixiInternalFinancialRequest,
   ixiAuthenticatedFinancialRequest,
   financialRoutes
 );
