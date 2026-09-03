@@ -90,6 +90,13 @@ const {
     "./IXIFinancialMaterialUsageFactory"
   );
 
+const {
+  createAssetAcquisitionDocument
+} =
+  require(
+    "./IXIFinancialAssetAcquisitionFactory"
+  );
+
 
 const {
   createCostCreditDocument
@@ -149,6 +156,9 @@ const IXI_FINANCIAL_DOCUMENT_TYPES =
 
     MATERIAL_USAGE:
       "material-usage",
+
+    ASSET_ACQUISITION:
+      "asset-acquisition",
 
     CREDIT:
       "credit",
@@ -237,6 +247,9 @@ const FACTORIES =
 
     [IXI_FINANCIAL_DOCUMENT_TYPES.MATERIAL_USAGE]:
       createMaterialUsageDocument,
+
+    [IXI_FINANCIAL_DOCUMENT_TYPES.ASSET_ACQUISITION]:
+      createAssetAcquisitionDocument,
 
 
     [IXI_FINANCIAL_DOCUMENT_TYPES.CREDIT]:
