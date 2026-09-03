@@ -802,6 +802,60 @@ function isPeriodControlDocument(
 }
 
 
+function hasEconomicValue(
+  financialDocument = {}
+) {
+  const total =
+    Number(
+      financialDocument
+        ?.totals
+        ?.total
+    );
+
+
+  if (
+    Number.isFinite(total) &&
+    total !== 0
+  ) {
+    return true;
+  }
+
+
+  return safeArray(
+    financialDocument
+      ?.lines
+  ).some(
+    line => {
+      const amount =
+        Number(
+          line?.amount
+        );
+
+      return (
+        Number.isFinite(amount) &&
+        amount !== 0
+      );
+    }
+  );
+}
+
+
+function isNonEconomicOperationalWorkOrder(
+  financialDocument = {}
+) {
+  return (
+    clean(
+      financialDocument
+        ?.documentType
+    ).toLowerCase() ===
+      "work-order" &&
+    !hasEconomicValue(
+      financialDocument
+    )
+  );
+}
+
+
 async function assertFinancialPeriodOpen({
   financialDocument = {},
   entityPassportId = ""
@@ -824,6 +878,31 @@ async function assertFinancialPeriodOpen({
 
       controlDocument:
         true
+    };
+  }
+
+
+  /*
+   * A zero-value Work Order is operational truth,
+   * not an accounting posting. Field work must remain
+   * available while accountants close or repair books.
+   * The period gate still applies as soon as the Work
+   * Order carries any economic value.
+   */
+  if (
+    isNonEconomicOperationalWorkOrder(
+      financialDocument
+    )
+  ) {
+    return {
+      checked:
+        false,
+
+      operationalCapture:
+        true,
+
+      economicValue:
+        false
     };
   }
 
@@ -2352,6 +2431,8 @@ module.exports = {
   createCommandSnapshot,
 
   resolveFinancialDocumentPeriod,
+  hasEconomicValue,
+  isNonEconomicOperationalWorkOrder,
   assertFinancialPeriodOpen,
   validateJournalAccounts,
 
