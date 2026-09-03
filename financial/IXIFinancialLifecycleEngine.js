@@ -657,6 +657,14 @@ function getPaymentSettlementEffect(
       payment
     );
 
+  /* Treasury book events move or establish cash; they do not settle A/R or A/P. */
+  if (clean(source?.treasuryMovement?.transactionClass)) {
+    return {
+      paid: 0,
+      collected: 0
+    };
+  }
+
 
   if (
     !isActiveFinancialDocument(

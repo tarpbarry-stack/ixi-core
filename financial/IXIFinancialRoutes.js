@@ -611,6 +611,9 @@ router.post(
       req.body
         ?.document;
 
+    const directType=clean(financialDocument?.documentType).toLowerCase(),treasuryMovement=clean(financialDocument?.treasuryMovement?.transactionClass);
+    if(["treasury-account","treasury-reconciliation"].includes(directType)||(directType==="payment"&&treasuryMovement)) return res.status(409).json({ok:false,error:{name:"IXITreasuryCommandRequiredError",message:"Treasury records may only be written through the controlled financial command endpoint."}});
+
 
     const authorization =
       authorizeFinancialDocumentWrite({
@@ -790,6 +793,8 @@ router.patch(
       mergedDocument={...mergedDocument,payablesControl:{...safeObject(mergedDocument.payablesControl),context:{...safeObject(mergedDocument?.payablesControl?.context),entityPassportId:clean(accessContext.entityPassportId),updatedByPassportId:clean(accessContext.actorPassportId)}}};
     }
 
+    if(["treasury-account","treasury-reconciliation"].includes(clean(mergedDocument.documentType).toLowerCase())||clean(mergedDocument?.treasuryMovement?.transactionClass)) return res.status(409).json({ok:false,error:{name:"IXITreasuryImmutableRecordError",message:"Canonical Treasury records are immutable; post a new controlled Treasury event."}});
+
 
     const billPatchAction =
       getBillPatchAction(
@@ -911,6 +916,8 @@ router.put(
         req.params
           .financialDocumentId
     };
+
+    if(["treasury-account","treasury-reconciliation"].includes(clean(financialDocument.documentType).toLowerCase())||clean(financialDocument?.treasuryMovement?.transactionClass)) return res.status(409).json({ok:false,error:{name:"IXITreasuryImmutableRecordError",message:"Canonical Treasury records cannot be replaced; post a new controlled Treasury event."}});
 
 
     const authorization =
