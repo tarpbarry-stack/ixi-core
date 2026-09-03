@@ -100,6 +100,17 @@ const DIRECTIONS =
     "neutral"
   ]);
 
+const TECH_WORK_STATUSES = new Set([
+  "requested", "open", "scheduled", "in-progress", "paused", "waiting", "complete", "closed", "canceled"
+]);
+const TECH_WORK_TYPES = new Set([
+  "incident", "service-request", "diagnostic", "configuration", "software-update", "firmware",
+  "integration", "telematics-gps", "network-connectivity", "device-hardware", "security-access",
+  "deployment-change", "other"
+]);
+const TECH_WORK_IMPACTS = new Set(["normal", "degraded", "critical"]);
+const TECH_WORK_ENVIRONMENTS = new Set(["production", "test", "development", "field", "unknown"]);
+
 
 const EXPENSE_PAYMENT_METHODS =
   new Set([
@@ -835,6 +846,56 @@ function validateFinancialDocument(
       safeObject(source.reimbursement).required !== true
     ) {
       errors.push("employee-paid expense requires reimbursement lineage.");
+    }
+  }
+
+  if (
+    documentType === "work-order" &&
+    clean(source.workOrderType).toLowerCase() === "technology"
+  ) {
+    const techWorkOrder = safeObject(source.techWorkOrder);
+    const identity = safeObject(techWorkOrder.identity);
+    const context = safeObject(techWorkOrder.context);
+    const work = safeObject(techWorkOrder.work);
+    const technology = safeObject(techWorkOrder.technology);
+    const result = safeObject(techWorkOrder.result);
+
+    if (clean(techWorkOrder.schema) !== "ixi-tech-work-order-v1") {
+      errors.push("technology work order schema is invalid.");
+    }
+    if (clean(identity.techWorkOrderId) !== financialDocumentId || clean(identity.workOrderId) !== financialDocumentId) {
+      errors.push("technology work order identity must match financialDocumentId.");
+    }
+    if (clean(identity.number) !== clean(source.documentNumber)) {
+      errors.push("technology work order number must match documentNumber.");
+    }
+    if (!clean(context.primaryPassportId)) {
+      errors.push("technology work order primary Passport is required.");
+    } else if (!normalizedReferences.some(reference => clean(reference.passportId) === clean(context.primaryPassportId))) {
+      errors.push("technology work order primary Passport must be referenced by the financial document.");
+    }
+    if (!clean(work.description)) {
+      errors.push("technology work order description is required.");
+    }
+    if (!TECH_WORK_TYPES.has(clean(work.type).toLowerCase())) {
+      errors.push("technology work order type is invalid.");
+    }
+    if (!TECH_WORK_STATUSES.has(clean(work.status).toLowerCase())) {
+      errors.push("technology work order status is invalid.");
+    }
+    if (!TECH_WORK_IMPACTS.has(clean(work.impact).toLowerCase())) {
+      errors.push("technology work order impact is invalid.");
+    }
+    if (!TECH_WORK_ENVIRONMENTS.has(clean(technology.environment).toLowerCase())) {
+      errors.push("technology work order environment is invalid.");
+    }
+    if (["complete", "closed"].includes(clean(work.status).toLowerCase())) {
+      if (!clean(result.workPerformed)) {
+        errors.push("completed technology work order requires work performed evidence.");
+      }
+      if (!clean(technology.validation)) {
+        errors.push("completed technology work order requires validation evidence.");
+      }
     }
   }
 
