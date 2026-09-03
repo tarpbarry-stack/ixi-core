@@ -859,9 +859,10 @@ function isNonEconomicOperationalCapture(
   financialDocument = {}
 ) {
   const documentType = clean(financialDocument?.documentType).toLowerCase();
+  const isMaterialUsage = documentType === "material-usage";
   return (
-    ["work-order", "time-entry"].includes(documentType) &&
-    !hasEconomicValue(financialDocument)
+    (["work-order", "time-entry"].includes(documentType) && !hasEconomicValue(financialDocument)) ||
+    (isMaterialUsage && financialDocument?.costAttribution?.economicEvent === false)
   );
 }
 
