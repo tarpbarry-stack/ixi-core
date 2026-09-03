@@ -110,6 +110,8 @@ const TECH_WORK_TYPES = new Set([
 ]);
 const TECH_WORK_IMPACTS = new Set(["normal", "degraded", "critical"]);
 const TECH_WORK_ENVIRONMENTS = new Set(["production", "test", "development", "field", "unknown"]);
+const TIME_ENTRY_MODES = new Set(["live", "manual"]);
+const TIME_ENTRY_STATUSES = new Set(["running", "paused", "stopped", "recorded", "posted"]);
 
 
 const EXPENSE_PAYMENT_METHODS =
@@ -896,6 +898,59 @@ function validateFinancialDocument(
       if (!clean(technology.validation)) {
         errors.push("completed technology work order requires validation evidence.");
       }
+    }
+  }
+
+  if (documentType === "time-entry") {
+    const timeEntry = safeObject(source.timeEntry);
+    const identity = safeObject(timeEntry.identity);
+    const context = safeObject(timeEntry.context);
+    const time = safeObject(timeEntry.time);
+    const status = clean(timeEntry.status).toLowerCase();
+    const hours = Number(time.hours);
+
+    if (clean(timeEntry.schema) !== "ixi-time-entry-v2") {
+      errors.push("time entry schema is invalid.");
+    }
+    if (clean(identity.timeEntryId) !== financialDocumentId) {
+      errors.push("time entry identity must match financialDocumentId.");
+    }
+    if (clean(identity.number) !== clean(source.documentNumber)) {
+      errors.push("time entry number must match documentNumber.");
+    }
+    if (!clean(context.primaryPassportId)) {
+      errors.push("time entry primary Passport is required.");
+    } else if (!normalizedReferences.some(reference => clean(reference.passportId) === clean(context.primaryPassportId))) {
+      errors.push("time entry primary Passport must be referenced by the financial document.");
+    }
+    if (!clean(context.employeePassportId || context.employeeId)) {
+      errors.push("time entry employee identity is required.");
+    }
+    if (clean(context.employeePassportId) && !normalizedReferences.some(reference => clean(reference.passportId) === clean(context.employeePassportId) && ["employee", "technician"].includes(clean(reference.role).toLowerCase()))) {
+      errors.push("time entry employee Passport must be referenced as employee or technician.");
+    }
+    if (!TIME_ENTRY_MODES.has(clean(time.mode).toLowerCase())) {
+      errors.push("time entry mode is invalid.");
+    }
+    if (!TIME_ENTRY_STATUSES.has(status)) {
+      errors.push("time entry status is invalid.");
+    }
+    if (!clean(time.workType)) {
+      errors.push("time entry work type is required.");
+    }
+    if (!clean(time.description)) {
+      errors.push("time entry work performed is required.");
+    }
+    if (!clean(time.date)) {
+      errors.push("time entry date is required.");
+    }
+    if (!Number.isFinite(hours) || hours < 0) {
+      errors.push("time entry hours are invalid.");
+    } else if (["stopped", "recorded", "posted"].includes(status) && !(hours > 0)) {
+      errors.push("completed time entry hours must be greater than zero.");
+    }
+    if (Number(source?.totals?.laborHours) !== hours) {
+      errors.push("time entry total labor hours must match the operational record.");
     }
   }
 
