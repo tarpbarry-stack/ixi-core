@@ -167,6 +167,20 @@ function bindTrustedCommandInput({documentType="",input={},accessContext={}}={})
       }
     };
   }
+  if(type==="quote") {
+    const quote={...safeObject(source.quote)};
+    return {
+      ...source,
+      quote:{
+        ...quote,
+        context:{
+          ...safeObject(quote.context),
+          entityPassportId:clean(accessContext.entityPassportId),
+          actorPassportId:clean(accessContext.actorPassportId)
+        }
+      }
+    };
+  }
   if(["treasury-account","treasury-reconciliation"].includes(type)) return {...source,entityPassportId:clean(accessContext.entityPassportId),actorPassportId:clean(accessContext.actorPassportId)};
   return source;
 }

@@ -223,6 +223,29 @@ async function bindOperationalControlEvidence({ patch = {}, merged = {}, existin
   const entityPassportId = clean(accessContext.entityPassportId);
   const timestamp = new Date().toISOString();
 
+  if (type === "quote") {
+    const record = { ...safeObject(merged.quote) };
+    const prior = safeObject(existing.quote);
+    return {
+      ...source,
+      quote: {
+        ...record,
+        context: {
+          ...safeObject(record.context),
+          entityPassportId,
+          actorPassportId
+        },
+        audit: {
+          ...safeObject(record.audit),
+          createdAt: clean(prior?.audit?.createdAt || record?.audit?.createdAt),
+          createdBy: clean(prior?.audit?.createdBy || record?.audit?.createdBy),
+          updatedAt: timestamp,
+          updatedBy: actorPassportId
+        }
+      }
+    };
+  }
+
   if (type === "collection") {
     const record = { ...safeObject(merged.collectionCase) };
     return {

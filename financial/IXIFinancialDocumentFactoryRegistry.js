@@ -115,6 +115,10 @@ const {
   createServiceQuoteDocument
 } = require("./IXIFinancialServiceQuoteFactory");
 
+const {
+  createQuoteDocument
+} = require("./IXIFinancialQuoteFactory");
+
 const { createPayablesControlDocument } = require("./IXIFinancialPayablesControlFactory");
 const { createTreasuryAccountDocument, createTreasuryReconciliationDocument } = require("./IXIFinancialTreasuryFactory");
 const { createCollectionDocument, createSettlementDocument } = require("./IXIFinancialOperationalControlFactory");
@@ -195,6 +199,9 @@ const IXI_FINANCIAL_DOCUMENT_TYPES =
 
     SERVICE_QUOTE:
       "service-quote",
+
+    QUOTE:
+      "quote",
 
     COLLECTION:
       "collection",
@@ -316,6 +323,9 @@ const FACTORIES =
 
     [IXI_FINANCIAL_DOCUMENT_TYPES.SERVICE_QUOTE]:
       createServiceQuoteDocument,
+
+    [IXI_FINANCIAL_DOCUMENT_TYPES.QUOTE]:
+      createQuoteDocument,
 
     [IXI_FINANCIAL_DOCUMENT_TYPES.COLLECTION]:
       createCollectionDocument,
