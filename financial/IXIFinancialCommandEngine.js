@@ -1047,7 +1047,8 @@ function isNonEconomicOperationalCapture(
   return (
     (["work-order", "time-entry"].includes(documentType) && !hasEconomicValue(financialDocument)) ||
     (isMaterialUsage && financialDocument?.costAttribution?.economicEvent === false) ||
-    (["service-quote", "quote"].includes(documentType) && financialDocument?.accountingTreatment?.economicEvent === false)
+    (["service-quote", "quote", "sales-order"].includes(documentType) && financialDocument?.accountingTreatment?.economicEvent === false) ||
+    (documentType === "invoice" && clean(financialDocument?.financialState).toLowerCase() === "draft")
   );
 }
 

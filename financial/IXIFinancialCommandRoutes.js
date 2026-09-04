@@ -181,6 +181,20 @@ function bindTrustedCommandInput({documentType="",input={},accessContext={}}={})
       }
     };
   }
+  if(type==="sales-order") {
+    const salesOrder={...safeObject(source.salesOrder)};
+    return {
+      ...source,
+      salesOrder:{
+        ...salesOrder,
+        context:{
+          ...safeObject(salesOrder.context),
+          entityPassportId:clean(accessContext.entityPassportId),
+          actorPassportId:clean(accessContext.actorPassportId)
+        }
+      }
+    };
+  }
   if(["treasury-account","treasury-reconciliation"].includes(type)) return {...source,entityPassportId:clean(accessContext.entityPassportId),actorPassportId:clean(accessContext.actorPassportId)};
   return source;
 }

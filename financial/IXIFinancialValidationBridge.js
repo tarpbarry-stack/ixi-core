@@ -68,6 +68,7 @@ const DOCUMENT_TYPES =
     "rental-income",
     "service-quote",
     "quote",
+    "sales-order",
     "collection",
     "settlement",
     "payables-control",
@@ -135,6 +136,7 @@ const RENTAL_STATUSES = new Set(["active", "off-rent", "closed", "cancelled"]);
 const SERVICE_QUOTE_STATUSES = new Set(["draft", "sent", "viewed", "changes-requested", "accepted", "declined", "expired", "superseded", "converted"]);
 const SERVICE_QUOTE_PRICING_TYPES = new Set(["estimate", "fixed-price", "not-to-exceed"]);
 const QUOTE_STATUSES = new Set(["draft", "prepared", "sent", "viewed", "accepted", "declined", "expired", "superseded", "converted"]);
+const SALES_ORDER_STATUSES = new Set(["draft", "ready-for-signature", "sent-for-signature", "viewed", "signed-invoice-pending", "signed", "cancelled", "superseded"]);
 const COLLECTION_STATUSES = new Set(["open", "promise-pending", "disputed", "escalated", "resolved", "closed"]);
 const SETTLEMENT_STATUSES = new Set(["ready", "approved", "partially-paid", "settled"]);
 const SETTLEMENT_PAYMENT_STATUSES = new Set(["unpaid", "partial", "paid"]);
@@ -1505,6 +1507,50 @@ function validateFinancialDocument(
     if (normalizedLines.length !== 1 || Number(normalizedLines[0]?.amount) !== subtotal || clean(normalizedLines[0]?.direction) !== "inflow") errors.push("quote requires one matching non-posting offer line.");
     if (Number(source?.totals?.subtotal) !== subtotal || Number(source?.totals?.customerTotal) !== customerTotal || Number(source?.totals?.total) !== subtotal) errors.push("quote document totals are invalid.");
     if (treatment.classification !== "equipment-sales-offer" || treatment.economicEvent !== false || treatment.createsRevenueCommitment !== false || treatment.createsBilledRevenue !== false || treatment.createsReceivable !== false || treatment.createsCashEvent !== false) errors.push("quote must remain a non-accounting commercial offer.");
+  }
+
+  if (documentType === "sales-order") {
+    const record = safeObject(source.salesOrder);
+    const identity = safeObject(record.identity);
+    const context = safeObject(record.context);
+    const totals = safeObject(record.totals);
+    const terms = safeObject(record.termsDocument);
+    const signing = safeObject(record.signing);
+    const treatment = safeObject(source.accountingTreatment);
+    const status = clean(record.status || "draft").toLowerCase();
+    const subtotal = roundMoney(totals.subtotal);
+    const tax = roundMoney(totals.tax);
+    const freight = roundMoney(totals.freight);
+    const fees = roundMoney(totals.fees);
+    const tradeAllowance = roundMoney(totals.tradeAllowance);
+    const deposit = roundMoney(totals.deposit);
+    const customerTotal = roundMoney((subtotal || 0) + (tax || 0) + (freight || 0) + (fees || 0) - (tradeAllowance || 0));
+    const balanceDue = roundMoney(Math.max(0, customerTotal - (deposit || 0)));
+
+    if (clean(record.schema) !== "ixi-equipment-sales-order-v1") errors.push("sales order schema is invalid.");
+    if (clean(identity.salesOrderId) !== financialDocumentId || clean(identity.financialDocumentId) !== financialDocumentId) errors.push("sales order identity must match financialDocumentId.");
+    if (clean(identity.number) !== clean(source.documentNumber)) errors.push("sales order number must match documentNumber.");
+    if (!Number.isInteger(Number(identity.revision)) || Number(identity.revision) < 1) errors.push("sales order revision must be a positive integer.");
+    if (!clean(context.primaryPassportId)) errors.push("sales order asset Passport is required.");
+    else if (!normalizedReferences.some(reference => clean(reference.passportId) === clean(context.primaryPassportId) && clean(reference.role).toLowerCase() === "asset")) errors.push("sales order asset Passport must be referenced as the asset.");
+    if (!clean(context.entityPassportId)) errors.push("sales order entity Passport is required.");
+    if (!clean(context.actorPassportId || context.actorId)) errors.push("sales order actor identity is required.");
+    if (!normalizedReferences.some(reference => clean(reference.passportId) === clean(context.entityPassportId) && clean(reference.role).toLowerCase() === "entity")) errors.push("sales order entity Passport must be referenced as the entity.");
+    if (!SALES_ORDER_STATUSES.has(status)) errors.push("sales order status is invalid.");
+    if ([subtotal, tax, freight, fees, tradeAllowance, deposit].some(value => value === null || value < 0)) errors.push("sales order amounts must be non-negative numbers.");
+    if (Number(totals.total) !== customerTotal) errors.push("sales order customer total is invalid.");
+    if (Number(totals.balanceDue) !== balanceDue) errors.push("sales order balance due is invalid.");
+    if (deposit > customerTotal) errors.push("sales order deposit cannot exceed customer total.");
+    if (["ready-for-signature", "sent-for-signature", "viewed", "signed-invoice-pending", "signed"].includes(status)) {
+      if (!clean(record?.customer?.name) || !clean(record?.customer?.email || record?.customer?.phone)) errors.push("signable sales order requires customer identity and delivery contact.");
+      if (!clean(record?.asset?.serialNumber)) errors.push("signable sales order requires serial/VIN.");
+      if (!clean(terms.documentId) || !/^[a-f0-9]{64}$/i.test(clean(terms.sha256)) || !clean(terms.url) || Number(terms.pageCount) !== 2) errors.push("signable sales order requires the exact two-page terms document identity, hash, and URL.");
+    }
+    if (["signed-invoice-pending", "signed"].includes(status) && (!clean(signing.signedAt) || !clean(signing.signedPackageHash))) errors.push("signed sales order requires signature evidence and package hash.");
+    if (status === "signed" && !clean(record?.related?.invoiceId)) errors.push("signed sales order requires its generated Invoice lineage.");
+    if (normalizedLines.length !== 1 || Number(normalizedLines[0]?.amount) !== subtotal || clean(normalizedLines[0]?.direction) !== "inflow") errors.push("sales order requires one matching non-posting commitment line.");
+    if (Number(source?.totals?.subtotal) !== subtotal || Number(source?.totals?.customerTotal) !== customerTotal || Number(source?.totals?.balanceDue) !== balanceDue || Number(source?.totals?.total) !== subtotal) errors.push("sales order document totals are invalid.");
+    if (treatment.classification !== "equipment-sales-order" || treatment.economicEvent !== false || treatment.createsRevenueCommitment !== true || treatment.createsBilledRevenue !== false || treatment.createsReceivable !== false || treatment.createsCashEvent !== false) errors.push("sales order accounting treatment is invalid.");
   }
 
   const calculatedTotal =
