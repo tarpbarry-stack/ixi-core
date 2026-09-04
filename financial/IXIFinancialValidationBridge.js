@@ -67,6 +67,7 @@ const DOCUMENT_TYPES =
     "rental-expense",
     "rental-income",
     "service-quote",
+    "quote",
     "collection",
     "settlement",
     "payables-control",
@@ -133,6 +134,7 @@ const RENTAL_RATE_UNITS = new Set(["hour", "day", "week", "month"]);
 const RENTAL_STATUSES = new Set(["active", "off-rent", "closed", "cancelled"]);
 const SERVICE_QUOTE_STATUSES = new Set(["draft", "sent", "viewed", "changes-requested", "accepted", "declined", "expired", "superseded", "converted"]);
 const SERVICE_QUOTE_PRICING_TYPES = new Set(["estimate", "fixed-price", "not-to-exceed"]);
+const QUOTE_STATUSES = new Set(["draft", "prepared", "sent", "viewed", "accepted", "declined", "expired", "superseded", "converted"]);
 const COLLECTION_STATUSES = new Set(["open", "promise-pending", "disputed", "escalated", "resolved", "closed"]);
 const SETTLEMENT_STATUSES = new Set(["ready", "approved", "partially-paid", "settled"]);
 const SETTLEMENT_PAYMENT_STATUSES = new Set(["unpaid", "partial", "paid"]);
@@ -1471,6 +1473,38 @@ function validateFinancialDocument(
       const item = safeObject(attachment);
       if (!clean(item.storageKey || item.key) || !["uploaded", "available", "verified"].includes(clean(item.status).toLowerCase())) errors.push(`attachments[${index}] must reference durable uploaded evidence.`);
     });
+  }
+
+  if (documentType === "quote") {
+    const record = safeObject(source.quote);
+    const identity = safeObject(record.identity);
+    const context = safeObject(record.context);
+    const totals = safeObject(record.totals);
+    const treatment = safeObject(source.accountingTreatment);
+    const status = clean(record.status || "draft").toLowerCase();
+    const subtotal = roundMoney(totals.subtotal);
+    const tax = roundMoney(totals.tax);
+    const freight = roundMoney(totals.freight);
+    const fees = roundMoney(totals.fees);
+    const tradeAllowance = roundMoney(totals.tradeAllowance);
+    const customerTotal = roundMoney((subtotal || 0) + (tax || 0) + (freight || 0) + (fees || 0) - (tradeAllowance || 0));
+
+    if (clean(record.schema) !== "ixi-equipment-quote-v1") errors.push("quote schema is invalid.");
+    if (clean(identity.quoteId) !== financialDocumentId || clean(identity.financialDocumentId) !== financialDocumentId) errors.push("quote identity must match financialDocumentId.");
+    if (clean(identity.number) !== clean(source.documentNumber)) errors.push("quote number must match documentNumber.");
+    if (!Number.isInteger(Number(identity.revision)) || Number(identity.revision) < 1) errors.push("quote revision must be a positive integer.");
+    if (!clean(context.primaryPassportId)) errors.push("quote asset Passport is required.");
+    else if (!normalizedReferences.some(reference => clean(reference.passportId) === clean(context.primaryPassportId) && clean(reference.role).toLowerCase() === "asset")) errors.push("quote asset Passport must be referenced as the asset.");
+    if (!clean(context.entityPassportId)) errors.push("quote entity Passport is required.");
+    if (!clean(context.actorPassportId || context.actorId)) errors.push("quote actor identity is required.");
+    if (clean(context.entityPassportId) && !normalizedReferences.some(reference => clean(reference.passportId) === clean(context.entityPassportId) && clean(reference.role).toLowerCase() === "entity")) errors.push("quote entity Passport must be referenced as the entity.");
+    if (clean(context.actorPassportId) && !normalizedReferences.some(reference => clean(reference.passportId) === clean(context.actorPassportId) && ["employee", "issued-by"].includes(clean(reference.role).toLowerCase()))) errors.push("quote actor Passport must be referenced as the employee.");
+    if (!QUOTE_STATUSES.has(status)) errors.push("quote status is invalid.");
+    if ([subtotal, tax, freight, fees, tradeAllowance].some(value => value === null || value < 0)) errors.push("quote amounts must be non-negative numbers.");
+    if (Number(totals.total) !== customerTotal) errors.push("quote customer total is invalid.");
+    if (normalizedLines.length !== 1 || Number(normalizedLines[0]?.amount) !== subtotal || clean(normalizedLines[0]?.direction) !== "inflow") errors.push("quote requires one matching non-posting offer line.");
+    if (Number(source?.totals?.subtotal) !== subtotal || Number(source?.totals?.customerTotal) !== customerTotal || Number(source?.totals?.total) !== subtotal) errors.push("quote document totals are invalid.");
+    if (treatment.classification !== "equipment-sales-offer" || treatment.economicEvent !== false || treatment.createsRevenueCommitment !== false || treatment.createsBilledRevenue !== false || treatment.createsReceivable !== false || treatment.createsCashEvent !== false) errors.push("quote must remain a non-accounting commercial offer.");
   }
 
   const calculatedTotal =
