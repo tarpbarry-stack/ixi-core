@@ -8,13 +8,15 @@ const base64url = value => Buffer.from(value).toString("base64url");
 const unbase64url = value => Buffer.from(value, "base64url").toString("utf8");
 
 function signingSecret() {
-  const secret = clean(process.env.IXI_SALES_SIGNING_SECRET);
-  if (secret.length < 32) {
+  const dedicated = clean(process.env.IXI_SALES_SIGNING_SECRET);
+  if (dedicated.length >= 32) return dedicated;
+  const internalMaster = clean(process.env.IXI_MOS_INTERNAL_SECRET);
+  if (internalMaster.length < 32) {
     const error = new Error("IXI sales signing secret is not configured.");
     error.name = "IXISalesSigningConfigurationError";
     throw error;
   }
-  return secret;
+  return crypto.createHmac("sha256", internalMaster).update("ixi-sales-signing-v1").digest();
 }
 
 function signature(payload) {
