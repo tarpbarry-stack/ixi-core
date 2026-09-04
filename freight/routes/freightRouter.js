@@ -236,6 +236,11 @@ registerAction(
 );
 
 registerAction(
+  "invoice",
+  service.attachInvoice
+);
+
+registerAction(
   "reconcile",
   service.reconcile
 );

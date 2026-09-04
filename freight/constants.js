@@ -1,7 +1,7 @@
 "use strict";
 
 const FREIGHT_SCHEMA =
-  "ixi-freight-order-v1";
+  "ixi-freight-order-v2";
 
 const FREIGHT_STATUS =
   Object.freeze({
