@@ -13,6 +13,15 @@ test("sales signing token is scoped, expiring, and tamper evident", () => {
   assert.throws(() => verifySalesSigningToken(token, { now: Date.parse("2031-01-01") }), /expired/i);
 });
 
+test("sales signing uses a domain-separated key from the existing IX-Core master secret", () => {
+  const dedicated = process.env.IXI_SALES_SIGNING_SECRET;
+  delete process.env.IXI_SALES_SIGNING_SECRET;
+  process.env.IXI_MOS_INTERNAL_SECRET = "existing-ixi-core-master-secret-at-least-thirty-two-characters";
+  const token = createSalesSigningToken({ salesOrderId: "ifd_order_master", revision: 1, tokenVersion: 1, expiresAt: "2030-01-01T00:00:00.000Z", nonce: "fixed" });
+  assert.equal(verifySalesSigningToken(token, { now: Date.parse("2029-01-01") }).salesOrderId, "ifd_order_master");
+  process.env.IXI_SALES_SIGNING_SECRET = dedicated;
+});
+
 test("signature freezes the agreed package and invoice inherits the signed total", () => {
   const order = {
     schema: "ixi-equipment-sales-order-v1",
