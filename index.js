@@ -67,6 +67,7 @@ const {
 } = require("./mos/routes/mosRouter");
 
 const financialRoutes = require("./financial/IXIFinancialRoutes");
+const salesSigningRoutes = require("./sales/IXISalesSigningRoutes");
 const { freightRouter } = require("./freight/routes/freightRouter");
 const {
   freightAuthenticatedRequest
@@ -111,6 +112,11 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+app.use(
+  "/sales-signing",
+  salesSigningRoutes
+);
 
 app.use(
   "/financial",

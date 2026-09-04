@@ -84,6 +84,11 @@ const authorizedFinancialService =
   );
 
 const {
+  createInvitation: createSalesOrderSigningInvitation,
+  packageSnapshot: createSalesOrderPackageSnapshot
+} = require("../sales/IXISalesSigningService");
+
+const {
   createFinancialDashboardProjection
 } =
   require(
@@ -229,6 +234,29 @@ async function bindOperationalControlEvidence({ patch = {}, merged = {}, existin
     return {
       ...source,
       quote: {
+        ...record,
+        context: {
+          ...safeObject(record.context),
+          entityPassportId,
+          actorPassportId
+        },
+        audit: {
+          ...safeObject(record.audit),
+          createdAt: clean(prior?.audit?.createdAt || record?.audit?.createdAt),
+          createdBy: clean(prior?.audit?.createdBy || record?.audit?.createdBy),
+          updatedAt: timestamp,
+          updatedBy: actorPassportId
+        }
+      }
+    };
+  }
+
+  if (type === "sales-order") {
+    const record = { ...safeObject(merged.salesOrder) };
+    const prior = safeObject(existing.salesOrder);
+    return {
+      ...source,
+      salesOrder: {
         ...record,
         context: {
           ...safeObject(record.context),
@@ -903,6 +931,85 @@ router.get(
 
 
 /* =========================================================
+   SALES ORDER SIGNING INVITATION
+   ========================================================= */
+
+router.post(
+  "/sales-orders/:financialDocumentId/signing-invitations",
+  async (req, res) => {
+    const accessContext = await getAccess(req);
+    const financialDocumentId = clean(req.params.financialDocumentId);
+    const loaded = await providerService.getDocument({ financialDocumentId });
+    const record = loaded?.data?.record;
+    const financialDocument = record?.financialDocument;
+
+    if (!loaded?.ok || !financialDocument) return sendEnvelope(res, loaded);
+    if (clean(financialDocument.documentType).toLowerCase() !== "sales-order") {
+      return res.status(409).json({
+        ok: false,
+        errors: [{ name: "IXISalesOrderRequiredError", message: "A signing invitation can only be created for a Sales Order." }]
+      });
+    }
+
+    const authorization = authorizeFinancialDocumentWrite({
+      accessContext,
+      action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
+      financialDocument
+    });
+    if (!authorization.allowed) {
+      return sendEnvelope(res, createAuthorizationFailure({
+        accessContext,
+        operation: "financial.sales-order.signing-invitation.create",
+        action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
+        reason: authorization.reason,
+        details: authorization
+      }));
+    }
+
+    try {
+      const invitation = createSalesOrderSigningInvitation({
+        financialDocument,
+        revision: Number(record?.server?.revision),
+        expiresInHours: req.body?.expiresInHours,
+        idempotencyKey: clean(req.body?.idempotencyKey)
+      });
+      if (invitation.idempotentReplay) return res.status(200).json({ ok: true, data: { financialDocumentId, signingToken: invitation.token, signingPath: `/sales-sign/${invitation.token}`, expiresAt: invitation.expiresAt, tokenVersion: invitation.tokenVersion, record, idempotentReplay: true }, errors: [], warnings: [] });
+      const context = getRequestContext(req);
+      const patched = await providerService.patchDocument({
+        financialDocumentId,
+        patch: { salesOrder: invitation.patch },
+        expectedRevision: Number(record?.server?.revision),
+        actorPassportId: accessContext.actorPassportId,
+        ...context,
+        commandId: clean(req.body?.commandId),
+        idempotencyKey: clean(req.body?.idempotencyKey),
+        metadata: { ...safeObject(req.body?.metadata), operation: "sales-order-signing-invitation" }
+      });
+      if (!patched?.ok) return sendEnvelope(res, patched);
+      return res.status(201).json({
+        ok: true,
+        data: {
+          financialDocumentId,
+          signingToken: invitation.token,
+          signingPath: `/sales-sign/${invitation.token}`,
+          expiresAt: invitation.expiresAt,
+          tokenVersion: invitation.tokenVersion,
+          record: patched.data?.record || null
+        },
+        errors: [],
+        warnings: patched.warnings || []
+      });
+    } catch (error) {
+      return res.status(409).json({
+        ok: false,
+        errors: [{ name: clean(error?.name || "IXISalesSigningInvitationError"), message: clean(error?.message || "Signing invitation could not be created.") }]
+      });
+    }
+  }
+);
+
+
+/* =========================================================
    PATCH
    ========================================================= */
 
@@ -946,6 +1053,16 @@ router.patch(
         req.params
           .financialDocumentId
     };
+
+    if (clean(mergedDocument.documentType).toLowerCase() === "sales-order") {
+      const priorOrder = safeObject(existing?.financialDocument?.salesOrder);
+      const nextOrder = safeObject(mergedDocument.salesOrder);
+      if (["sent-for-signature", "viewed", "signed-invoice-pending", "signed"].includes(clean(priorOrder.status).toLowerCase())) {
+        const priorPackage = JSON.stringify(createSalesOrderPackageSnapshot(priorOrder));
+        const nextPackage = JSON.stringify(createSalesOrderPackageSnapshot(nextOrder));
+        if (priorPackage !== nextPackage) return res.status(409).json({ ok: false, errors: [{ name: "IXISalesOrderImmutablePackageError", message: "A sent or signed Sales Order package is immutable. Supersede it with a new revision." }] });
+      }
+    }
 
     if (clean(mergedDocument.documentType).toLowerCase() === "payables-control") {
       mergedDocument={...mergedDocument,payablesControl:{...safeObject(mergedDocument.payablesControl),context:{...safeObject(mergedDocument?.payablesControl?.context),entityPassportId:clean(accessContext.entityPassportId),updatedByPassportId:clean(accessContext.actorPassportId)}}};
