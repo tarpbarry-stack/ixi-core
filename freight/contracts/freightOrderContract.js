@@ -57,6 +57,12 @@ function createFreightOrder({
       destination.objectId
     );
 
+  const destinationLabel =
+    clean(
+      destination.label ||
+      destination.address
+    );
+
   if (!resolvedEntityId) {
     throw new FreightError(
       "FREIGHT_ENTITY_REQUIRED",
@@ -71,10 +77,10 @@ function createFreightOrder({
     );
   }
 
-  if (!destinationId) {
+  if (!destinationId && !destinationLabel) {
     throw new FreightError(
       "FREIGHT_DESTINATION_REQUIRED",
-      "Destination AOS object is required."
+      "Destination AOS object, address, or label is required."
     );
   }
 
@@ -231,7 +237,23 @@ function createFreightOrder({
       billId: "",
       payableId: "",
       paymentId: "",
-      reconciliationId: ""
+      reconciliationId: "",
+      invoiceCount: 0,
+      invoicedTotal: 0,
+      creditTotal: 0,
+      openPayableTotal: 0
+    },
+
+    invoices: [],
+
+    reconciliation: {
+      status: "not-started",
+      varianceApproved: false,
+      varianceApprovedBy: "",
+      varianceApprovedAt: "",
+      varianceNote: "",
+      reconciledAt: "",
+      reconciledBy: ""
     },
 
     status:
