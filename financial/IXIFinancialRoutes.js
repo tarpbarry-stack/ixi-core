@@ -939,6 +939,19 @@ router.post(
   async (req, res) => {
     const accessContext = await getAccess(req);
     const financialDocumentId = clean(req.params.financialDocumentId);
+    const baseAuthorization = authorizeFinancialAction({
+      accessContext,
+      action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT
+    });
+    if (!baseAuthorization.allowed) {
+      return sendEnvelope(res, createAuthorizationFailure({
+        accessContext,
+        operation: "financial.sales-order.signing-invitation.create",
+        action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
+        reason: baseAuthorization.reason,
+        details: baseAuthorization
+      }));
+    }
     const loaded = await providerService.getDocument({ financialDocumentId });
     const record = loaded?.data?.record;
     const financialDocument = record?.financialDocument;
