@@ -127,6 +127,7 @@ app.use(
 
 app.use(
   "/freight/v1",
+  ixiInternalFinancialRequest,
   ixiAuthenticatedFinancialRequest,
   freightAuthenticatedRequest,
   freightRouter

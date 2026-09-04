@@ -38,7 +38,9 @@ function freightAuthenticatedRequest(
   const aosEntityId =
     clean(
       identity.aosEntityId ||
-      accessIdentity.aosEntityId
+      accessIdentity.aosEntityId ||
+      principal.entityId ||
+      req.ixiInternalAuth?.entityId
     );
 
   const identityEntityId =
