@@ -587,7 +587,14 @@ function createObject({
       null,
 
     softDeletedAt:
-      null
+      null,
+
+    /*
+     * Durable optimistic-concurrency token. Existing legacy objects that
+     * predate this contract are treated as revision 0 on their first write.
+     */
+    revision:
+      1
   };
 
   objects[objectId] =
@@ -714,6 +721,9 @@ function listObjects({
 function updateObject({
   objectId,
 
+  expectedRevision = undefined,
+  commandId = null,
+
   displayName = undefined,
   businessIdentifiers = undefined,
 
@@ -762,6 +772,56 @@ function updateObject({
       },
       409
     );
+  }
+
+  const currentRevision =
+    Number.isInteger(
+      Number(current.revision)
+    ) &&
+    Number(current.revision) >= 0
+      ? Number(current.revision)
+      : 0;
+
+  if (
+    expectedRevision !== undefined &&
+    expectedRevision !== null
+  ) {
+    const normalizedExpectedRevision =
+      Number(expectedRevision);
+
+    if (
+      !Number.isInteger(
+        normalizedExpectedRevision
+      ) ||
+      normalizedExpectedRevision < 0
+    ) {
+      throw new MosError(
+        "OBJECT_REVISION_REQUIRED",
+        "expectedRevision must be a non-negative integer.",
+        {
+          objectId,
+          expectedRevision
+        },
+        428
+      );
+    }
+
+    if (
+      normalizedExpectedRevision !==
+        currentRevision
+    ) {
+      throw new MosError(
+        "OBJECT_REVISION_CONFLICT",
+        "The Object changed after this edit session began.",
+        {
+          objectId,
+          expectedRevision:
+            normalizedExpectedRevision,
+          currentRevision
+        },
+        412
+      );
+    }
   }
 
   let definition = null;
@@ -949,6 +1009,9 @@ function updateObject({
     metadata:
       nextMetadata,
 
+    revision:
+      currentRevision + 1,
+
     updatedAt:
       timestamp
   };
@@ -972,6 +1035,8 @@ function updateObject({
 
     actorId,
 
+    commandId,
+
     payload: {
       displayName:
         updated.displayName,
@@ -980,7 +1045,13 @@ function updateObject({
         updated.definitionId,
 
       definitionKey:
-        updated.definitionKey
+        updated.definitionKey,
+
+      previousRevision:
+        currentRevision,
+
+      revision:
+        updated.revision
     }
   });
 

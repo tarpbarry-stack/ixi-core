@@ -1,4 +1,5 @@
 const express = require("express");
+const crypto = require("crypto");
 
 const {
   createEntity,
@@ -72,6 +73,16 @@ const {
 const {
   sendMosError
 } = require("./httpHelpers");
+
+const {
+  MosError
+} = require("../errors/MosError");
+
+const {
+  beginCommand,
+  completeCommand,
+  failCommand
+} = require("../commands/idempotencyService");
 
 const {
   faceLibraryRouter
@@ -1010,6 +1021,9 @@ router.get(
 router.patch(
   "/objects/:objectId",
   async (req, res) => {
+    let activeCommandId = "";
+    let commandStarted = false;
+
     try {
       const currentObject =
         getObject(
@@ -1033,6 +1047,149 @@ router.patch(
         req.body?.actorId ||
         null;
 
+      const bodyCommandId =
+        String(
+          req.body?.commandId ||
+          ""
+        ).trim();
+
+      const idempotencyKey =
+        String(
+          req.headers[
+            "idempotency-key"
+          ] ||
+          ""
+        ).trim();
+
+      if (
+        !bodyCommandId ||
+        !idempotencyKey ||
+        bodyCommandId !==
+          idempotencyKey
+      ) {
+        throw new MosError(
+          "OBJECT_COMMAND_ID_REQUIRED",
+          "A matching commandId and Idempotency-Key are required.",
+          null,
+          428
+        );
+      }
+
+      activeCommandId =
+        bodyCommandId;
+
+      const bodyRevision =
+        Number(
+          req.body?.expectedRevision
+        );
+
+      const rawHeaderRevision =
+        String(
+          req.headers["if-match"] ||
+          ""
+        )
+          .replace(/^W\//i, "")
+          .replace(/^\"|\"$/g, "")
+          .trim();
+
+      const headerRevision =
+        Number(rawHeaderRevision);
+
+      if (
+        !Number.isInteger(bodyRevision) ||
+        bodyRevision < 0 ||
+        !rawHeaderRevision ||
+        !Number.isInteger(headerRevision) ||
+        headerRevision !== bodyRevision
+      ) {
+        throw new MosError(
+          "OBJECT_REVISION_REQUIRED",
+          "Matching expectedRevision and If-Match values are required.",
+          {
+            expectedRevision:
+              req.body?.expectedRevision,
+            ifMatch:
+              req.headers["if-match"] ||
+              null
+          },
+          428
+        );
+      }
+
+      const payloadHash =
+        crypto
+          .createHash("sha256")
+          .update(
+            JSON.stringify({
+              objectId:
+                req.params.objectId,
+              body:
+                req.body || {}
+            })
+          )
+          .digest("hex");
+
+      const command =
+        beginCommand({
+          commandId:
+            activeCommandId,
+          entityId:
+            currentObject.entityId,
+          commandType:
+            "object.update",
+          payloadHash
+        });
+
+      commandStarted =
+        !command.duplicate;
+
+      if (command.duplicate) {
+        const record =
+          command.record;
+
+        if (
+          record.entityId !==
+            currentObject.entityId ||
+          record.commandType !==
+            "object.update" ||
+          record.payloadHash !==
+            payloadHash
+        ) {
+          throw new MosError(
+            "OBJECT_COMMAND_REUSE_CONFLICT",
+            "commandId was already used for a different Object mutation.",
+            {
+              commandId:
+                activeCommandId
+            },
+            409
+          );
+        }
+
+        if (
+          record.status ===
+            "completed" &&
+          record.result
+        ) {
+          return res.json({
+            ...record.result,
+            replayed: true
+          });
+        }
+
+        throw new MosError(
+          "OBJECT_COMMAND_NOT_REPLAYABLE",
+          "The prior Object command did not complete and cannot be replayed.",
+          {
+            commandId:
+              activeCommandId,
+            status:
+              record.status
+          },
+          409
+        );
+      }
+
       const object =
         updateObject({
           ...(req.body || {}),
@@ -1041,14 +1198,20 @@ router.patch(
             req.params.objectId,
 
           actorId:
-            trustedActorId
+            trustedActorId,
+
+          expectedRevision:
+            bodyRevision,
+
+          commandId:
+            activeCommandId
         });
 
       rebuildEntityProjections(
         object.entityId
       );
 
-      return res.json({
+      const result = {
         ok: true,
 
         object,
@@ -1057,8 +1220,30 @@ router.patch(
           getBranchSummary(
             object.objectId
           )
+      };
+
+      completeCommand({
+        commandId:
+          activeCommandId,
+        result
+      });
+
+      return res.json({
+        ...result,
+        replayed: false
       });
     } catch (error) {
+      if (
+        activeCommandId &&
+        commandStarted
+      ) {
+        failCommand({
+          commandId:
+            activeCommandId,
+          error
+        });
+      }
+
       return sendMosError(
         res,
         error
