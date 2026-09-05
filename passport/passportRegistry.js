@@ -10,19 +10,24 @@ const {
   getPassportUrl
 } = require("./passportSnEngine");
 
-const PASSPORT_DATA_FILE = path.join(__dirname, "passports.json");
+const DEFAULT_PASSPORT_DATA_FILE = path.join(__dirname, "passports.json");
+
+function getPassportDataFile() {
+  return process.env.IXI_PASSPORT_DATA_FILE || DEFAULT_PASSPORT_DATA_FILE;
+}
 
 function nowIso() {
   return new Date().toISOString();
 }
 
 function readPassportRecords() {
-  if (!fs.existsSync(PASSPORT_DATA_FILE)) {
+  const passportDataFile = getPassportDataFile();
+  if (!fs.existsSync(passportDataFile)) {
     return [];
   }
 
   try {
-    const raw = fs.readFileSync(PASSPORT_DATA_FILE, "utf8");
+    const raw = fs.readFileSync(passportDataFile, "utf8");
     const parsed = JSON.parse(raw);
 
     if (Array.isArray(parsed)) return parsed;
@@ -33,12 +38,45 @@ function readPassportRecords() {
   }
 }
 
+function clean(value) {
+  return String(value ?? "").trim();
+}
+
+function passportSources(record = {}) {
+  const candidates = [
+    {
+      sourceType: clean(record.sourceType),
+      sourceId: clean(record.sourceId)
+    },
+    ...(Array.isArray(record.sources) ? record.sources : [])
+  ];
+
+  const seen = new Set();
+
+  return candidates
+    .map(source => ({
+      sourceType: clean(source?.sourceType),
+      sourceId: clean(source?.sourceId)
+    }))
+    .filter(source => source.sourceType && source.sourceId)
+    .filter(source => {
+      const key = `${source.sourceType}|${source.sourceId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
 function writePassportRecords(records = []) {
+  const passportDataFile = getPassportDataFile();
+  fs.mkdirSync(path.dirname(passportDataFile), { recursive: true });
+  const temporaryFile = `${passportDataFile}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(
-    PASSPORT_DATA_FILE,
+    temporaryFile,
     JSON.stringify(records, null, 2),
     "utf8"
   );
+  fs.renameSync(temporaryFile, passportDataFile);
 }
 
 function findPassportById(passportId = "") {
@@ -49,14 +87,104 @@ function findPassportById(passportId = "") {
 }
 
 function findPassportBySource(sourceType = "", sourceId = "") {
+  const normalizedSourceType = clean(sourceType);
+  const normalizedSourceId = clean(sourceId);
   const records = readPassportRecords();
 
   return (
-    records.find(record =>
-      record.sourceType === sourceType &&
-      String(record.sourceId) === String(sourceId)
-    ) || null
+    records.find(record => passportSources(record).some(source =>
+      source.sourceType === normalizedSourceType &&
+      source.sourceId === normalizedSourceId
+    )) || null
   );
+}
+
+function bindPassportSource({
+  passportId = "",
+  sourceType = "",
+  sourceId = "",
+  entityId = ""
+} = {}) {
+  const normalizedPassportId = normalizePassportId(passportId);
+  const normalizedSourceType = clean(sourceType);
+  const normalizedSourceId = clean(sourceId);
+  const normalizedEntityId = clean(entityId);
+
+  if (!normalizedPassportId || !normalizedSourceType || !normalizedSourceId) {
+    const error = new Error("Passport source binding requires Passport, source type, and source ID.");
+    error.code = "PASSPORT_SOURCE_BINDING_REQUIRED";
+    error.status = 400;
+    throw error;
+  }
+
+  const records = readPassportRecords();
+  const index = records.findIndex(record => record.passportId === normalizedPassportId);
+
+  if (index < 0) {
+    const error = new Error("IXI Passport was not found.");
+    error.code = "PASSPORT_NOT_FOUND";
+    error.status = 404;
+    error.details = { passportId: normalizedPassportId };
+    throw error;
+  }
+
+  const conflicting = records.find(record =>
+    record.passportId !== normalizedPassportId &&
+    passportSources(record).some(source =>
+      source.sourceType === normalizedSourceType &&
+      source.sourceId === normalizedSourceId
+    )
+  );
+
+  if (conflicting) {
+    const error = new Error("Passport source is already bound to another IXI Passport.");
+    error.code = "PASSPORT_SOURCE_CONFLICT";
+    error.status = 409;
+    error.details = {
+      passportId: normalizedPassportId,
+      conflictingPassportId: conflicting.passportId,
+      sourceType: normalizedSourceType,
+      sourceId: normalizedSourceId
+    };
+    throw error;
+  }
+
+  const current = records[index];
+  const currentEntityId = clean(current.entityId);
+
+  if (currentEntityId && normalizedEntityId && currentEntityId !== normalizedEntityId) {
+    const error = new Error("IXI Passport belongs to a different Entity.");
+    error.code = "PASSPORT_ENTITY_MISMATCH";
+    error.status = 403;
+    error.details = {
+      passportId: normalizedPassportId,
+      expectedEntityId: normalizedEntityId,
+      actualEntityId: currentEntityId
+    };
+    throw error;
+  }
+
+  const sources = passportSources(current);
+  if (!sources.some(source =>
+    source.sourceType === normalizedSourceType &&
+    source.sourceId === normalizedSourceId
+  )) {
+    sources.push({
+      sourceType: normalizedSourceType,
+      sourceId: normalizedSourceId
+    });
+  }
+
+  const updated = {
+    ...current,
+    entityId: currentEntityId || normalizedEntityId || null,
+    sources,
+    updatedAt: nowIso()
+  };
+
+  records[index] = updated;
+  writePassportRecords(records);
+  return updated;
 }
 
 function passportIdExists(passportId = "") {
@@ -275,6 +403,8 @@ module.exports = {
   writePassportRecords,
   findPassportById,
   findPassportBySource,
+  passportSources,
+  bindPassportSource,
   passportIdExists,
   deletePassportById,
   deletePassportBySource,
