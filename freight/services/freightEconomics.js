@@ -8,6 +8,19 @@ const {
 const ENGINE_VERSION =
   "ixi-freight-economics-v1";
 
+function hasExpectedAmount(source = {}) {
+  if (source.expectedProvided === true) return true;
+
+  return [
+    source.expectedTotal,
+    source.agreedAmount,
+    source.permitEstimate,
+    source.escortEstimate,
+    source.fuelSurchargeEstimate,
+    source.otherEstimate
+  ].some(value => Math.abs(number(value)) >= 0.005);
+}
+
 function expectedEconomics(
   source = {},
   routeMiles = 0
@@ -39,6 +52,9 @@ function expectedEconomics(
     result.fuelSurchargeEstimate +
     result.otherEstimate
   );
+
+  result.expectedProvided =
+    hasExpectedAmount(source);
 
   const miles =
     Math.max(0, number(routeMiles));
@@ -97,9 +113,16 @@ function actualEconomics(
       : 0;
 
   result.variance = money(
-    result.actualTotal -
-    number(expected.expectedTotal)
+    hasExpectedAmount(expected)
+      ? result.actualTotal -
+        number(expected.expectedTotal)
+      : 0
   );
+
+  result.varianceBasis =
+    hasExpectedAmount(expected)
+      ? "expected"
+      : "none";
 
   result.economicsEngineVersion =
     ENGINE_VERSION;
@@ -109,6 +132,7 @@ function actualEconomics(
 
 module.exports = {
   ENGINE_VERSION,
+  hasExpectedAmount,
   expectedEconomics,
   actualEconomics
 };

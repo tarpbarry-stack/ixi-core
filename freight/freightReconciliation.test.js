@@ -4,8 +4,16 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const { createFreightOrder } = require("./contracts/freightOrderContract");
-const { invoiceFingerprint, actualFromInvoices } = require("./services/freightService");
-const { actualEconomics } = require("./services/freightEconomics");
+const {
+  invoiceFingerprint,
+  actualFromInvoices,
+  canAttachInvoiceAtStatus,
+  statusAfterInvoice
+} = require("./services/freightService");
+const {
+  actualEconomics,
+  expectedEconomics
+} = require("./services/freightEconomics");
 
 test("Freight Order supports an external destination before an AOS dispatch target is assigned", () => {
   const order = createFreightOrder({
@@ -47,4 +55,26 @@ test("invoice reconciliation sums invoices, credits, and accessorials without do
   assert.equal(economics.actualDetention, 200);
   assert.equal(economics.actualTotal, 3050);
   assert.equal(economics.variance, 50);
+});
+
+test("actual carrier cost does not manufacture a variance when no estimate was provided", () => {
+  const expected = expectedEconomics({}, 500);
+  const actual = actualEconomics(expected, { actualFreight: 2750 }, 500);
+
+  assert.equal(expected.expectedProvided, false);
+  assert.equal(expected.expectedTotal, 0);
+  assert.equal(actual.actualTotal, 2750);
+  assert.equal(actual.variance, 0);
+  assert.equal(actual.varianceBasis, "none");
+});
+
+test("carrier invoices can be recorded before delivery without skipping the movement lifecycle", () => {
+  for (const status of ["draft", "requested", "awarded", "dispatched", "picked-up", "in-transit"]) {
+    assert.equal(canAttachInvoiceAtStatus(status), true);
+    assert.equal(statusAfterInvoice(status), status);
+  }
+
+  assert.equal(statusAfterInvoice("delivered"), "billed");
+  assert.equal(canAttachInvoiceAtStatus("reconciled"), false);
+  assert.equal(canAttachInvoiceAtStatus("cancelled"), false);
 });
