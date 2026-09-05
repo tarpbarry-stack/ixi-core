@@ -142,6 +142,96 @@ async function load({
   return record;
 }
 
+function assertTicketDeletionAllowed(ticket) {
+  const deletableStatuses = new Set([
+    TICKET_STATUS.DRAFT,
+    TICKET_STATUS.READY_FOR_CHAT
+  ]);
+
+  if (!deletableStatuses.has(ticket?.status)) {
+    throw new TicketError(
+      "TICKET_DELETE_STATE_INVALID",
+      "Only unworked draft or ready-for-chat Tickets can be deleted.",
+      { status: ticket?.status || "" },
+      409
+    );
+  }
+
+  const execution = safeObject(ticket?.metadata?.execution);
+  const hasExecutionHistory = [
+    execution.assignedTo,
+    execution.agentId,
+    execution.runId,
+    execution.claimedAt,
+    execution.startedAt,
+    execution.lastHeartbeatAt
+  ].some(value => clean(value));
+
+  if (hasExecutionHistory) {
+    throw new TicketError(
+      "TICKET_DELETE_EXECUTION_EXISTS",
+      "A Ticket with agent execution history cannot be deleted.",
+      {},
+      409
+    );
+  }
+}
+
+async function remove({
+  entityId,
+  ticketId,
+  actorPassportId,
+  expectedRevision,
+  reason = "obsolete"
+}) {
+  const current = await load({ entityId, ticketId });
+
+  if (Number(expectedRevision) !== Number(current.revision)) {
+    throw new TicketError(
+      "TICKET_REVISION_CONFLICT",
+      "Ticket deletion requires the current revision.",
+      {
+        expectedRevision: Number(expectedRevision || 0),
+        currentRevision: Number(current.revision)
+      },
+      409
+    );
+  }
+
+  assertTicketDeletionAllowed(current);
+
+  const deletedAt = nowIso();
+  const next = normalizeTicket({
+    ...current,
+    status: TICKET_STATUS.DELETED,
+    metadata: {
+      ...safeObject(current.metadata),
+      deletion: {
+        reason: clean(reason) || "obsolete",
+        deletedAt,
+        deletedBy: clean(actorPassportId)
+      }
+    },
+    audit: {
+      ...current.audit,
+      updatedAt: deletedAt
+    }
+  });
+
+  const deleted = await replaceTicketRecord({
+    record: next,
+    expectedRevision: current.revision
+  });
+
+  return {
+    ticketId: deleted.ticketId,
+    displayNumber: deleted.displayNumber,
+    status: deleted.status,
+    revision: deleted.revision,
+    deletedAt
+  };
+}
+
 async function patch({
   entityId,
   ticketId,
@@ -599,6 +689,7 @@ module.exports = {
   reserve,
   create,
   load,
+  remove,
   patch,
   transition,
   submitCloseout,
@@ -606,5 +697,6 @@ module.exports = {
   reopen,
 
   listTicketsByStatus,
-  listTicketsByRepository
+  listTicketsByRepository,
+  assertTicketDeletionAllowed
 };
