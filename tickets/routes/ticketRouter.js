@@ -343,6 +343,44 @@ router.get(
 
 
 /* =========================================================
+   DELETE UNWORKED TICKET
+   ========================================================= */
+
+router.delete(
+  "/tickets/:ticketId",
+
+  route(
+    "ticket.delete",
+    "tickets.manage",
+
+    async (
+      req,
+      ctx
+    ) => {
+      return ticketService.remove({
+        entityId:
+          ctx.entityId,
+
+        ticketId:
+          req.params.ticketId,
+
+        actorPassportId:
+          ctx.actorPassportId,
+
+        expectedRevision:
+          req.body?.expectedRevision ||
+          req.body?.revision,
+
+        reason:
+          req.body?.reason ||
+          "obsolete"
+      });
+    }
+  )
+);
+
+
+/* =========================================================
    PATCH DRAFT
    ========================================================= */
 
