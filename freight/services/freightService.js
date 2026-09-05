@@ -43,9 +43,9 @@ const {
 );
 
 const {
-  getObject
+  resolveOrProvisionAosObjectForPassport
 } = require(
-  "../../mos/objects/objectService"
+  "../../mos/provisioning/aosObjectIdentityResolver"
 );
 
 const {
@@ -59,27 +59,33 @@ const {
 } = require("../FreightError");
 
 async function create(args = {}) {
-  const objectId =
-    clean(args?.asset?.objectId);
-
   const object =
-    getObject(objectId);
-
-  if (
-    object.entityId !==
-    clean(args.entityId)
-  ) {
-    throw new FreightError(
-      "FREIGHT_ASSET_ENTITY_MISMATCH",
-      "Asset does not belong to the authenticated Entity.",
-      {},
-      403
-    );
-  }
+    resolveOrProvisionAosObjectForPassport({
+      passportId:
+        args?.asset?.passportId,
+      objectId:
+        args?.asset?.objectId,
+      entityId:
+        args.entityId,
+      actorId:
+        args.actorId,
+      source:
+        args?.asset?.source,
+      asset:
+        args?.asset,
+      provisionIfMissing:
+        args?.asset?.source?.verified === true
+    });
 
   const record =
     createFreightOrder({
       ...args,
+
+      asset: {
+        ...(args.asset || {}),
+        objectId:
+          object.objectId
+      },
 
       route: {
         ...(args.route || {}),
