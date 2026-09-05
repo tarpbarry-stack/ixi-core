@@ -211,6 +211,11 @@ function registerAction(
 }
 
 registerAction(
+  "amend",
+  service.amend
+);
+
+registerAction(
   "request",
   service.request
 );

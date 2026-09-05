@@ -43,6 +43,43 @@ function createEventId() {
   );
 }
 
+function buildFreightEvent({
+  entityId,
+  freightOrderId,
+  eventType,
+  actorId = "",
+  commandId = "",
+  payload = {},
+  occurredAt = nowIso(),
+  eventId = createEventId()
+}) {
+  return {
+    eventId: clean(eventId),
+    entityId: clean(entityId),
+    freightOrderId: clean(freightOrderId),
+    eventType: clean(eventType),
+    actorId: clean(actorId),
+    commandId: clean(commandId),
+    occurredAt: clean(occurredAt),
+    payload:
+      payload && typeof payload === "object"
+        ? payload
+        : {}
+  };
+}
+
+function freightEventItem(event) {
+  return {
+    pk: `FREIGHT#${event.freightOrderId}`,
+    sk: `EVENT#${event.occurredAt}#${event.eventId}`,
+    recordType: "freight-event",
+    entityId: event.entityId,
+    freightOrderId: event.freightOrderId,
+    createdAt: event.occurredAt,
+    event
+  };
+}
+
 async function appendFreightEvent({
   entityId,
   freightOrderId,
@@ -51,49 +88,20 @@ async function appendFreightEvent({
   commandId = "",
   payload = {}
 }) {
-  const timestamp = nowIso();
-
-  const event = {
-    eventId: createEventId(),
-    entityId: clean(entityId),
-    freightOrderId:
-      clean(freightOrderId),
-    eventType: clean(eventType),
-    actorId: clean(actorId),
-    commandId: clean(commandId),
-    occurredAt: timestamp,
-    payload:
-      payload &&
-      typeof payload === "object"
-        ? payload
-        : {}
-  };
+  const event = buildFreightEvent({
+    entityId,
+    freightOrderId,
+    eventType,
+    actorId,
+    commandId,
+    payload
+  });
 
   await client.send(
     new PutCommand({
       TableName: TABLE_NAME,
 
-      Item: {
-        pk:
-          `FREIGHT#${event.freightOrderId}`,
-
-        sk:
-          `EVENT#${timestamp}#${event.eventId}`,
-
-        recordType:
-          "freight-event",
-
-        entityId:
-          event.entityId,
-
-        freightOrderId:
-          event.freightOrderId,
-
-        createdAt:
-          timestamp,
-
-        event
-      },
+      Item: freightEventItem(event),
 
       ConditionExpression:
         "attribute_not_exists(pk) AND attribute_not_exists(sk)"
@@ -146,6 +154,8 @@ async function listFreightEvents({
 }
 
 module.exports = {
+  buildFreightEvent,
+  freightEventItem,
   appendFreightEvent,
   listFreightEvents
 };

@@ -10,7 +10,8 @@ const {
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
-  QueryCommand
+  QueryCommand,
+  TransactWriteCommand
 } = require(
   "@aws-sdk/lib-dynamodb"
 );
@@ -65,6 +66,24 @@ function statusIndexPk(
     `ENTITY#${clean(entityId)}` +
     `#STATUS#${clean(status)}`
   );
+}
+
+function amendmentCommandKey(entityId, commandId) {
+  return {
+    pk: `ENTITY#${clean(entityId)}#COMMAND`,
+    sk: `FREIGHT_AMEND#${clean(commandId)}`
+  };
+}
+
+async function getAmendmentCommand({ entityId, commandId }) {
+  const result = await client.send(
+    new GetCommand({
+      TableName: TABLE_NAME,
+      Key: amendmentCommandKey(entityId, commandId),
+      ConsistentRead: true
+    })
+  );
+  return result?.Item || null;
 }
 
 function toItem(record) {
@@ -283,6 +302,102 @@ async function replaceOrder({
   return record;
 }
 
+async function transactAmendOrder({
+  record,
+  expectedRevision,
+  eventItem,
+  commandId,
+  fingerprint
+}) {
+  const resolvedCommandId = clean(commandId);
+  if (!resolvedCommandId) {
+    throw new FreightError(
+      "FREIGHT_COMMAND_ID_REQUIRED",
+      "A unique command ID is required to amend a Freight Order.",
+      {},
+      400
+    );
+  }
+
+  const item = toItem(record);
+  const commandKey = amendmentCommandKey(item.entityId, resolvedCommandId);
+  const commandItem = {
+    ...commandKey,
+    recordType: "freight-command",
+    operation: "freight.amend",
+    commandId: resolvedCommandId,
+    fingerprint: clean(fingerprint),
+    entityId: item.entityId,
+    freightOrderId: item.freightOrderId,
+    createdAt: item.updatedAt,
+    result: record
+  };
+
+  try {
+    await client.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Put: {
+              TableName: TABLE_NAME,
+              Item: item,
+              ConditionExpression: "attribute_exists(pk) AND attribute_exists(sk) AND revision = :expectedRevision",
+              ExpressionAttributeValues: {
+                ":expectedRevision": Number(expectedRevision)
+              }
+            }
+          },
+          {
+            Put: {
+              TableName: TABLE_NAME,
+              Item: eventItem,
+              ConditionExpression: "attribute_not_exists(pk) AND attribute_not_exists(sk)"
+            }
+          },
+          {
+            Put: {
+              TableName: TABLE_NAME,
+              Item: commandItem,
+              ConditionExpression: "attribute_not_exists(pk) AND attribute_not_exists(sk)"
+            }
+          }
+        ]
+      })
+    );
+    return { record, replayed: false };
+  } catch (error) {
+    if (error?.name !== "TransactionCanceledException") {
+      throw error;
+    }
+
+    const priorCommand = await getAmendmentCommand({
+      entityId: item.entityId,
+      commandId: resolvedCommandId
+    });
+    if (priorCommand) {
+      if (clean(priorCommand.fingerprint) !== clean(fingerprint)) {
+        throw new FreightError(
+          "FREIGHT_COMMAND_CONFLICT",
+          "Command ID was already used for a different Freight amendment.",
+          { commandId: resolvedCommandId },
+          409
+        );
+      }
+      return { record: priorCommand.result, replayed: true };
+    }
+
+    throw new FreightError(
+      "FREIGHT_REVISION_CONFLICT",
+      "Freight Order changed before this command completed.",
+      {
+        freightOrderId: item.freightOrderId,
+        expectedRevision: Number(expectedRevision)
+      },
+      409
+    );
+  }
+}
+
 async function getOrder({
   entityId,
   freightOrderId
@@ -437,6 +552,8 @@ module.exports = {
 
   createOrder,
   replaceOrder,
+  transactAmendOrder,
+  getAmendmentCommand,
   getOrder,
   listOrdersForAsset,
   listOrdersByStatus,

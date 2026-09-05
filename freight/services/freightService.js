@@ -14,6 +14,7 @@ const {
 
 const {
   actualEconomics,
+  expectedEconomics,
   hasExpectedAmount
 } = require(
   "./freightEconomics"
@@ -22,6 +23,8 @@ const {
 const {
   createOrder,
   replaceOrder,
+  transactAmendOrder,
+  getAmendmentCommand,
   getOrder,
   listOrdersForAsset,
   listOrdersByStatus
@@ -31,6 +34,8 @@ const {
 
 const {
   appendFreightEvent,
+  buildFreightEvent,
+  freightEventItem,
   listFreightEvents
 } = require(
   "../storage/freightEventStore"
@@ -52,8 +57,11 @@ const {
 const {
   clean,
   nowIso,
-  money
+  money,
+  safeObject
 } = require("../util");
+
+const crypto = require("crypto");
 
 const {
   FreightError
@@ -214,6 +222,301 @@ async function request(args) {
     nextStatus:
       "requested"
   });
+}
+
+const AMENDABLE_ORDER_STATUSES = new Set([
+  "draft",
+  "requested"
+]);
+
+const AMENDMENT_FIELDS = [
+  "asset.weight",
+  "purpose.type",
+  "route.origin.objectId",
+  "route.origin.label",
+  "route.origin.address",
+  "route.destination.containerId",
+  "route.destination.objectId",
+  "route.destination.label",
+  "route.destination.address",
+  "route.routeMiles",
+  "execution.mode",
+  "execution.carrierPassportId",
+  "execution.carrierName",
+  "execution.requestedPickupAt",
+  "execution.scheduledPickupAt",
+  "execution.expectedDeliveryAt",
+  "economics.quotedAmount",
+  "economics.agreedAmount",
+  "economics.permitEstimate",
+  "economics.escortEstimate",
+  "economics.fuelSurchargeEstimate",
+  "economics.otherEstimate",
+  "economics.expectedProvided",
+  "metadata.payer",
+  "metadata.customerRebill",
+  "metadata.acquisitionCost",
+  "metadata.notes"
+];
+
+function pick(source, keys) {
+  const value = safeObject(source);
+  return Object.fromEntries(
+    keys
+      .filter(key => Object.prototype.hasOwnProperty.call(value, key))
+      .map(key => [key, value[key]])
+  );
+}
+
+function valueAt(source, path) {
+  return path.split(".").reduce((value, key) => value?.[key], source);
+}
+
+function stableValue(value) {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.keys(value).sort().map(key => [key, stableValue(value[key])])
+  );
+}
+
+function amendmentFingerprint(value) {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(stableValue(value)))
+    .digest("hex");
+}
+
+function freightAmendmentDiff(before, after) {
+  return AMENDMENT_FIELDS.flatMap(field => {
+    const prior = valueAt(before, field);
+    const next = valueAt(after, field);
+    return JSON.stringify(stableValue(prior)) === JSON.stringify(stableValue(next))
+      ? []
+      : [{ field, before: prior ?? null, after: next ?? null }];
+  });
+}
+
+function canAmendOrderAtStatus(status = "") {
+  return AMENDABLE_ORDER_STATUSES.has(clean(status));
+}
+
+function buildAmendedFreightOrder({
+  current = {},
+  amendment = {},
+  actorId = "",
+  expectedRevision,
+  changeReason = ""
+} = {}) {
+  const currentRevision = Number(current?.identity?.revision || 0);
+  const requestedRevision = Number(expectedRevision);
+
+  if (!canAmendOrderAtStatus(current.status)) {
+    throw new FreightError(
+      "FREIGHT_AMENDMENT_STATE_INVALID",
+      "Freight Order terms may be edited only while the order is draft or requested.",
+      { status: current.status },
+      409
+    );
+  }
+
+  if (!Number.isInteger(requestedRevision) || requestedRevision !== currentRevision) {
+    throw new FreightError(
+      "FREIGHT_REVISION_CONFLICT",
+      "Freight Order changed before this amendment was saved.",
+      { expectedRevision: requestedRevision, currentRevision },
+      409
+    );
+  }
+
+  const reason = clean(changeReason);
+  if (clean(current.status) === "requested" && !reason) {
+    throw new FreightError(
+      "FREIGHT_AMENDMENT_REASON_REQUIRED",
+      "A change reason is required after Freight has been requested.",
+      {},
+      400
+    );
+  }
+
+  const patch = safeObject(amendment);
+  const assetPatch = safeObject(patch.asset);
+  const routePatch = safeObject(patch.route);
+  const executionPatch = safeObject(patch.execution);
+  const economicsPatch = safeObject(patch.economics);
+  const metadataPatch = safeObject(patch.metadata);
+  const route = {
+    ...(current.route || {}),
+    ...pick(routePatch, ["routeMiles"]),
+    origin: {
+      ...(current.route?.origin || {}),
+      ...pick(routePatch.origin, ["objectId", "label", "address"])
+    },
+    destination: {
+      ...(current.route?.destination || {}),
+      ...pick(routePatch.destination, ["containerId", "objectId", "label", "address"])
+    }
+  };
+  const normalized = createFreightOrder({
+    entityId: current?.entity?.entityId,
+    actorId,
+    asset: {
+      ...(current.asset || {}),
+      weight: assetPatch.weight ?? current?.asset?.weight
+    },
+    purpose: clean(patch?.purpose?.type || patch.purpose || current?.purpose?.type),
+    route,
+    execution: {
+      ...(current.execution || {}),
+      ...pick(executionPatch, [
+        "mode",
+        "carrierPassportId",
+        "carrierName",
+        "requestedPickupAt",
+        "scheduledPickupAt",
+        "expectedDeliveryAt"
+      ])
+    },
+    economics: {
+      ...(current.economics || {}),
+      ...pick(economicsPatch, [
+        "quotedAmount",
+        "agreedAmount",
+        "permitEstimate",
+        "escortEstimate",
+        "fuelSurchargeEstimate",
+        "otherEstimate",
+        "expectedProvided"
+      ])
+    },
+    metadata: {
+      ...(current.metadata || {}),
+      ...pick(metadataPatch, ["payer", "customerRebill", "acquisitionCost", "notes"])
+    }
+  });
+  const timestamp = nowIso();
+
+  const next = {
+    ...current,
+    identity: {
+      ...current.identity,
+      revision: currentRevision + 1
+    },
+    asset: {
+      ...current.asset,
+      weight: normalized.asset.weight
+    },
+    purpose: normalized.purpose,
+    route: normalized.route,
+    execution: {
+      ...normalized.execution,
+      actualPickupAt: clean(current?.execution?.actualPickupAt),
+      actualDeliveryAt: clean(current?.execution?.actualDeliveryAt)
+    },
+    economics: {
+      ...current.economics,
+      ...expectedEconomics(normalized.economics, normalized.route.routeMiles)
+    },
+    metadata: {
+      ...normalized.metadata,
+      lastAmendmentReason: reason,
+      lastAmendedAt: timestamp,
+      lastAmendedBy: clean(actorId)
+    },
+    audit: {
+      ...(current.audit || {}),
+      updatedAt: timestamp,
+      updatedBy: clean(actorId)
+    }
+  };
+
+  if (!freightAmendmentDiff(current, next).length) {
+    throw new FreightError(
+      "FREIGHT_AMENDMENT_NO_CHANGES",
+      "Freight amendment did not change any editable order terms.",
+      {},
+      400
+    );
+  }
+
+  return next;
+}
+
+async function amend({
+  entityId,
+  freightOrderId,
+  actorId,
+  commandId,
+  expectedRevision,
+  amendment = {},
+  changeReason = ""
+}) {
+  const resolvedCommandId = clean(commandId);
+  if (!resolvedCommandId) {
+    throw new FreightError(
+      "FREIGHT_COMMAND_ID_REQUIRED",
+      "A unique command ID is required to amend a Freight Order.",
+      {},
+      400
+    );
+  }
+  const fingerprint = amendmentFingerprint({
+    operation: "freight.amend",
+    entityId: clean(entityId),
+    freightOrderId: clean(freightOrderId),
+    expectedRevision: Number(expectedRevision),
+    changeReason: clean(changeReason),
+    amendment: stableValue(amendment)
+  });
+  const priorCommand = await getAmendmentCommand({
+    entityId,
+    commandId: resolvedCommandId
+  });
+  if (priorCommand) {
+    if (clean(priorCommand.fingerprint) !== fingerprint) {
+      throw new FreightError(
+        "FREIGHT_COMMAND_CONFLICT",
+        "Command ID was already used for a different Freight amendment.",
+        { commandId: resolvedCommandId },
+        409
+      );
+    }
+    return priorCommand.result;
+  }
+
+  const current = await load(entityId, freightOrderId);
+  const next = buildAmendedFreightOrder({
+    current,
+    amendment,
+    actorId,
+    expectedRevision,
+    changeReason
+  });
+
+  const changes = freightAmendmentDiff(current, next);
+  const event = buildFreightEvent({
+    entityId,
+    freightOrderId,
+    eventType: "freight.amended",
+    actorId,
+    commandId: resolvedCommandId,
+    payload: {
+      priorRevision: current.identity.revision,
+      revision: next.identity.revision,
+      status: next.status,
+      changeReason: clean(changeReason),
+      changes
+    }
+  });
+  const result = await transactAmendOrder({
+    record: next,
+    expectedRevision: current.identity.revision,
+    eventItem: freightEventItem(event),
+    commandId: resolvedCommandId,
+    fingerprint
+  });
+
+  return result.record;
 }
 
 async function award(args) {
@@ -674,6 +977,7 @@ async function reconcile({
 module.exports = {
   create,
   load,
+  amend,
   request,
   award,
   dispatch,
@@ -687,5 +991,9 @@ module.exports = {
   invoiceFingerprint,
   actualFromInvoices,
   canAttachInvoiceAtStatus,
-  statusAfterInvoice
+  statusAfterInvoice,
+  canAmendOrderAtStatus,
+  buildAmendedFreightOrder,
+  freightAmendmentDiff,
+  amendmentFingerprint
 };
