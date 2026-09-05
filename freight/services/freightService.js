@@ -13,7 +13,8 @@ const {
 );
 
 const {
-  actualEconomics
+  actualEconomics,
+  hasExpectedAmount
 } = require(
   "./freightEconomics"
 );
@@ -420,6 +421,28 @@ function actualFromInvoices(invoices = []) {
   );
 }
 
+const INVOICE_EDITABLE_STATUSES = new Set([
+  "draft",
+  "requested",
+  "awarded",
+  "dispatched",
+  "picked-up",
+  "in-transit",
+  "delivered",
+  "billed"
+]);
+
+function canAttachInvoiceAtStatus(status = "") {
+  return INVOICE_EDITABLE_STATUSES.has(clean(status));
+}
+
+function statusAfterInvoice(status = "") {
+  const current = clean(status);
+  return ["delivered", "billed"].includes(current)
+    ? "billed"
+    : current;
+}
+
 async function attachInvoice({
   entityId,
   freightOrderId,
@@ -428,12 +451,11 @@ async function attachInvoice({
   invoice = {}
 }) {
   const current = await load(entityId, freightOrderId);
-  const allowed = ["delivered", "billed"];
 
-  if (!allowed.includes(clean(current.status))) {
+  if (!canAttachInvoiceAtStatus(current.status)) {
     throw new FreightError(
       "FREIGHT_INVOICE_STATE_INVALID",
-      "Carrier invoices may be attached only after delivery and before reconciliation.",
+      "Carrier invoices may be attached only while the Freight Order is active and unreconciled.",
       { status: current.status },
       409
     );
@@ -515,7 +537,7 @@ async function attachInvoice({
       ...current.identity,
       revision: Number(current.identity?.revision || 0) + 1
     },
-    status: "billed",
+    status: statusAfterInvoice(current.status),
     invoices: nextInvoices,
     economics: { ...current.economics, ...actual },
     financial: {
@@ -529,7 +551,11 @@ async function attachInvoice({
     },
     reconciliation: {
       ...(current.reconciliation || {}),
-      status: Math.abs(Number(actual.variance || 0)) < 0.01 ? "matched" : "variance"
+      status: !hasExpectedAmount(current.economics)
+        ? "unbudgeted"
+        : Math.abs(Number(actual.variance || 0)) < 0.01
+          ? "matched"
+          : "variance"
     },
     audit: {
       ...(current.audit || {}),
@@ -594,8 +620,11 @@ async function reconcile({
           resolvedActual,
           miles
         );
-        const tolerance = Math.max(50, Math.abs(Number(next.economics?.expectedTotal || 0)) * 0.05);
-        if (Math.abs(Number(economics.variance || 0)) > tolerance && !varianceApproved) {
+        const expectedProvided = hasExpectedAmount(next.economics);
+        const tolerance = expectedProvided
+          ? Math.max(50, Math.abs(Number(next.economics?.expectedTotal || 0)) * 0.05)
+          : 0;
+        if (expectedProvided && Math.abs(Number(economics.variance || 0)) > tolerance && !varianceApproved) {
           throw new FreightError(
             "FREIGHT_VARIANCE_APPROVAL_REQUIRED",
             "Freight variance exceeds tolerance and requires explicit approval.",
@@ -656,5 +685,7 @@ module.exports = {
   listOrdersByStatus,
   listFreightEvents,
   invoiceFingerprint,
-  actualFromInvoices
+  actualFromInvoices,
+  canAttachInvoiceAtStatus,
+  statusAfterInvoice
 };
