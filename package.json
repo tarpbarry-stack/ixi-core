@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node --test financial/*.test.js freight/*.test.js sales/*.test.js"
+    "test": "node --test financial/*.test.js freight/*.test.js sales/*.test.js tickets/*.test.js"
   },
   "keywords": [],
   "author": "",

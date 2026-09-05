@@ -11,7 +11,8 @@ const TICKET_STATUS = Object.freeze({
   READY_TO_VERIFY: "ready-to-verify",
   REOPENED: "reopened",
   REJECTED: "rejected",
-  CLOSED: "closed"
+  CLOSED: "closed",
+  DELETED: "deleted"
 });
 
 const TICKET_SOURCES = Object.freeze([
@@ -50,7 +51,8 @@ const EXECUTION_CLASSES = Object.freeze([
 
 const TERMINAL_STATUSES = new Set([
   TICKET_STATUS.CLOSED,
-  TICKET_STATUS.REJECTED
+  TICKET_STATUS.REJECTED,
+  TICKET_STATUS.DELETED
 ]);
 
 const MUTABLE_REQUEST_STATUSES = new Set([
