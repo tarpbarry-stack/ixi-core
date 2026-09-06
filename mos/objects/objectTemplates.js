@@ -115,6 +115,21 @@ const MOS_OBJECT_TEMPLATES = Object.freeze({
     })
   },
 
+  /*
+   * Neutral customer-defined AOS container.
+   *
+   * This is a technical capability boundary only. It deliberately carries
+   * no business noun, department, location or workflow meaning; customers
+   * define that through the Object name, card and recursive relationships.
+   */
+  [MOS_OBJECT_TYPES.CONTAINER]: {
+    objectType: MOS_OBJECT_TYPES.CONTAINER,
+    label: "Container",
+    capabilities: capabilities({
+      canContain: true
+    })
+  },
+
   [MOS_OBJECT_TYPES.GENERIC]: {
     objectType: MOS_OBJECT_TYPES.GENERIC,
     label: "Object",

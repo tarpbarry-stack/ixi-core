@@ -11,6 +11,7 @@ const MOS_OBJECT_TYPES = Object.freeze({
   JOB: "job",
   BUILDING: "building",
   ROOM: "room",
+  CONTAINER: "container",
   SYSTEM_INDEX: "system-index",
   GENERIC: "generic",
   WORK_ORDER: "work-order",
