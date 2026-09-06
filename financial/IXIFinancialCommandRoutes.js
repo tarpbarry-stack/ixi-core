@@ -183,12 +183,27 @@ function bindTrustedCommandInput({documentType="",input={},accessContext={}}={})
   }
   if(type==="sales-order") {
     const salesOrder={...safeObject(source.salesOrder)};
+    const references=Array.isArray(source.references)?source.references:[];
+    const assetPassportIds=[...new Set(references
+      .filter(reference=>clean(reference?.role).toLowerCase()==="asset")
+      .map(reference=>clean(reference?.passportId))
+      .filter(Boolean))];
+    const primaryPassportId=clean(
+      salesOrder?.context?.primaryPassportId ||
+      salesOrder?.asset?.passportId ||
+      (assetPassportIds.length===1?assetPassportIds[0]:"")
+    );
     return {
       ...source,
       salesOrder:{
         ...salesOrder,
+        asset:{
+          ...safeObject(salesOrder.asset),
+          passportId:clean(salesOrder?.asset?.passportId||primaryPassportId)
+        },
         context:{
           ...safeObject(salesOrder.context),
+          primaryPassportId,
           entityPassportId:clean(accessContext.entityPassportId),
           actorPassportId:clean(accessContext.actorPassportId)
         }
@@ -1255,3 +1270,5 @@ router.post("/desktop/posting-rules", async (req, res) => {
 
 module.exports =
   router;
+
+module.exports.bindTrustedCommandInput = bindTrustedCommandInput;

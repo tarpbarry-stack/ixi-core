@@ -1418,7 +1418,15 @@ async function executeCreateFinancialDocumentCommand(
       validation,
 
       errors:
-        validation.errors,
+        validation.errors.map(error =>
+          typeof error === "string"
+            ? {
+                name: "IXIFinancialValidationError",
+                message: error,
+                details: {}
+              }
+            : error
+        ),
 
       warnings:
         validation.warnings
