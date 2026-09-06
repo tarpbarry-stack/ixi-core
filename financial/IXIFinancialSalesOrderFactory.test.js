@@ -49,3 +49,38 @@ test("equipment Sales Order rejects forged totals", () => {
   assert.equal(validation.ok, false);
   assert.ok(validation.errors.includes("sales order customer total is invalid."));
 });
+
+test("manual outside-IXI signature attestation is valid without an internally hosted terms file", () => {
+  const document = createFinancialDocumentByType({ documentType: "sales-order", input: input() });
+  document.salesOrder.status = "signed-invoice-pending";
+  document.salesOrder.termsDocument = { documentId: "", version: "", sha256: "", url: "", pageCount: 0 };
+  document.salesOrder.signing = {
+    status: "signed",
+    signatureType: "external-document-attestation",
+    signatureValue: "SIGNED COPY ATTESTED ON FILE",
+    signerName: "Keith Clements",
+    signerDate: "2026-09-06",
+    receivedVia: "email",
+    attestedAt: "2026-09-06T06:37:06.000Z",
+    attestedByPassportId: "pass_actor",
+    signedAt: "2026-09-06T06:37:06.000Z",
+    signedPackageHash: "b".repeat(64),
+  };
+
+  const validation = validateFinancialDocument(document);
+  assert.equal(validation.ok, true, validation.errors.join("\n"));
+});
+
+test("an unsigned sales order cannot bypass counsel terms requirements", () => {
+  const document = createFinancialDocumentByType({ documentType: "sales-order", input: input() });
+  document.salesOrder.status = "signed-invoice-pending";
+  document.salesOrder.termsDocument = { documentId: "", version: "", sha256: "", url: "", pageCount: 0 };
+  document.salesOrder.signing = {
+    signedAt: "2026-09-06T06:37:06.000Z",
+    signedPackageHash: "b".repeat(64),
+  };
+
+  const validation = validateFinancialDocument(document);
+  assert.equal(validation.ok, false);
+  assert.ok(validation.errors.includes("signable sales order requires the exact two-page terms document identity, hash, and URL."));
+});

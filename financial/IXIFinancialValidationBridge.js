@@ -1516,6 +1516,14 @@ function validateFinancialDocument(
     const totals = safeObject(record.totals);
     const terms = safeObject(record.termsDocument);
     const signing = safeObject(record.signing);
+    const manualSignatureAttestation =
+      clean(signing.signatureType).toLowerCase() === "external-document-attestation" &&
+      clean(signing.signatureValue) === "SIGNED COPY ATTESTED ON FILE" &&
+      Boolean(clean(signing.signerName)) &&
+      /^\d{4}-\d{2}-\d{2}$/.test(clean(signing.signerDate)) &&
+      ["email", "paper", "other"].includes(clean(signing.receivedVia).toLowerCase()) &&
+      Boolean(clean(signing.attestedAt)) &&
+      Boolean(clean(signing.attestedByPassportId));
     const treatment = safeObject(source.accountingTreatment);
     const status = clean(record.status || "draft").toLowerCase();
     const subtotal = roundMoney(totals.subtotal);
@@ -1541,7 +1549,8 @@ function validateFinancialDocument(
     if (Number(totals.total) !== customerTotal) errors.push("sales order customer total is invalid.");
     if (Number(totals.balanceDue) !== balanceDue) errors.push("sales order balance due is invalid.");
     if (deposit > customerTotal) errors.push("sales order deposit cannot exceed customer total.");
-    if (["ready-for-signature", "sent-for-signature", "viewed", "signed-invoice-pending", "signed"].includes(status)) {
+    if (["ready-for-signature", "sent-for-signature", "viewed"].includes(status) ||
+        (["signed-invoice-pending", "signed"].includes(status) && !manualSignatureAttestation)) {
       if (!clean(record?.customer?.name) || !clean(record?.customer?.email || record?.customer?.phone)) errors.push("signable sales order requires customer identity and delivery contact.");
       if (!clean(record?.asset?.serialNumber)) errors.push("signable sales order requires serial/VIN.");
       if (!clean(terms.documentId) || !/^[a-f0-9]{64}$/i.test(clean(terms.sha256)) || !clean(terms.url) || Number(terms.pageCount) !== 2) errors.push("signable sales order requires the exact two-page terms document identity, hash, and URL.");
