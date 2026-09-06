@@ -89,6 +89,32 @@ function writeProjections(
   );
 }
 
+function projectionWithoutCalculationTime(
+  projection
+) {
+  if (!projection || typeof projection !== "object") {
+    return projection;
+  }
+
+  const {
+    calculatedAt,
+    ...economicProjection
+  } = projection;
+
+  return economicProjection;
+}
+
+function projectionsAreEconomicallyEqual(
+  current,
+  next
+) {
+  return JSON.stringify(
+    projectionWithoutCalculationTime(current)
+  ) === JSON.stringify(
+    projectionWithoutCalculationTime(next)
+  );
+}
+
 
 /* =========================================================
    BASIC HELPERS
@@ -997,6 +1023,20 @@ function rebuildEntityProjections(
   const projections =
     readProjections();
 
+  const previousEntityProjections = {};
+
+  Object.entries(projections).forEach(
+    ([key, projection]) => {
+      if (
+        projection?.entityId ===
+          normalizedEntityId
+      ) {
+        previousEntityProjections[key] =
+          projection;
+      }
+    }
+  );
+
 
   /*
    * Replace this Entity's projection set atomically.
@@ -1020,9 +1060,10 @@ function rebuildEntityProjections(
         true
     )
     .forEach(container => {
-      projections[
-        container.objectId
-      ] =
+      const currentProjection =
+        previousEntityProjections[container.objectId] || null;
+
+      const nextProjection =
         calculateContainerProjection({
           objects,
 
@@ -1033,6 +1074,18 @@ function rebuildEntityProjections(
 
           definitionCatalog
         });
+
+      /*
+       * Rebuilding an unchanged projection is a read-side assurance action.
+       * Keep its original calculatedAt so persistence can remain a true no-op.
+       */
+      projections[container.objectId] =
+        projectionsAreEconomicallyEqual(
+          currentProjection,
+          nextProjection
+        )
+          ? currentProjection
+          : nextProjection;
     });
 
 

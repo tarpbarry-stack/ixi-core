@@ -7,6 +7,16 @@ const Database = require("better-sqlite3");
 
 const stores = new Map();
 
+/*
+ * Short-lived operational state must remain durable, but it is not part of
+ * the business audit trail. Request replay entries are security nonces with a
+ * ten-minute retention window; archiving every nonce would create permanent
+ * audit noise and unbounded write amplification.
+ */
+const NON_AUDITED_COLLECTION_KEYS = new Set([
+  "internal-auth-replay.json"
+]);
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -131,6 +141,14 @@ class MosSqliteStore {
       ).get(key);
       const currentVersion = Number(current?.version || 0);
 
+      if (current && sha256(current.payload) !== current.payload_sha256) {
+        throw storageError(
+          "MOS_STORAGE_CHECKSUM_FAILED",
+          `MOS collection checksum failed before write: ${key}`,
+          { collectionKey: key, version: currentVersion }
+        );
+      }
+
       if (current && expectedVersion === undefined) {
         throw storageError(
           "MOS_STORAGE_CONFLICT",
@@ -147,12 +165,24 @@ class MosSqliteStore {
         );
       }
 
+      /*
+       * Idempotent commands are true no-ops. They do not advance the
+       * collection version, alter updated_at, or manufacture audit history.
+       */
+      if (current && checksum === current.payload_sha256) {
+        this.database.exec("COMMIT;");
+        this.observedVersions.set(key, currentVersion);
+        return value;
+      }
+
       if (current) {
-        this.database.prepare(`
-          INSERT OR IGNORE INTO mos_collection_history
-            (collection_key, version, payload, payload_sha256, archived_at)
-          VALUES (?, ?, ?, ?, ?)
-        `).run(key, currentVersion, current.payload, current.payload_sha256, timestamp);
+        if (!NON_AUDITED_COLLECTION_KEYS.has(key)) {
+          this.database.prepare(`
+            INSERT OR IGNORE INTO mos_collection_history
+              (collection_key, version, payload, payload_sha256, archived_at)
+            VALUES (?, ?, ?, ?, ?)
+          `).run(key, currentVersion, current.payload, current.payload_sha256, timestamp);
+        }
 
         const result = this.database.prepare(`
           UPDATE mos_collections

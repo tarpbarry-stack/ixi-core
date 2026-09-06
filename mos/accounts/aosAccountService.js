@@ -148,15 +148,32 @@ function bindOwnerMembershipIdentity({
     );
   }
 
-  const memberships = readMemberships();
-  const updated = {
-    ...membership,
+  const normalizedIdentity = {
     personObjectId:
       cleanText(personObjectId) || null,
     personPassportId:
       cleanText(personPassportId) || null,
     entityPassportId:
-      cleanText(entityPassportId) || null,
+      cleanText(entityPassportId) || null
+  };
+
+  /*
+   * AOS bootstrap is an assurance operation, not an edit. Preserve the
+   * existing membership revision when the canonical identity is already
+   * bound exactly as requested.
+   */
+  if (
+    (membership.personObjectId || null) === normalizedIdentity.personObjectId &&
+    (membership.personPassportId || null) === normalizedIdentity.personPassportId &&
+    (membership.entityPassportId || null) === normalizedIdentity.entityPassportId
+  ) {
+    return membership;
+  }
+
+  const memberships = readMemberships();
+  const updated = {
+    ...membership,
+    ...normalizedIdentity,
     updatedAt: nowIso()
   };
 

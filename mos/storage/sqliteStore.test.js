@@ -38,6 +38,47 @@ test("SQLite storage preserves canonical data with version and history", () => {
   store.close();
 });
 
+test("SQLite storage treats an identical canonical write as a true no-op", () => {
+  const files = fixture();
+  const store = new MosSqliteStore(files);
+  const value = { joe: { passportId: "IXI-JOE" } };
+
+  store.write(files.collectionPath, value);
+  store.read(files.collectionPath, {});
+  store.write(files.collectionPath, value);
+
+  assert.equal(store.inspect(files.collectionPath).version, 1);
+  assert.equal(
+    store.database.prepare(
+      "SELECT COUNT(*) AS count FROM mos_collection_history WHERE collection_key = ?"
+    ).get("objects.json").count,
+    0
+  );
+  store.close();
+});
+
+test("SQLite storage keeps request replay state out of business history", () => {
+  const files = fixture();
+  const store = new MosSqliteStore(files);
+  const replayPath = path.join(files.dataRoot, "internal-auth-replay.json");
+
+  store.write(replayPath, { request1: { createdAtMs: 1 } });
+  store.read(replayPath, {});
+  store.write(replayPath, {
+    request1: { createdAtMs: 1 },
+    request2: { createdAtMs: 2 }
+  });
+
+  assert.equal(store.inspect(replayPath).version, 2);
+  assert.equal(
+    store.database.prepare(
+      "SELECT COUNT(*) AS count FROM mos_collection_history WHERE collection_key = ?"
+    ).get("internal-auth-replay.json").count,
+    0
+  );
+  store.close();
+});
+
 test("SQLite storage rejects a stale concurrent writer", () => {
   const files = fixture();
   const first = new MosSqliteStore(files);
