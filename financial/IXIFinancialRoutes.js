@@ -22,24 +22,13 @@
  * IXI_FINANCIAL_STORAGE_PROVIDER
  */
 
+const express = require("express");
 
-const express =
-  require("express");
-
-
-const providerService =
-  require(
-    "./IXIFinancialProviderService"
-  );
-
+const providerService = require("./IXIFinancialProviderService");
 
 const {
-  resolveFinancialAccessContextFromRequest
-} =
-  require(
-    "./IXIFinancialAccessContextBridge"
-  );
-
+  resolveFinancialAccessContextFromRequest,
+} = require("./IXIFinancialAccessContextBridge");
 
 const {
   IXI_FINANCIAL_ACTIONS,
@@ -52,109 +41,65 @@ const {
 
   canAccessFinancialPassport,
 
-  getFinancialDocumentPassportIds
-} =
-  require(
-    "./IXIFinancialPermissionEngine"
-  );
-
+  getFinancialDocumentPassportIds,
+} = require("./IXIFinancialPermissionEngine");
 
 const {
-  getFinancialStorageProvider
-} =
-  require(
-    "./IXIFinancialStorageProvider"
-  );
+  getFinancialStorageProvider,
+} = require("./IXIFinancialStorageProvider");
 
+const financialStore = require("./IXIFinancialDynamoStore");
 
-const financialStore =
-  require(
-    "./IXIFinancialDynamoStore"
-  );
+const financialCommandRoutes = require("./IXIFinancialCommandRoutes");
 
+const { assertFinancialPeriodOpen } = require("./IXIFinancialCommandEngine");
 
-const financialCommandRoutes =
-  require(
-    "./IXIFinancialCommandRoutes"
-  );
-
-const authorizedFinancialService =
-  require(
-    "./IXIFinancialAuthorizedService"
-  );
+const authorizedFinancialService = require("./IXIFinancialAuthorizedService");
 
 const {
-  assertInvoiceCollectionPatchAvailable
+  assertInvoiceCollectionPatchAvailable,
 } = require("./IXIFinancialSalesCloseoutControl");
+const {
+  rebuildCanonicalSettlement,
+} = require("./IXIFinancialSettlementEngine");
 
 const {
   createFinancialAttachmentUpload,
-  completeFinancialAttachmentUpload
+  completeFinancialAttachmentUpload,
 } = require("./IXIFinancialAttachmentService");
 
 const {
   createInvitation: createSalesOrderSigningInvitation,
   packageSnapshot: createSalesOrderPackageSnapshot,
   ensureInvoiceForSalesOrder,
-  completeExternalSignature
+  completeExternalSignature,
 } = require("../sales/IXISalesSigningService");
 
 const {
-  createFinancialDashboardProjection
-} =
-  require(
-    "./IXIFinancialDashboardProjectionEngine"
-  );
-
+  createFinancialDashboardProjection,
+} = require("./IXIFinancialDashboardProjectionEngine");
 
 const {
-  discoverFinancialPassportScope
-} =
-  require(
-    "./IXIFinancialScopeDiscoveryService"
-  );
+  discoverFinancialPassportScope,
+} = require("./IXIFinancialScopeDiscoveryService");
 
+const { getFinancialGLProjection } = require("./IXIFinancialGLService");
 
-
-const {
-  getFinancialGLProjection
-} =
-  require(
-    "./IXIFinancialGLService"
-  );
-
-
-const router =
-  express.Router();
-
+const router = express.Router();
 
 /* =========================================================
    HELPERS
    ========================================================= */
 
-function clean(
-  value
-) {
-  return String(
-    value ??
-    ""
-  ).trim();
+function clean(value) {
+  return String(value ?? "").trim();
 }
 
-
-function safeObject(
-  value
-) {
-  return (
-    value &&
-    typeof value ===
-      "object" &&
-    !Array.isArray(value)
-  )
+function safeObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value)
     ? value
     : {};
 }
-
 
 function getBillPatchAction(existing = {}, merged = {}) {
   const type = clean(merged.documentType).toLowerCase();
@@ -174,27 +119,55 @@ function getBillPatchAction(existing = {}, merged = {}) {
     const afterApproval = clean(after?.approval?.status).toLowerCase();
     const beforeStatus = clean(before?.status).toLowerCase();
     const afterStatus = clean(after?.status).toLowerCase();
-    if (afterApproval === "approved" && beforeApproval !== "approved") return IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT;
-    if (["returned", "denied", "rejected"].includes(afterApproval) && beforeApproval !== afterApproval) return IXI_FINANCIAL_ACTIONS.REJECT_DOCUMENT;
-    if (["cancelled", "void"].includes(afterStatus) && beforeStatus !== afterStatus) return IXI_FINANCIAL_ACTIONS.VOID_DOCUMENT;
+    if (afterApproval === "approved" && beforeApproval !== "approved")
+      return IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT;
+    if (
+      ["returned", "denied", "rejected"].includes(afterApproval) &&
+      beforeApproval !== afterApproval
+    )
+      return IXI_FINANCIAL_ACTIONS.REJECT_DOCUMENT;
+    if (
+      ["cancelled", "void"].includes(afterStatus) &&
+      beforeStatus !== afterStatus
+    )
+      return IXI_FINANCIAL_ACTIONS.VOID_DOCUMENT;
     return IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT;
   }
-  if (!["bill", "supplier-invoice"].includes(type)) return IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT;
+  if (!["bill", "supplier-invoice"].includes(type))
+    return IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT;
   const before = safeObject(existing.billRecord);
   const after = safeObject(merged.billRecord);
   const beforeApproval = clean(before?.approval?.status).toLowerCase();
   const afterApproval = clean(after?.approval?.status).toLowerCase();
   const beforeState = clean(existing.financialState).toLowerCase();
   const afterState = clean(merged.financialState).toLowerCase();
-  if (afterApproval === "approved" && beforeApproval !== "approved") return IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT;
-  if (["rejected", "returned"].includes(afterApproval) && beforeApproval !== afterApproval) return IXI_FINANCIAL_ACTIONS.REJECT_DOCUMENT;
-  if (afterState === "void" && beforeState !== "void") return IXI_FINANCIAL_ACTIONS.VOID_DOCUMENT;
-  if (["partially-paid", "paid"].includes(afterState) && beforeState !== afterState) return IXI_FINANCIAL_ACTIONS.RECORD_PAYMENT;
-  if (clean(after?.purchaseMatch?.status).toLowerCase() === "matched" && clean(before?.purchaseMatch?.status).toLowerCase() === "exception") return IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT;
+  if (afterApproval === "approved" && beforeApproval !== "approved")
+    return IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT;
+  if (
+    ["rejected", "returned"].includes(afterApproval) &&
+    beforeApproval !== afterApproval
+  )
+    return IXI_FINANCIAL_ACTIONS.REJECT_DOCUMENT;
+  if (afterState === "void" && beforeState !== "void")
+    return IXI_FINANCIAL_ACTIONS.VOID_DOCUMENT;
+  if (
+    ["partially-paid", "paid"].includes(afterState) &&
+    beforeState !== afterState
+  )
+    return IXI_FINANCIAL_ACTIONS.RECORD_PAYMENT;
+  if (
+    clean(after?.purchaseMatch?.status).toLowerCase() === "matched" &&
+    clean(before?.purchaseMatch?.status).toLowerCase() === "exception"
+  )
+    return IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT;
   return IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT;
 }
 
-function bindPurchaseOrderActorEvidence(patch = {}, action = "", accessContext = {}) {
+function bindPurchaseOrderActorEvidence(
+  patch = {},
+  action = "",
+  accessContext = {},
+) {
   const source = safeObject(patch);
   const record = safeObject(source.purchaseOrderRecord);
   if (!Object.keys(record).length) return source;
@@ -219,20 +192,26 @@ function bindPurchaseOrderActorEvidence(patch = {}, action = "", accessContext =
       context: {
         ...safeObject(record.context),
         entityPassportId,
-        employeePassportId: actorPassportId
+        employeePassportId: actorPassportId,
       },
       approval,
       receiving,
       audit: {
         ...safeObject(record.audit),
         updatedAt: timestamp,
-        updatedBy: actorPassportId
-      }
-    }
+        updatedBy: actorPassportId,
+      },
+    },
   };
 }
 
-async function bindOperationalControlEvidence({ patch = {}, merged = {}, existing = {}, action = "", accessContext = {} } = {}) {
+async function bindOperationalControlEvidence({
+  patch = {},
+  merged = {},
+  existing = {},
+  action = "",
+  accessContext = {},
+} = {}) {
   const source = safeObject(patch);
   const type = clean(merged.documentType).toLowerCase();
   const actorPassportId = clean(accessContext.actorPassportId);
@@ -249,16 +228,16 @@ async function bindOperationalControlEvidence({ patch = {}, merged = {}, existin
         context: {
           ...safeObject(record.context),
           entityPassportId,
-          actorPassportId
+          actorPassportId,
         },
         audit: {
           ...safeObject(record.audit),
           createdAt: clean(prior?.audit?.createdAt || record?.audit?.createdAt),
           createdBy: clean(prior?.audit?.createdBy || record?.audit?.createdBy),
           updatedAt: timestamp,
-          updatedBy: actorPassportId
-        }
-      }
+          updatedBy: actorPassportId,
+        },
+      },
     };
   }
 
@@ -272,16 +251,16 @@ async function bindOperationalControlEvidence({ patch = {}, merged = {}, existin
         context: {
           ...safeObject(record.context),
           entityPassportId,
-          actorPassportId
+          actorPassportId,
         },
         audit: {
           ...safeObject(record.audit),
           createdAt: clean(prior?.audit?.createdAt || record?.audit?.createdAt),
           createdBy: clean(prior?.audit?.createdBy || record?.audit?.createdBy),
           updatedAt: timestamp,
-          updatedBy: actorPassportId
-        }
-      }
+          updatedBy: actorPassportId,
+        },
+      },
     };
   }
 
@@ -292,36 +271,224 @@ async function bindOperationalControlEvidence({ patch = {}, merged = {}, existin
       collectionCase: {
         ...record,
         context: { ...safeObject(record.context), entityPassportId },
-        audit: { ...safeObject(record.audit), updatedAt: timestamp, updatedBy: actorPassportId }
-      }
+        audit: {
+          ...safeObject(record.audit),
+          updatedAt: timestamp,
+          updatedBy: actorPassportId,
+        },
+      },
     };
   }
 
   if (type === "settlement") {
-    const record = { ...safeObject(merged.assetSettlement) };
+    let record = { ...safeObject(merged.assetSettlement) };
     const approving = action === IXI_FINANCIAL_ACTIONS.APPROVE_SETTLEMENT;
     const prior = safeObject(existing.assetSettlement);
-    if (approving && clean(prior.status).toLowerCase() !== "ready") throw Object.assign(new Error("Settlement approval requires a ready canonical Settlement."), { name: "IXIFinancialSettlementTransitionError" });
-    let status = approving ? "approved" : clean(prior.status || record.status).toLowerCase();
-    let paymentStatus = approving ? "unpaid" : clean(prior.paymentStatus || record.paymentStatus || "unpaid").toLowerCase();
+    if (approving && clean(prior.status).toLowerCase() !== "ready")
+      throw Object.assign(
+        new Error("Settlement approval requires a ready canonical Settlement."),
+        { name: "IXIFinancialSettlementTransitionError" },
+      );
+    const requestedStatus = clean(record.status).toLowerCase();
+    const reopening =
+      requestedStatus === "reopened" &&
+      ["approved", "partially-paid", "settled"].includes(
+        clean(prior.status).toLowerCase(),
+      );
+    if (reopening && clean(record?.correction?.reason).length < 3)
+      throw Object.assign(
+        new Error("Reopening a Settlement requires a correction reason."),
+        { name: "IXIFinancialSettlementTransitionError" },
+      );
+    let status = approving
+      ? "approved"
+      : reopening
+        ? "reopened"
+        : clean(requestedStatus || prior.status).toLowerCase();
+    let paymentStatus = approving
+      ? "unpaid"
+      : clean(
+          prior.paymentStatus || record.paymentStatus || "unpaid",
+        ).toLowerCase();
+    const canonicalList = await providerService.listDocumentsByPassport({
+      passportId: entityPassportId,
+    });
+    const saleResult = await providerService.getDocument({
+      financialDocumentId: clean(existing.sourceFinancialDocumentId),
+    });
+    if (!canonicalList?.ok || !saleResult?.ok)
+      throw Object.assign(
+        new Error("Settlement canonical sources could not be loaded."),
+        { name: "IXIFinancialSettlementReadError" },
+      );
+    const rebuilt = rebuildCanonicalSettlement({
+      financialDocument: { ...merged, assetSettlement: record },
+      saleInvoice: saleResult?.data?.record,
+      documents: canonicalList?.data?.documents || [],
+    });
+    record = {
+      ...safeObject(rebuilt.assetSettlement),
+      ...(reopening
+        ? {
+            version: Math.max(
+              Number(prior.version || 1) + 1,
+              Number(record.version || 1),
+            ),
+            correction: {
+              ...safeObject(record.correction),
+              reopenedAt: timestamp,
+              reopenedById: actorPassportId,
+              priorVersion: Number(prior.version || 1),
+            },
+          }
+        : {}),
+    };
     let waterfall = safeObject(record.waterfall);
-    let ownerPayments = Array.isArray(prior.ownerPayments) ? prior.ownerPayments : [];
-    if (!approving && ["approved", "partially-paid", "settled"].includes(clean(prior.status).toLowerCase())) {
-      const listed = await providerService.listDocumentsByPassport({ passportId: entityPassportId });
-      if (!listed?.ok) throw Object.assign(new Error("Settlement payment state could not be verified."), { name: "IXIFinancialSettlementReadError" });
+    let ownerPayments = Array.isArray(prior.ownerPayments)
+      ? prior.ownerPayments
+      : [];
+    if (
+      !approving &&
+      !reopening &&
+      ["approved", "partially-paid", "settled"].includes(
+        clean(prior.status).toLowerCase(),
+      )
+    ) {
+      const listed = canonicalList;
+      if (!listed?.ok)
+        throw Object.assign(
+          new Error("Settlement payment state could not be verified."),
+          { name: "IXIFinancialSettlementReadError" },
+        );
       const settlementId = clean(existing.financialDocumentId);
-      const payments = (Array.isArray(listed?.data?.documents) ? listed.data.documents : []).map(item => {
-        const envelope = safeObject(item?.record || item), document = safeObject(envelope.financialDocument || envelope);
-        return { ...document, metadata: { ...safeObject(envelope.metadata), ...safeObject(document.metadata) } };
-      }).filter(document => clean(document.documentType).toLowerCase() === "payment" && clean(document.paymentDirection).toLowerCase() === "outflow" && clean(document.sourceFinancialDocumentId) === settlementId && !["void", "reversed"].includes(clean(document.financialState).toLowerCase()));
+      const payments = (
+        Array.isArray(listed?.data?.documents) ? listed.data.documents : []
+      )
+        .map((item) => {
+          const envelope = safeObject(item?.record || item),
+            document = safeObject(envelope.financialDocument || envelope);
+          return {
+            ...document,
+            metadata: {
+              ...safeObject(envelope.metadata),
+              ...safeObject(document.metadata),
+            },
+          };
+        })
+        .filter(
+          (document) =>
+            clean(document.documentType).toLowerCase() === "payment" &&
+            clean(document.paymentDirection).toLowerCase() === "outflow" &&
+            clean(document.sourceFinancialDocumentId) === settlementId &&
+            !["void", "reversed"].includes(
+              clean(document.financialState).toLowerCase(),
+            ),
+        );
       const paidByOwner = new Map();
-      payments.forEach(document => { const ownerId = clean(document?.metadata?.ownerId); if (ownerId) paidByOwner.set(ownerId, (paidByOwner.get(ownerId) || 0) + Math.abs(Number(document?.totals?.total || document?.totals?.subtotal || 0))); });
-      const owners = (Array.isArray(waterfall.owners) ? waterfall.owners : []).map(owner => { const ownerId = clean(owner?.ownerId), paid = Math.round((paidByOwner.get(ownerId) || 0) * 100) / 100, finalDue = Number(owner?.finalDue || 0); return { ...owner, paid, balanceDue: Math.round(Math.max(0, finalDue - paid) * 100) / 100 }; });
-      const totalPaid = owners.reduce((sum, owner) => sum + Number(owner.paid || 0), 0), totalBalance = owners.reduce((sum, owner) => sum + Number(owner.balanceDue || 0), 0);
-      status = totalBalance <= 0.005 ? "settled" : totalPaid > 0 ? "partially-paid" : "approved";
-      paymentStatus = status === "settled" ? "paid" : status === "partially-paid" ? "partial" : "unpaid";
+      payments.forEach((document) => {
+        const ownerId = clean(document?.metadata?.ownerId);
+        if (ownerId)
+          paidByOwner.set(
+            ownerId,
+            (paidByOwner.get(ownerId) || 0) +
+              Math.abs(
+                Number(
+                  document?.totals?.total || document?.totals?.subtotal || 0,
+                ),
+              ),
+          );
+      });
+      const owners = (
+        Array.isArray(waterfall.owners) ? waterfall.owners : []
+      ).map((owner) => {
+        const ownerId = clean(owner?.ownerId),
+          paid = Math.round((paidByOwner.get(ownerId) || 0) * 100) / 100,
+          finalDue = Number(owner?.finalDue || 0);
+        return {
+          ...owner,
+          paid,
+          balanceDue: Math.round(Math.max(0, finalDue - paid) * 100) / 100,
+        };
+      });
+      const paidByRecipient = new Map();
+      payments.forEach((document) => {
+        const id = clean(document?.metadata?.recipientId);
+        if (id)
+          paidByRecipient.set(
+            id,
+            (paidByRecipient.get(id) || 0) +
+              Math.abs(
+                Number(
+                  document?.totals?.total || document?.totals?.subtotal || 0,
+                ),
+              ),
+          );
+      });
+      const updateRecipients = (rows) =>
+        (Array.isArray(rows) ? rows : []).map((item) => {
+          const id = clean(
+              item.commissionId ||
+                item.liabilityId ||
+                item.disbursementId ||
+                item.rowId,
+            ),
+            paid = Math.round((paidByRecipient.get(id) || 0) * 100) / 100,
+            due = Number(item.finalAmount ?? item.amount ?? 0);
+          return {
+            ...item,
+            paid,
+            balanceDue: Math.round(Math.max(0, due - paid) * 100) / 100,
+          };
+        });
+      record = {
+        ...record,
+        commissions: updateRecipients(record.commissions),
+        liabilities: updateRecipients(record.liabilities),
+        disbursements: updateRecipients(record.disbursements),
+      };
+      const otherRecipients = [
+        ...record.commissions,
+        ...record.liabilities,
+        ...record.disbursements,
+      ];
+      const totalPaid =
+          owners.reduce((sum, owner) => sum + Number(owner.paid || 0), 0) +
+          otherRecipients.reduce(
+            (sum, item) => sum + Number(item.paid || 0),
+            0,
+          ),
+        totalBalance =
+          owners.reduce(
+            (sum, owner) => sum + Number(owner.balanceDue || 0),
+            0,
+          ) +
+          otherRecipients.reduce(
+            (sum, item) => sum + Number(item.balanceDue || 0),
+            0,
+          );
+      status =
+        totalBalance <= 0.005
+          ? "settled"
+          : totalPaid > 0
+            ? "partially-paid"
+            : "approved";
+      paymentStatus =
+        status === "settled"
+          ? "paid"
+          : status === "partially-paid"
+            ? "partial"
+            : "unpaid";
       waterfall = { ...waterfall, owners };
-      ownerPayments = payments.map(document => ({ paymentId: clean(document.financialDocumentId), ownerId: clean(document?.metadata?.ownerId), amount: Math.abs(Number(document?.totals?.total || document?.totals?.subtotal || 0)), date: clean(document.occurredAt), method: clean(document.paymentMethod), reference: clean(document.transactionReference) }));
+      ownerPayments = payments.map((document) => ({
+        paymentId: clean(document.financialDocumentId),
+        ownerId: clean(document?.metadata?.ownerId),
+        amount: Math.abs(
+          Number(document?.totals?.total || document?.totals?.subtotal || 0),
+        ),
+        date: clean(document.occurredAt),
+        method: clean(document.paymentMethod),
+        reference: clean(document.transactionReference),
+      }));
     }
     return {
       ...source,
@@ -334,236 +501,163 @@ async function bindOperationalControlEvidence({ patch = {}, merged = {}, existin
         waterfall,
         ownerPayments,
         context: { ...safeObject(record.context), entityPassportId },
-        controls: approving ? {
-          ...safeObject(record.controls),
-          approvedById: actorPassportId,
-          approvedAt: timestamp,
-          permissionEvidence: {
-            action: IXI_FINANCIAL_ACTIONS.APPROVE_SETTLEMENT,
-            actorPassportId,
-            entityPassportId,
-            allowed: true,
-            recordedAt: timestamp
-          }
-        } : safeObject(prior.controls || record.controls),
-        audit: { ...safeObject(record.audit), updatedAt: timestamp, updatedBy: actorPassportId }
-      }
+        controls: approving
+          ? {
+              ...safeObject(record.controls),
+              approvedById: actorPassportId,
+              approvedAt: timestamp,
+              permissionEvidence: {
+                action: IXI_FINANCIAL_ACTIONS.APPROVE_SETTLEMENT,
+                actorPassportId,
+                entityPassportId,
+                allowed: true,
+                recordedAt: timestamp,
+              },
+            }
+          : reopening
+            ? {
+                ...safeObject(record.controls),
+                approvedById: "",
+                approvedAt: "",
+                reopenedById: actorPassportId,
+                reopenedAt: timestamp,
+                reopenReason: clean(record?.correction?.reason),
+              }
+            : safeObject(record.controls || prior.controls),
+        audit: {
+          ...safeObject(record.audit),
+          updatedAt: timestamp,
+          updatedBy: actorPassportId,
+        },
+      },
     };
   }
 
   return source;
 }
 
-
 function bindBillActorEvidence(patch = {}, action = "", actorPassportId = "") {
   const source = safeObject(patch);
-  if (!["bill", "supplier-invoice"].includes(clean(source.documentType).toLowerCase()) && !source.billRecord) return source;
+  if (
+    !["bill", "supplier-invoice"].includes(
+      clean(source.documentType).toLowerCase(),
+    ) &&
+    !source.billRecord
+  )
+    return source;
   const record = safeObject(source.billRecord);
   if (!Object.keys(record).length) return source;
   const approval = { ...safeObject(record.approval) };
   const purchaseMatch = { ...safeObject(record.purchaseMatch) };
-  if (action === IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT && clean(approval.status).toLowerCase() === "approved") approval.approvedById = clean(actorPassportId);
-  if (action === IXI_FINANCIAL_ACTIONS.REJECT_DOCUMENT && clean(approval.status).toLowerCase() === "rejected") approval.rejectedById = clean(actorPassportId);
-  if (action === IXI_FINANCIAL_ACTIONS.REJECT_DOCUMENT && clean(approval.status).toLowerCase() === "returned") approval.returnedById = clean(actorPassportId);
-  if (action === IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT && purchaseMatch.varianceApproval) purchaseMatch.varianceApproval = { ...safeObject(purchaseMatch.varianceApproval), approvedById: clean(actorPassportId) };
+  if (
+    action === IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT &&
+    clean(approval.status).toLowerCase() === "approved"
+  )
+    approval.approvedById = clean(actorPassportId);
+  if (
+    action === IXI_FINANCIAL_ACTIONS.REJECT_DOCUMENT &&
+    clean(approval.status).toLowerCase() === "rejected"
+  )
+    approval.rejectedById = clean(actorPassportId);
+  if (
+    action === IXI_FINANCIAL_ACTIONS.REJECT_DOCUMENT &&
+    clean(approval.status).toLowerCase() === "returned"
+  )
+    approval.returnedById = clean(actorPassportId);
+  if (
+    action === IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT &&
+    purchaseMatch.varianceApproval
+  )
+    purchaseMatch.varianceApproval = {
+      ...safeObject(purchaseMatch.varianceApproval),
+      approvedById: clean(actorPassportId),
+    };
   return { ...source, billRecord: { ...record, approval, purchaseMatch } };
 }
 
-
-function firstError(
-  envelope
-) {
-  return Array.isArray(
-    envelope?.errors
-  )
-    ? envelope.errors[0] ||
-      null
-    : null;
+function firstError(envelope) {
+  return Array.isArray(envelope?.errors) ? envelope.errors[0] || null : null;
 }
-
 
 /* =========================================================
    REQUEST CONTEXT
    ========================================================= */
 
-function getRequestContext(
-  req
-) {
-  const forwardedFor =
-    clean(
-      req.headers[
-        "x-forwarded-for"
-      ]
-    );
-
+function getRequestContext(req) {
+  const forwardedFor = clean(req.headers["x-forwarded-for"]);
 
   return {
-    requestId:
-      clean(
-        req.headers[
-          "x-request-id"
-        ]
-      ),
+    requestId: clean(req.headers["x-request-id"]),
 
-    source:
-      clean(
-        req.headers[
-          "x-ixi-source"
-        ] ||
-        "ixi-http"
-      ),
+    source: clean(req.headers["x-ixi-source"] || "ixi-http"),
 
-    sourceIp:
-      forwardedFor
-        ? forwardedFor
-            .split(",")[0]
-            .trim()
-        : clean(
-            req.ip ||
-            req.socket
-              ?.remoteAddress
-          ),
+    sourceIp: forwardedFor
+      ? forwardedFor.split(",")[0].trim()
+      : clean(req.ip || req.socket?.remoteAddress),
 
-    userAgent:
-      clean(
-        req.headers[
-          "user-agent"
-        ]
-      )
+    userAgent: clean(req.headers["user-agent"]),
   };
 }
-
 
 /* =========================================================
    STATUS
    ========================================================= */
 
-function getEnvelopeStatus(
-  envelope,
-  {
-    successStatus = 200
-  } = {}
-) {
-  if (
-    envelope?.ok
-  ) {
+function getEnvelopeStatus(envelope, { successStatus = 200 } = {}) {
+  if (envelope?.ok) {
     return successStatus;
   }
 
+  const error = firstError(envelope);
 
-  const error =
-    firstError(
-      envelope
-    );
+  const name = clean(error?.name);
 
+  const message = clean(error?.message || error).toLowerCase();
 
-  const name =
-    clean(
-      error?.name
-    );
-
-
-  const message =
-    clean(
-      error?.message ||
-      error
-    ).toLowerCase();
-
-
-  if (
-    name ===
-      "IXIFinancialAuthenticationError"
-  ) {
+  if (name === "IXIFinancialAuthenticationError") {
     return 401;
   }
 
-
-  if (
-    name ===
-      "IXIFinancialAuthorizationError"
-  ) {
+  if (name === "IXIFinancialAuthorizationError") {
     return 403;
   }
 
-
-  if (
-    name ===
-      "IXIFinancialNotFoundError" ||
-    message.includes(
-      "not found"
-    )
-  ) {
+  if (name === "IXIFinancialNotFoundError" || message.includes("not found")) {
     return 404;
   }
 
-
   if (
-    name ===
-      "IXIFinancialConflictError" ||
-    name ===
-      "IXIFinancialRevisionConflictError" ||
-    message.includes(
-      "already exists"
-    ) ||
-    message.includes(
-      "revision"
-    )
+    name === "IXIFinancialConflictError" ||
+    name === "IXIFinancialRevisionConflictError" ||
+    message.includes("already exists") ||
+    message.includes("revision")
   ) {
     return 409;
   }
 
-
   if (
-    name ===
-      "IXIFinancialValidationError" ||
-    envelope
-      ?.data
-      ?.validation ||
-    message.includes(
-      "required"
-    ) ||
-    message.includes(
-      "invalid"
-    )
+    name === "IXIFinancialValidationError" ||
+    envelope?.data?.validation ||
+    message.includes("required") ||
+    message.includes("invalid")
   ) {
     return 400;
   }
 
-
   return 500;
 }
 
-
-function sendEnvelope(
-  res,
-  envelope,
-  options = {}
-) {
-  return res
-    .status(
-      getEnvelopeStatus(
-        envelope,
-        options
-      )
-    )
-    .json(
-      envelope
-    );
+function sendEnvelope(res, envelope, options = {}) {
+  return res.status(getEnvelopeStatus(envelope, options)).json(envelope);
 }
-
 
 /* =========================================================
    ACCESS
    ========================================================= */
 
-async function getAccess(
-  req
-) {
-  return resolveFinancialAccessContextFromRequest(
-    req
-  );
+async function getAccess(req) {
+  return resolveFinancialAccessContextFromRequest(req);
 }
-
 
 /* =========================================================
    AUTH FAILURE
@@ -574,67 +668,50 @@ function createAuthorizationFailure({
   operation = "",
   action = "",
   reason = "permission-denied",
-  details = {}
+  details = {},
 } = {}) {
-  const context =
-    normalizeFinancialAccessContext(
-      accessContext
-    );
-
+  const context = normalizeFinancialAccessContext(accessContext);
 
   return {
-    ok:
-      false,
+    ok: false,
 
-    contract:
-      "ixi-financial",
+    contract: "ixi-financial",
 
-    contractVersion:
-      "1.0.0",
+    contractVersion: "1.0.0",
 
     operation,
 
-    requestId:
-      "",
+    requestId: "",
 
-    data:
-      null,
+    data: null,
 
     errors: [
       {
-        name:
-          !context.authenticated
-            ? "IXIFinancialAuthenticationError"
-            : "IXIFinancialAuthorizationError",
+        name: !context.authenticated
+          ? "IXIFinancialAuthenticationError"
+          : "IXIFinancialAuthorizationError",
 
-        message:
-          !context.authenticated
-            ? "Financial authentication required."
-            : "Financial permission denied.",
+        message: !context.authenticated
+          ? "Financial authentication required."
+          : "Financial permission denied.",
 
         details: {
           reason,
 
           action,
 
-          actorPassportId:
-            context.actorPassportId,
+          actorPassportId: context.actorPassportId,
 
-          ...safeObject(
-            details
-          )
-        }
-      }
+          ...safeObject(details),
+        },
+      },
     ],
 
-    warnings:
-      [],
+    warnings: [],
 
-    metadata:
-      {}
+    metadata: {},
   };
 }
-
 
 /* =========================================================
    DOCUMENT READ AUTH
@@ -644,18 +721,14 @@ async function authorizeDocumentRead({
   accessContext,
   financialDocumentId,
   action,
-  operation
+  operation,
 }) {
-  const base =
-    authorizeFinancialAction({
-      accessContext,
-      action
-    });
+  const base = authorizeFinancialAction({
+    accessContext,
+    action,
+  });
 
-
-  if (
-    !base.allowed
-  ) {
+  if (!base.allowed) {
     return createAuthorizationFailure({
       accessContext,
 
@@ -663,81 +736,40 @@ async function authorizeDocumentRead({
 
       action,
 
-      reason:
-        base.reason
+      reason: base.reason,
     });
   }
 
+  const provider = getFinancialStorageProvider();
 
-  const provider =
-    getFinancialStorageProvider();
+  const record = await provider.getFinancialDocumentRecord(financialDocumentId);
 
-
-  const record =
-    await provider
-      .getFinancialDocumentRecord(
-        financialDocumentId
-      );
-
-
-  if (
-    !record
-  ) {
+  if (!record) {
     return null;
   }
 
-
-  const passportIds =
-    getFinancialDocumentPassportIds(
-      record.financialDocument
-    );
-
+  const passportIds = getFinancialDocumentPassportIds(record.financialDocument);
 
   const entityMatch =
-    clean(
-      record
-        ?.server
-        ?.entityPassportId
-    ) &&
-    clean(
-      record
-        ?.server
-        ?.entityPassportId
-    ) ===
-      clean(
-        accessContext
-          ?.entityPassportId
-      );
+    clean(record?.server?.entityPassportId) &&
+    clean(record?.server?.entityPassportId) ===
+      clean(accessContext?.entityPassportId);
 
-
-  const passportMatch =
-    passportIds.some(
-      passportId =>
-        canAccessFinancialPassport({
-          accessContext,
-          passportId
-        })
-    );
-
+  const passportMatch = passportIds.some((passportId) =>
+    canAccessFinancialPassport({
+      accessContext,
+      passportId,
+    }),
+  );
 
   const isAdmin =
-    normalizeFinancialAccessContext(
-      accessContext
-    )
-      .roles
-      .includes(
-        "financial-admin"
-      );
+    normalizeFinancialAccessContext(accessContext).roles.includes(
+      "financial-admin",
+    );
 
-
-  if (
-    isAdmin ||
-    entityMatch ||
-    passportMatch
-  ) {
+  if (isAdmin || entityMatch || passportMatch) {
     return null;
   }
-
 
   return createAuthorizationFailure({
     accessContext,
@@ -746,200 +778,122 @@ async function authorizeDocumentRead({
 
     action,
 
-    reason:
-      "document-scope-denied",
+    reason: "document-scope-denied",
 
     details: {
       financialDocumentId,
 
-      documentPassportIds:
-        passportIds
-    }
+      documentPassportIds: passportIds,
+    },
   });
 }
-
 
 /* =========================================================
    HEALTH
    ========================================================= */
 
-router.get(
-  "/health",
-  async (
-    req,
-    res
-  ) => {
-
-    return sendEnvelope(
-      res,
-      await providerService
-        .getHealth()
-    );
-  }
-);
-
+router.get("/health", async (req, res) => {
+  return sendEnvelope(res, await providerService.getHealth());
+});
 
 /* =========================================================
    CREATE
    ========================================================= */
 
-router.post(
-  "/documents",
-  async (
-    req,
-    res
-  ) => {
+router.post("/documents", async (req, res) => {
+  const accessContext = await getAccess(req);
 
-    const accessContext =
-      await getAccess(
-        req
-      );
+  const context = getRequestContext(req);
 
+  const financialDocument = req.body?.financialDocument || req.body?.document;
 
-    const context =
-      getRequestContext(
-        req
-      );
-
-
-    const financialDocument =
-      req.body
-        ?.financialDocument ||
-      req.body
-        ?.document;
-
-    const directType=clean(financialDocument?.documentType).toLowerCase(),treasuryMovement=clean(financialDocument?.treasuryMovement?.transactionClass);
-    if(["treasury-account","treasury-reconciliation"].includes(directType)||(directType==="payment"&&treasuryMovement)) return res.status(409).json({ok:false,error:{name:"IXITreasuryCommandRequiredError",message:"Treasury records may only be written through the controlled financial command endpoint."}});
-
-
-    const authorization =
-      authorizeFinancialDocumentWrite({
-        accessContext,
-
-        action:
-          IXI_FINANCIAL_ACTIONS
-            .CREATE_DOCUMENT,
-
-        financialDocument
+  const directType = clean(financialDocument?.documentType).toLowerCase(),
+    treasuryMovement = clean(
+      financialDocument?.treasuryMovement?.transactionClass,
+    );
+  if (
+    ["treasury-account", "treasury-reconciliation"].includes(directType) ||
+    (directType === "payment" && treasuryMovement)
+  )
+    return res
+      .status(409)
+      .json({
+        ok: false,
+        error: {
+          name: "IXITreasuryCommandRequiredError",
+          message:
+            "Treasury records may only be written through the controlled financial command endpoint.",
+        },
       });
 
+  const authorization = authorizeFinancialDocumentWrite({
+    accessContext,
 
-    if (
-      !authorization.allowed
-    ) {
-      return sendEnvelope(
-        res,
-        createAuthorizationFailure({
-          accessContext,
+    action: IXI_FINANCIAL_ACTIONS.CREATE_DOCUMENT,
 
-          operation:
-            "financial.document.create",
+    financialDocument,
+  });
 
-          action:
-            IXI_FINANCIAL_ACTIONS
-              .CREATE_DOCUMENT,
-
-          reason:
-            authorization.reason,
-
-          details:
-            authorization
-        })
-      );
-    }
-
-
-    const envelope =
-      await providerService
-        .createDocument({
-          ...safeObject(
-            req.body
-          ),
-
-          ...context,
-
-          actorPassportId:
-            accessContext
-              .actorPassportId,
-
-          entityPassportId:
-            accessContext
-              .entityPassportId
-        });
-
-
+  if (!authorization.allowed) {
     return sendEnvelope(
       res,
-      envelope,
-      {
-        successStatus:
-          envelope
-            ?.data
-            ?.created
-              ? 201
-              : 200
-      }
+      createAuthorizationFailure({
+        accessContext,
+
+        operation: "financial.document.create",
+
+        action: IXI_FINANCIAL_ACTIONS.CREATE_DOCUMENT,
+
+        reason: authorization.reason,
+
+        details: authorization,
+      }),
     );
   }
-);
 
+  const envelope = await providerService.createDocument({
+    ...safeObject(req.body),
+
+    ...context,
+
+    actorPassportId: accessContext.actorPassportId,
+
+    entityPassportId: accessContext.entityPassportId,
+  });
+
+  return sendEnvelope(res, envelope, {
+    successStatus: envelope?.data?.created ? 201 : 200,
+  });
+});
 
 /* =========================================================
    GET DOCUMENT
    ========================================================= */
 
-router.get(
-  "/documents/:financialDocumentId",
-  async (
-    req,
-    res
-  ) => {
+router.get("/documents/:financialDocumentId", async (req, res) => {
+  const accessContext = await getAccess(req);
 
-    const accessContext =
-      await getAccess(
-        req
-      );
+  const failure = await authorizeDocumentRead({
+    accessContext,
 
+    financialDocumentId: req.params.financialDocumentId,
 
-    const failure =
-      await authorizeDocumentRead({
-        accessContext,
+    action: IXI_FINANCIAL_ACTIONS.VIEW_DOCUMENT,
 
-        financialDocumentId:
-          req.params
-            .financialDocumentId,
+    operation: "financial.document.get",
+  });
 
-        action:
-          IXI_FINANCIAL_ACTIONS
-            .VIEW_DOCUMENT,
-
-        operation:
-          "financial.document.get"
-      });
-
-
-    if (
-      failure
-    ) {
-      return sendEnvelope(
-        res,
-        failure
-      );
-    }
-
-
-    return sendEnvelope(
-      res,
-      await providerService
-        .getDocument({
-          financialDocumentId:
-            req.params
-              .financialDocumentId
-        })
-    );
+  if (failure) {
+    return sendEnvelope(res, failure);
   }
-);
 
+  return sendEnvelope(
+    res,
+    await providerService.getDocument({
+      financialDocumentId: req.params.financialDocumentId,
+    }),
+  );
+});
 
 /* =========================================================
    SALES ORDER SIGNING INVITATION
@@ -952,16 +906,19 @@ router.post(
     const financialDocumentId = clean(req.params.financialDocumentId);
     const baseAuthorization = authorizeFinancialAction({
       accessContext,
-      action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT
+      action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
     });
     if (!baseAuthorization.allowed) {
-      return sendEnvelope(res, createAuthorizationFailure({
-        accessContext,
-        operation: "financial.sales-order.signing-invitation.create",
-        action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
-        reason: baseAuthorization.reason,
-        details: baseAuthorization
-      }));
+      return sendEnvelope(
+        res,
+        createAuthorizationFailure({
+          accessContext,
+          operation: "financial.sales-order.signing-invitation.create",
+          action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
+          reason: baseAuthorization.reason,
+          details: baseAuthorization,
+        }),
+      );
     }
     const loaded = await providerService.getDocument({ financialDocumentId });
     const record = loaded?.data?.record;
@@ -971,23 +928,32 @@ router.post(
     if (clean(financialDocument.documentType).toLowerCase() !== "sales-order") {
       return res.status(409).json({
         ok: false,
-        errors: [{ name: "IXISalesOrderRequiredError", message: "A signing invitation can only be created for a Sales Order." }]
+        errors: [
+          {
+            name: "IXISalesOrderRequiredError",
+            message:
+              "A signing invitation can only be created for a Sales Order.",
+          },
+        ],
       });
     }
 
     const authorization = authorizeFinancialDocumentWrite({
       accessContext,
       action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
-      financialDocument
+      financialDocument,
     });
     if (!authorization.allowed) {
-      return sendEnvelope(res, createAuthorizationFailure({
-        accessContext,
-        operation: "financial.sales-order.signing-invitation.create",
-        action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
-        reason: authorization.reason,
-        details: authorization
-      }));
+      return sendEnvelope(
+        res,
+        createAuthorizationFailure({
+          accessContext,
+          operation: "financial.sales-order.signing-invitation.create",
+          action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
+          reason: authorization.reason,
+          details: authorization,
+        }),
+      );
     }
 
     try {
@@ -995,9 +961,25 @@ router.post(
         financialDocument,
         revision: Number(record?.server?.revision),
         expiresInHours: req.body?.expiresInHours,
-        idempotencyKey: clean(req.body?.idempotencyKey)
+        idempotencyKey: clean(req.body?.idempotencyKey),
       });
-      if (invitation.idempotentReplay) return res.status(200).json({ ok: true, data: { financialDocumentId, signingToken: invitation.token, signingPath: `/sales-sign/${invitation.token}`, expiresAt: invitation.expiresAt, tokenVersion: invitation.tokenVersion, record, idempotentReplay: true }, errors: [], warnings: [] });
+      if (invitation.idempotentReplay)
+        return res
+          .status(200)
+          .json({
+            ok: true,
+            data: {
+              financialDocumentId,
+              signingToken: invitation.token,
+              signingPath: `/sales-sign/${invitation.token}`,
+              expiresAt: invitation.expiresAt,
+              tokenVersion: invitation.tokenVersion,
+              record,
+              idempotentReplay: true,
+            },
+            errors: [],
+            warnings: [],
+          });
       const context = getRequestContext(req);
       const patched = await providerService.patchDocument({
         financialDocumentId,
@@ -1007,7 +989,10 @@ router.post(
         ...context,
         commandId: clean(req.body?.commandId),
         idempotencyKey: clean(req.body?.idempotencyKey),
-        metadata: { ...safeObject(req.body?.metadata), operation: "sales-order-signing-invitation" }
+        metadata: {
+          ...safeObject(req.body?.metadata),
+          operation: "sales-order-signing-invitation",
+        },
       });
       if (!patched?.ok) return sendEnvelope(res, patched);
       return res.status(201).json({
@@ -1018,18 +1003,25 @@ router.post(
           signingPath: `/sales-sign/${invitation.token}`,
           expiresAt: invitation.expiresAt,
           tokenVersion: invitation.tokenVersion,
-          record: patched.data?.record || null
+          record: patched.data?.record || null,
         },
         errors: [],
-        warnings: patched.warnings || []
+        warnings: patched.warnings || [],
       });
     } catch (error) {
       return res.status(409).json({
         ok: false,
-        errors: [{ name: clean(error?.name || "IXISalesSigningInvitationError"), message: clean(error?.message || "Signing invitation could not be created.") }]
+        errors: [
+          {
+            name: clean(error?.name || "IXISalesSigningInvitationError"),
+            message: clean(
+              error?.message || "Signing invitation could not be created.",
+            ),
+          },
+        ],
       });
     }
-  }
+  },
 );
 
 router.post(
@@ -1037,25 +1029,40 @@ router.post(
   async (req, res) => {
     const accessContext = await getAccess(req);
     const financialDocumentId = clean(req.params.financialDocumentId);
-    const baseAuthorization = authorizeFinancialAction({ accessContext, action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT });
-    if (!baseAuthorization.allowed) return sendEnvelope(res, createAuthorizationFailure({
+    const baseAuthorization = authorizeFinancialAction({
       accessContext,
-      operation: "financial.sales-order.invoice.ensure",
       action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
-      reason: baseAuthorization.reason,
-      details: baseAuthorization,
-    }));
+    });
+    if (!baseAuthorization.allowed)
+      return sendEnvelope(
+        res,
+        createAuthorizationFailure({
+          accessContext,
+          operation: "financial.sales-order.invoice.ensure",
+          action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
+          reason: baseAuthorization.reason,
+          details: baseAuthorization,
+        }),
+      );
     const loaded = await providerService.getDocument({ financialDocumentId });
     const financialDocument = loaded?.data?.record?.financialDocument;
     if (!loaded?.ok || !financialDocument) return sendEnvelope(res, loaded);
-    const authorization = authorizeFinancialDocumentWrite({ accessContext, action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT, financialDocument });
-    if (!authorization.allowed) return sendEnvelope(res, createAuthorizationFailure({
+    const authorization = authorizeFinancialDocumentWrite({
       accessContext,
-      operation: "financial.sales-order.invoice.ensure",
       action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
-      reason: authorization.reason,
-      details: authorization,
-    }));
+      financialDocument,
+    });
+    if (!authorization.allowed)
+      return sendEnvelope(
+        res,
+        createAuthorizationFailure({
+          accessContext,
+          operation: "financial.sales-order.invoice.ensure",
+          action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
+          reason: authorization.reason,
+          details: authorization,
+        }),
+      );
     try {
       const context = getRequestContext(req);
       const result = await ensureInvoiceForSalesOrder(financialDocumentId, {
@@ -1063,7 +1070,9 @@ router.post(
         actorPassportId: accessContext.actorPassportId,
         entityPassportId: accessContext.entityPassportId,
       });
-      const refreshed = await providerService.getDocument({ financialDocumentId });
+      const refreshed = await providerService.getDocument({
+        financialDocumentId,
+      });
       return res.status(result.idempotentReplay ? 200 : 201).json({
         ok: true,
         data: {
@@ -1077,12 +1086,21 @@ router.post(
         warnings: [],
       });
     } catch (error) {
-      return res.status(409).json({ ok: false, data: null, errors: [{
-        name: clean(error?.name || "IXISalesOrderInvoiceEnsureError"),
-        message: clean(error?.message || "Linked Invoice could not be ensured."),
-      }], warnings: [] });
+      return res.status(409).json({
+        ok: false,
+        data: null,
+        errors: [
+          {
+            name: clean(error?.name || "IXISalesOrderInvoiceEnsureError"),
+            message: clean(
+              error?.message || "Linked Invoice could not be ensured.",
+            ),
+          },
+        ],
+        warnings: [],
+      });
     }
-  }
+  },
 );
 
 router.post(
@@ -1090,33 +1108,54 @@ router.post(
   async (req, res) => {
     const accessContext = await getAccess(req);
     const financialDocumentId = clean(req.params.financialDocumentId);
-    const baseAuthorization = authorizeFinancialAction({ accessContext, action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT });
-    if (!baseAuthorization.allowed) return sendEnvelope(res, createAuthorizationFailure({
+    const baseAuthorization = authorizeFinancialAction({
       accessContext,
-      operation: "financial.sales-order.manual-signature.complete",
       action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
-      reason: baseAuthorization.reason,
-      details: baseAuthorization,
-    }));
+    });
+    if (!baseAuthorization.allowed)
+      return sendEnvelope(
+        res,
+        createAuthorizationFailure({
+          accessContext,
+          operation: "financial.sales-order.manual-signature.complete",
+          action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
+          reason: baseAuthorization.reason,
+          details: baseAuthorization,
+        }),
+      );
     const loaded = await providerService.getDocument({ financialDocumentId });
     const financialDocument = loaded?.data?.record?.financialDocument;
     if (!loaded?.ok || !financialDocument) return sendEnvelope(res, loaded);
-    const authorization = authorizeFinancialDocumentWrite({ accessContext, action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT, financialDocument });
-    if (!authorization.allowed) return sendEnvelope(res, createAuthorizationFailure({
+    const authorization = authorizeFinancialDocumentWrite({
       accessContext,
-      operation: "financial.sales-order.manual-signature.complete",
       action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
-      reason: authorization.reason,
-      details: authorization,
-    }));
+      financialDocument,
+    });
+    if (!authorization.allowed)
+      return sendEnvelope(
+        res,
+        createAuthorizationFailure({
+          accessContext,
+          operation: "financial.sales-order.manual-signature.complete",
+          action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
+          reason: authorization.reason,
+          details: authorization,
+        }),
+      );
     try {
       const context = getRequestContext(req);
-      const result = await completeExternalSignature(financialDocumentId, req.body || {}, {
-        ...context,
-        actorPassportId: accessContext.actorPassportId,
-        entityPassportId: accessContext.entityPassportId,
+      const result = await completeExternalSignature(
+        financialDocumentId,
+        req.body || {},
+        {
+          ...context,
+          actorPassportId: accessContext.actorPassportId,
+          entityPassportId: accessContext.entityPassportId,
+        },
+      );
+      const refreshed = await providerService.getDocument({
+        financialDocumentId,
       });
-      const refreshed = await providerService.getDocument({ financialDocumentId });
       return res.status(result.idempotentReplay ? 200 : 201).json({
         ok: true,
         data: {
@@ -1130,14 +1169,22 @@ router.post(
         warnings: [],
       });
     } catch (error) {
-      return res.status(409).json({ ok: false, data: null, errors: [{
-        name: clean(error?.name || "IXISalesManualSignatureError"),
-        message: clean(error?.message || "Manual signature could not be recorded."),
-      }], warnings: [] });
+      return res.status(409).json({
+        ok: false,
+        data: null,
+        errors: [
+          {
+            name: clean(error?.name || "IXISalesManualSignatureError"),
+            message: clean(
+              error?.message || "Manual signature could not be recorded.",
+            ),
+          },
+        ],
+        warnings: [],
+      });
     }
-  }
+  },
 );
-
 
 /* =========================================================
    DOCUMENT EVIDENCE UPLOAD
@@ -1150,16 +1197,17 @@ async function authorizeAttachmentWrite(req, operation) {
     accessContext,
     financialDocumentId,
     action: IXI_FINANCIAL_ACTIONS.VIEW_DOCUMENT,
-    operation
+    operation,
   });
   if (failure) return { accessContext, failure };
   const provider = getFinancialStorageProvider();
-  const existing = await provider.getFinancialDocumentRecord(financialDocumentId);
+  const existing =
+    await provider.getFinancialDocumentRecord(financialDocumentId);
   if (!existing) return { accessContext, missing: true };
   const authorization = authorizeFinancialDocumentWrite({
     accessContext,
     action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
-    financialDocument: existing.financialDocument
+    financialDocument: existing.financialDocument,
   });
   if (!authorization.allowed) {
     return {
@@ -1169,608 +1217,561 @@ async function authorizeAttachmentWrite(req, operation) {
         operation,
         action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
         reason: authorization.reason,
-        details: authorization
-      })
+        details: authorization,
+      }),
     };
   }
   return { accessContext, existing };
 }
 
-router.post("/documents/:financialDocumentId/attachments/init", async (req, res) => {
-  const operation = "financial.attachment.init";
-  try {
-    const authorization = await authorizeAttachmentWrite(req, operation);
-    if (authorization.failure) return sendEnvelope(res, authorization.failure);
-    if (authorization.missing) return res.status(404).json({ ok: false, errors: [{ name: "IXIFinancialNotFoundError", message: "Financial document not found." }] });
-    const upload = await createFinancialAttachmentUpload({
-      ...safeObject(req.body),
-      financialDocumentId: req.params.financialDocumentId,
-      entityPassportId: authorization.accessContext.entityPassportId
-    });
-    return res.status(201).json({ ok: true, contract: "ixi-financial-attachment", operation, data: { upload }, errors: [], warnings: [] });
-  } catch (error) {
-    return res.status(400).json({ ok: false, contract: "ixi-financial-attachment", operation, data: null, errors: [{ name: clean(error?.name || "IXIFinancialAttachmentError"), message: clean(error?.message || "Evidence upload could not be initialized.") }], warnings: [] });
-  }
-});
+router.post(
+  "/documents/:financialDocumentId/attachments/init",
+  async (req, res) => {
+    const operation = "financial.attachment.init";
+    try {
+      const authorization = await authorizeAttachmentWrite(req, operation);
+      if (authorization.failure)
+        return sendEnvelope(res, authorization.failure);
+      if (authorization.missing)
+        return res
+          .status(404)
+          .json({
+            ok: false,
+            errors: [
+              {
+                name: "IXIFinancialNotFoundError",
+                message: "Financial document not found.",
+              },
+            ],
+          });
+      const upload = await createFinancialAttachmentUpload({
+        ...safeObject(req.body),
+        financialDocumentId: req.params.financialDocumentId,
+        entityPassportId: authorization.accessContext.entityPassportId,
+      });
+      return res
+        .status(201)
+        .json({
+          ok: true,
+          contract: "ixi-financial-attachment",
+          operation,
+          data: { upload },
+          errors: [],
+          warnings: [],
+        });
+    } catch (error) {
+      return res
+        .status(400)
+        .json({
+          ok: false,
+          contract: "ixi-financial-attachment",
+          operation,
+          data: null,
+          errors: [
+            {
+              name: clean(error?.name || "IXIFinancialAttachmentError"),
+              message: clean(
+                error?.message || "Evidence upload could not be initialized.",
+              ),
+            },
+          ],
+          warnings: [],
+        });
+    }
+  },
+);
 
-router.post("/documents/:financialDocumentId/attachments/complete", async (req, res) => {
-  const operation = "financial.attachment.complete";
-  try {
-    const authorization = await authorizeAttachmentWrite(req, operation);
-    if (authorization.failure) return sendEnvelope(res, authorization.failure);
-    if (authorization.missing) return res.status(404).json({ ok: false, errors: [{ name: "IXIFinancialNotFoundError", message: "Financial document not found." }] });
-    const attachment = await completeFinancialAttachmentUpload({
-      ...safeObject(req.body),
-      financialDocumentId: req.params.financialDocumentId,
-      entityPassportId: authorization.accessContext.entityPassportId
-    });
-    return res.status(200).json({ ok: true, contract: "ixi-financial-attachment", operation, data: { attachment }, errors: [], warnings: [] });
-  } catch (error) {
-    return res.status(400).json({ ok: false, contract: "ixi-financial-attachment", operation, data: null, errors: [{ name: clean(error?.name || "IXIFinancialAttachmentError"), message: clean(error?.message || "Evidence upload could not be verified.") }], warnings: [] });
-  }
-});
-
+router.post(
+  "/documents/:financialDocumentId/attachments/complete",
+  async (req, res) => {
+    const operation = "financial.attachment.complete";
+    try {
+      const authorization = await authorizeAttachmentWrite(req, operation);
+      if (authorization.failure)
+        return sendEnvelope(res, authorization.failure);
+      if (authorization.missing)
+        return res
+          .status(404)
+          .json({
+            ok: false,
+            errors: [
+              {
+                name: "IXIFinancialNotFoundError",
+                message: "Financial document not found.",
+              },
+            ],
+          });
+      const attachment = await completeFinancialAttachmentUpload({
+        ...safeObject(req.body),
+        financialDocumentId: req.params.financialDocumentId,
+        entityPassportId: authorization.accessContext.entityPassportId,
+      });
+      return res
+        .status(200)
+        .json({
+          ok: true,
+          contract: "ixi-financial-attachment",
+          operation,
+          data: { attachment },
+          errors: [],
+          warnings: [],
+        });
+    } catch (error) {
+      return res
+        .status(400)
+        .json({
+          ok: false,
+          contract: "ixi-financial-attachment",
+          operation,
+          data: null,
+          errors: [
+            {
+              name: clean(error?.name || "IXIFinancialAttachmentError"),
+              message: clean(
+                error?.message || "Evidence upload could not be verified.",
+              ),
+            },
+          ],
+          warnings: [],
+        });
+    }
+  },
+);
 
 /* =========================================================
    PATCH
    ========================================================= */
 
-router.patch(
-  "/documents/:financialDocumentId",
-  async (
-    req,
-    res
-  ) => {
+router.patch("/documents/:financialDocumentId", async (req, res) => {
+  const accessContext = await getAccess(req);
 
-    const accessContext =
-      await getAccess(
-        req
+  const provider = getFinancialStorageProvider();
+
+  const existing = await provider.getFinancialDocumentRecord(
+    req.params.financialDocumentId,
+  );
+
+  let mergedDocument = {
+    ...safeObject(existing?.financialDocument),
+
+    ...safeObject(req.body?.patch),
+
+    financialDocumentId: req.params.financialDocumentId,
+  };
+
+  if (clean(mergedDocument.documentType).toLowerCase() === "sales-order") {
+    const priorOrder = safeObject(existing?.financialDocument?.salesOrder);
+    const nextOrder = safeObject(mergedDocument.salesOrder);
+    if (
+      [
+        "sent-for-signature",
+        "viewed",
+        "signed-invoice-pending",
+        "signed",
+      ].includes(clean(priorOrder.status).toLowerCase())
+    ) {
+      const priorPackage = JSON.stringify(
+        createSalesOrderPackageSnapshot(priorOrder),
       );
+      const nextPackage = JSON.stringify(
+        createSalesOrderPackageSnapshot(nextOrder),
+      );
+      if (priorPackage !== nextPackage)
+        return res
+          .status(409)
+          .json({
+            ok: false,
+            errors: [
+              {
+                name: "IXISalesOrderImmutablePackageError",
+                message:
+                  "A sent or signed Sales Order package is immutable. Supersede it with a new revision.",
+              },
+            ],
+          });
+    }
+  }
 
-
-    const provider =
-      getFinancialStorageProvider();
-
-
-    const existing =
-      await provider
-        .getFinancialDocumentRecord(
-          req.params
-            .financialDocumentId
-        );
-
-
-    let mergedDocument = {
-      ...safeObject(
-        existing
-          ?.financialDocument
-      ),
-
-      ...safeObject(
-        req.body
-          ?.patch
-      ),
-
-      financialDocumentId:
-        req.params
-          .financialDocumentId
+  if (clean(mergedDocument.documentType).toLowerCase() === "payables-control") {
+    mergedDocument = {
+      ...mergedDocument,
+      payablesControl: {
+        ...safeObject(mergedDocument.payablesControl),
+        context: {
+          ...safeObject(mergedDocument?.payablesControl?.context),
+          entityPassportId: clean(accessContext.entityPassportId),
+          updatedByPassportId: clean(accessContext.actorPassportId),
+        },
+      },
     };
+  }
 
-    if (clean(mergedDocument.documentType).toLowerCase() === "sales-order") {
-      const priorOrder = safeObject(existing?.financialDocument?.salesOrder);
-      const nextOrder = safeObject(mergedDocument.salesOrder);
-      if (["sent-for-signature", "viewed", "signed-invoice-pending", "signed"].includes(clean(priorOrder.status).toLowerCase())) {
-        const priorPackage = JSON.stringify(createSalesOrderPackageSnapshot(priorOrder));
-        const nextPackage = JSON.stringify(createSalesOrderPackageSnapshot(nextOrder));
-        if (priorPackage !== nextPackage) return res.status(409).json({ ok: false, errors: [{ name: "IXISalesOrderImmutablePackageError", message: "A sent or signed Sales Order package is immutable. Supersede it with a new revision." }] });
-      }
-    }
+  try {
+    await assertInvoiceCollectionPatchAvailable({
+      existing: safeObject(existing?.financialDocument),
+      merged: mergedDocument,
+      entityPassportId: accessContext.entityPassportId,
+    });
+  } catch (error) {
+    return res.status(409).json({
+      ok: false,
+      errors: [
+        {
+          name: clean(error?.name || "IXIFinancialSalesCloseoutControlError"),
+          message: clean(error?.message || "Sales closeout control failed."),
+          details: safeObject(error?.details),
+        },
+      ],
+    });
+  }
 
-    if (clean(mergedDocument.documentType).toLowerCase() === "payables-control") {
-      mergedDocument={...mergedDocument,payablesControl:{...safeObject(mergedDocument.payablesControl),context:{...safeObject(mergedDocument?.payablesControl?.context),entityPassportId:clean(accessContext.entityPassportId),updatedByPassportId:clean(accessContext.actorPassportId)}}};
-    }
+  if (
+    ["treasury-account", "treasury-reconciliation"].includes(
+      clean(mergedDocument.documentType).toLowerCase(),
+    ) ||
+    clean(mergedDocument?.treasuryMovement?.transactionClass)
+  )
+    return res
+      .status(409)
+      .json({
+        ok: false,
+        error: {
+          name: "IXITreasuryImmutableRecordError",
+          message:
+            "Canonical Treasury records are immutable; post a new controlled Treasury event.",
+        },
+      });
 
+  const billPatchAction = getBillPatchAction(
+    safeObject(existing?.financialDocument),
+    mergedDocument,
+  );
+
+  const authorization = authorizeFinancialDocumentWrite({
+    accessContext,
+
+    action: billPatchAction,
+
+    financialDocument: mergedDocument,
+  });
+
+  if (!authorization.allowed) {
+    return sendEnvelope(
+      res,
+      createAuthorizationFailure({
+        accessContext,
+
+        operation: "financial.document.patch",
+
+        action: billPatchAction,
+
+        reason: authorization.reason,
+
+        details: authorization,
+      }),
+    );
+  }
+
+  const context = getRequestContext(req);
+
+  let boundPatch = bindBillActorEvidence(
+    safeObject(req.body?.patch),
+    billPatchAction,
+    accessContext.actorPassportId,
+  );
+
+  boundPatch = bindPurchaseOrderActorEvidence(
+    boundPatch,
+    billPatchAction,
+    accessContext,
+  );
+
+  boundPatch = await bindOperationalControlEvidence({
+    patch: boundPatch,
+    merged: mergedDocument,
+    existing: safeObject(existing?.financialDocument),
+    action: billPatchAction,
+    accessContext,
+  });
+
+  if (clean(mergedDocument.documentType).toLowerCase() === "payables-control") {
+    boundPatch = {
+      ...boundPatch,
+      payablesControl: mergedDocument.payablesControl,
+    };
+  }
+
+  /*
+   * Settlement remains operationally editable until its accounting period
+   * is closed. Once closed, corrections must use the existing controlled
+   * period-reopen workflow instead of silently rewriting settled economics.
+   */
+  if (clean(mergedDocument.documentType).toLowerCase() === "settlement") {
     try {
-      await assertInvoiceCollectionPatchAvailable({
-        existing: safeObject(existing?.financialDocument),
-        merged: mergedDocument,
-        entityPassportId: accessContext.entityPassportId
+      await assertFinancialPeriodOpen({
+        financialDocument: mergedDocument,
+        entityPassportId: accessContext.entityPassportId,
       });
     } catch (error) {
       return res.status(409).json({
         ok: false,
-        errors: [{
-          name: clean(error?.name || "IXIFinancialSalesCloseoutControlError"),
-          message: clean(error?.message || "Sales closeout control failed."),
-          details: safeObject(error?.details)
-        }]
+        errors: [
+          {
+            name: clean(error?.name || "IXIFinancialPeriodControlError"),
+            message: clean(
+              error?.message || "Settlement accounting period control failed.",
+            ),
+            details: safeObject(error?.details),
+          },
+        ],
       });
     }
-
-    if(["treasury-account","treasury-reconciliation"].includes(clean(mergedDocument.documentType).toLowerCase())||clean(mergedDocument?.treasuryMovement?.transactionClass)) return res.status(409).json({ok:false,error:{name:"IXITreasuryImmutableRecordError",message:"Canonical Treasury records are immutable; post a new controlled Treasury event."}});
-
-
-    const billPatchAction =
-      getBillPatchAction(
-        safeObject(existing?.financialDocument),
-        mergedDocument
-      );
-
-
-    const authorization =
-      authorizeFinancialDocumentWrite({
-        accessContext,
-
-        action:
-          billPatchAction,
-
-        financialDocument:
-          mergedDocument
-      });
-
-
-    if (
-      !authorization.allowed
-    ) {
-      return sendEnvelope(
-        res,
-        createAuthorizationFailure({
-          accessContext,
-
-          operation:
-            "financial.document.patch",
-
-            action:
-              billPatchAction,
-
-          reason:
-            authorization.reason,
-
-          details:
-            authorization
-        })
-      );
-    }
-
-
-    const context =
-      getRequestContext(
-        req
-      );
-
-
-    let boundPatch =
-      bindBillActorEvidence(
-        safeObject(req.body?.patch),
-        billPatchAction,
-        accessContext.actorPassportId
-      );
-
-    boundPatch = bindPurchaseOrderActorEvidence(
-      boundPatch,
-      billPatchAction,
-      accessContext
-    );
-
-    boundPatch = await bindOperationalControlEvidence({
-      patch: boundPatch,
-      merged: mergedDocument,
-      existing: safeObject(existing?.financialDocument),
-      action: billPatchAction,
-      accessContext
-    });
-
-    if (clean(mergedDocument.documentType).toLowerCase() === "payables-control") {
-      boundPatch={...boundPatch,payablesControl:mergedDocument.payablesControl};
-    }
-
-
-    return sendEnvelope(
-      res,
-      await providerService
-        .patchDocument({
-          ...safeObject(
-            req.body
-          ),
-
-          patch:
-            boundPatch,
-
-          financialDocumentId:
-            req.params
-              .financialDocumentId,
-
-          ...context,
-
-          actorPassportId:
-            accessContext
-              .actorPassportId
-        })
-    );
   }
-);
 
+  return sendEnvelope(
+    res,
+    await providerService.patchDocument({
+      ...safeObject(req.body),
+
+      patch: boundPatch,
+
+      financialDocumentId: req.params.financialDocumentId,
+
+      ...context,
+
+      actorPassportId: accessContext.actorPassportId,
+    }),
+  );
+});
 
 /* =========================================================
    REPLACE
    ========================================================= */
 
-router.put(
-  "/documents/:financialDocumentId",
-  async (
-    req,
-    res
-  ) => {
+router.put("/documents/:financialDocumentId", async (req, res) => {
+  const accessContext = await getAccess(req);
 
-    const accessContext =
-      await getAccess(
-        req
-      );
+  const body = safeObject(req.body);
 
+  const financialDocument = {
+    ...safeObject(body.financialDocument || body.document),
 
-    const body =
-      safeObject(
-        req.body
-      );
+    financialDocumentId: req.params.financialDocumentId,
+  };
 
-
-    const financialDocument = {
-      ...safeObject(
-        body.financialDocument ||
-        body.document
-      ),
-
-      financialDocumentId:
-        req.params
-          .financialDocumentId
-    };
-
-    if(["treasury-account","treasury-reconciliation"].includes(clean(financialDocument.documentType).toLowerCase())||clean(financialDocument?.treasuryMovement?.transactionClass)) return res.status(409).json({ok:false,error:{name:"IXITreasuryImmutableRecordError",message:"Canonical Treasury records cannot be replaced; post a new controlled Treasury event."}});
-
-
-    const authorization =
-      authorizeFinancialDocumentWrite({
-        accessContext,
-
-        action:
-          IXI_FINANCIAL_ACTIONS
-            .REPLACE_DOCUMENT,
-
-        financialDocument
+  if (
+    ["treasury-account", "treasury-reconciliation"].includes(
+      clean(financialDocument.documentType).toLowerCase(),
+    ) ||
+    clean(financialDocument?.treasuryMovement?.transactionClass)
+  )
+    return res
+      .status(409)
+      .json({
+        ok: false,
+        error: {
+          name: "IXITreasuryImmutableRecordError",
+          message:
+            "Canonical Treasury records cannot be replaced; post a new controlled Treasury event.",
+        },
       });
 
+  const authorization = authorizeFinancialDocumentWrite({
+    accessContext,
 
-    if (
-      !authorization.allowed
-    ) {
-      return sendEnvelope(
-        res,
-        createAuthorizationFailure({
-          accessContext,
+    action: IXI_FINANCIAL_ACTIONS.REPLACE_DOCUMENT,
 
-          operation:
-            "financial.document.replace",
+    financialDocument,
+  });
 
-          action:
-            IXI_FINANCIAL_ACTIONS
-              .REPLACE_DOCUMENT,
-
-          reason:
-            authorization.reason,
-
-          details:
-            authorization
-        })
-      );
-    }
-
-
-    const context =
-      getRequestContext(
-        req
-      );
-
-
+  if (!authorization.allowed) {
     return sendEnvelope(
       res,
-      await providerService
-        .replaceDocument({
-          ...body,
+      createAuthorizationFailure({
+        accessContext,
 
-          financialDocument,
+        operation: "financial.document.replace",
 
-          ...context,
+        action: IXI_FINANCIAL_ACTIONS.REPLACE_DOCUMENT,
 
-          actorPassportId:
-            accessContext
-              .actorPassportId
-        })
+        reason: authorization.reason,
+
+        details: authorization,
+      }),
     );
   }
-);
 
+  const context = getRequestContext(req);
+
+  return sendEnvelope(
+    res,
+    await providerService.replaceDocument({
+      ...body,
+
+      financialDocument,
+
+      ...context,
+
+      actorPassportId: accessContext.actorPassportId,
+    }),
+  );
+});
 
 /* =========================================================
    HISTORY
    ========================================================= */
 
-router.get(
-  "/documents/:financialDocumentId/history",
-  async (
-    req,
-    res
-  ) => {
+router.get("/documents/:financialDocumentId/history", async (req, res) => {
+  const accessContext = await getAccess(req);
 
-    const accessContext =
-      await getAccess(
-        req
-      );
+  const failure = await authorizeDocumentRead({
+    accessContext,
 
+    financialDocumentId: req.params.financialDocumentId,
 
-    const failure =
-      await authorizeDocumentRead({
-        accessContext,
+    action: IXI_FINANCIAL_ACTIONS.VIEW_HISTORY,
 
-        financialDocumentId:
-          req.params
-            .financialDocumentId,
+    operation: "financial.document.history",
+  });
 
-        action:
-          IXI_FINANCIAL_ACTIONS
-            .VIEW_HISTORY,
-
-        operation:
-          "financial.document.history"
-      });
-
-
-    if (
-      failure
-    ) {
-      return sendEnvelope(
-        res,
-        failure
-      );
-    }
-
-
-    return sendEnvelope(
-      res,
-      await providerService
-        .getDocumentHistory({
-          financialDocumentId:
-            req.params
-              .financialDocumentId
-        })
-    );
+  if (failure) {
+    return sendEnvelope(res, failure);
   }
-);
 
+  return sendEnvelope(
+    res,
+    await providerService.getDocumentHistory({
+      financialDocumentId: req.params.financialDocumentId,
+    }),
+  );
+});
 
 /* =========================================================
    PASSPORT DOCUMENTS
    ========================================================= */
 
-router.get(
-  "/passports/:passportId/documents",
-  async (
-    req,
-    res
-  ) => {
+router.get("/passports/:passportId/documents", async (req, res) => {
+  const accessContext = await getAccess(req);
 
-    const accessContext =
-      await getAccess(
-        req
-      );
+  const base = authorizeFinancialAction({
+    accessContext,
 
+    action: IXI_FINANCIAL_ACTIONS.VIEW_PASSPORT_DOCUMENTS,
+  });
 
-    const base =
-      authorizeFinancialAction({
-        accessContext,
+  if (
+    !base.allowed ||
+    !canAccessFinancialPassport({
+      accessContext,
 
-        action:
-          IXI_FINANCIAL_ACTIONS
-            .VIEW_PASSPORT_DOCUMENTS
-      });
-
-
-    if (
-      !base.allowed ||
-      !canAccessFinancialPassport({
-        accessContext,
-
-        passportId:
-          req.params
-            .passportId
-      })
-    ) {
-      return sendEnvelope(
-        res,
-        createAuthorizationFailure({
-          accessContext,
-
-          operation:
-            "financial.passport.documents",
-
-          action:
-            IXI_FINANCIAL_ACTIONS
-              .VIEW_PASSPORT_DOCUMENTS,
-
-          reason:
-            !base.allowed
-              ? base.reason
-              : "passport-scope-denied"
-        })
-      );
-    }
-
-
+      passportId: req.params.passportId,
+    })
+  ) {
     return sendEnvelope(
       res,
-      await providerService
-        .listDocumentsByPassport({
-          passportId:
-            req.params
-              .passportId
-        })
+      createAuthorizationFailure({
+        accessContext,
+
+        operation: "financial.passport.documents",
+
+        action: IXI_FINANCIAL_ACTIONS.VIEW_PASSPORT_DOCUMENTS,
+
+        reason: !base.allowed ? base.reason : "passport-scope-denied",
+      }),
     );
   }
-);
 
+  return sendEnvelope(
+    res,
+    await providerService.listDocumentsByPassport({
+      passportId: req.params.passportId,
+    }),
+  );
+});
 
 /* =========================================================
    PASSPORT SNAPSHOT
    ========================================================= */
 
-router.get(
-  "/passports/:passportId/snapshot",
-  async (
-    req,
-    res
-  ) => {
+router.get("/passports/:passportId/snapshot", async (req, res) => {
+  const accessContext = await getAccess(req);
 
-    const accessContext =
-      await getAccess(
-        req
-      );
+  const base = authorizeFinancialAction({
+    accessContext,
 
+    action: IXI_FINANCIAL_ACTIONS.VIEW_PASSPORT_SNAPSHOT,
+  });
 
-    const base =
-      authorizeFinancialAction({
-        accessContext,
+  if (
+    !base.allowed ||
+    !canAccessFinancialPassport({
+      accessContext,
 
-        action:
-          IXI_FINANCIAL_ACTIONS
-            .VIEW_PASSPORT_SNAPSHOT
-      });
-
-
-    if (
-      !base.allowed ||
-      !canAccessFinancialPassport({
-        accessContext,
-
-        passportId:
-          req.params
-            .passportId
-      })
-    ) {
-      return sendEnvelope(
-        res,
-        createAuthorizationFailure({
-          accessContext,
-
-          operation:
-            "financial.passport.snapshot",
-
-          action:
-            IXI_FINANCIAL_ACTIONS
-              .VIEW_PASSPORT_SNAPSHOT,
-
-          reason:
-            !base.allowed
-              ? base.reason
-              : "passport-scope-denied"
-        })
-      );
-    }
-
-
+      passportId: req.params.passportId,
+    })
+  ) {
     return sendEnvelope(
       res,
-      await providerService
-        .getPassportSnapshot({
-          passportId:
-            req.params
-              .passportId,
+      createAuthorizationFailure({
+        accessContext,
 
-          currency:
-            req.query
-              ?.currency,
+        operation: "financial.passport.snapshot",
 
-          startAt:
-            req.query
-              ?.startAt,
+        action: IXI_FINANCIAL_ACTIONS.VIEW_PASSPORT_SNAPSHOT,
 
-          endAt:
-            req.query
-              ?.endAt,
-
-          includeFacts:
-            clean(
-              req.query
-                ?.includeFacts
-            ).toLowerCase() ===
-              "true",
-
-          recentActivityLimit:
-            req.query
-              ?.recentActivityLimit
-        })
+        reason: !base.allowed ? base.reason : "passport-scope-denied",
+      }),
     );
   }
-);
 
+  return sendEnvelope(
+    res,
+    await providerService.getPassportSnapshot({
+      passportId: req.params.passportId,
+
+      currency: req.query?.currency,
+
+      startAt: req.query?.startAt,
+
+      endAt: req.query?.endAt,
+
+      includeFacts: clean(req.query?.includeFacts).toLowerCase() === "true",
+
+      recentActivityLimit: req.query?.recentActivityLimit,
+    }),
+  );
+});
 
 /* =========================================================
    SCOPE SNAPSHOT
    ========================================================= */
 
-router.post(
-  "/scopes/snapshot",
-  async (
-    req,
-    res
-  ) => {
+router.post("/scopes/snapshot", async (req, res) => {
+  const accessContext = await getAccess(req);
 
-    const accessContext =
-      await getAccess(
-        req
-      );
+  const base = authorizeFinancialAction({
+    accessContext,
 
+    action: IXI_FINANCIAL_ACTIONS.VIEW_SCOPE_SNAPSHOT,
+  });
 
-    const base =
-      authorizeFinancialAction({
-        accessContext,
-
-        action:
-          IXI_FINANCIAL_ACTIONS
-            .VIEW_SCOPE_SNAPSHOT
-      });
-
-
-    if (
-      !base.allowed
-    ) {
-      return sendEnvelope(
-        res,
-        createAuthorizationFailure({
-          accessContext,
-
-          operation:
-            "financial.scope.snapshot",
-
-          action:
-            IXI_FINANCIAL_ACTIONS
-              .VIEW_SCOPE_SNAPSHOT,
-
-          reason:
-            base.reason
-        })
-      );
-    }
-
-
+  if (!base.allowed) {
     return sendEnvelope(
       res,
-      await providerService
-        .getScopeSnapshot(
-          req.body
-        )
+      createAuthorizationFailure({
+        accessContext,
+
+        operation: "financial.scope.snapshot",
+
+        action: IXI_FINANCIAL_ACTIONS.VIEW_SCOPE_SNAPSHOT,
+
+        reason: base.reason,
+      }),
     );
   }
-);
 
+  return sendEnvelope(res, await providerService.getScopeSnapshot(req.body));
+});
 
 /* =========================================================
    TRAN$ACT DESKTOP DASHBOARD
@@ -1798,233 +1799,137 @@ router.post(
  * snapshots for TRAN$ACT Desktop.
  */
 
-router.post(
-  "/dashboard",
-  async (
-    req,
-    res
-  ) => {
-    const accessContext =
-      normalizeFinancialAccessContext(
-        await getAccess(
-          req
-        )
-      );
+router.post("/dashboard", async (req, res) => {
+  const accessContext = normalizeFinancialAccessContext(await getAccess(req));
 
+  const context = getRequestContext(req);
 
-    const context =
-      getRequestContext(
-        req
-      );
+  const requestedQuery = safeObject(req.body);
 
+  const explicitRootPassportId = clean(requestedQuery.rootPassportId);
 
-    const requestedQuery =
-      safeObject(
-        req.body
-      );
+  const explicitScopePassportIds = Array.isArray(
+    requestedQuery.scopePassportIds,
+  )
+    ? requestedQuery.scopePassportIds.map(clean).filter(Boolean)
+    : [];
 
+  let discoveredScope = null;
 
-    const explicitRootPassportId =
-      clean(
-        requestedQuery.rootPassportId
-      );
+  /*
+   * Default Desktop behavior:
+   *
+   * No browser-supplied scope means resolve the
+   * authenticated company's permanent production
+   * Passport estate server-side.
+   */
 
+  if (!explicitRootPassportId && !explicitScopePassportIds.length) {
+    const financialIdentity = req.ixiFinancialIdentity || {};
 
-    const explicitScopePassportIds =
-      Array.isArray(
-        requestedQuery.scopePassportIds
-      )
-        ? requestedQuery
-            .scopePassportIds
-            .map(clean)
-            .filter(Boolean)
-        : [];
+    discoveredScope = await discoverFinancialPassportScope({
+      principal: req.ixiAuthorityPrincipal,
 
+      aosEntityId: financialIdentity.aosEntityId,
 
-    let discoveredScope =
-      null;
-
-
-    /*
-     * Default Desktop behavior:
-     *
-     * No browser-supplied scope means resolve the
-     * authenticated company's permanent production
-     * Passport estate server-side.
-     */
-
-    if (
-      !explicitRootPassportId &&
-      !explicitScopePassportIds.length
-    ) {
-      const financialIdentity =
-        req.ixiFinancialIdentity ||
-        {};
-
-
-      discoveredScope =
-        await discoverFinancialPassportScope({
-          principal:
-            req.ixiAuthorityPrincipal,
-
-          aosEntityId:
-            financialIdentity.aosEntityId,
-
-          entityPassportId:
-            financialIdentity.entityPassportId
-        });
-    }
-
-
-    const effectiveQuery = {
-      ...requestedQuery,
-
-      rootPassportId:
-        explicitRootPassportId ||
-        discoveredScope?.rootPassportId ||
-        "",
-
-      scopePassportIds:
-        explicitScopePassportIds.length
-          ? explicitScopePassportIds
-          : (
-              discoveredScope?.scopePassportIds ||
-              []
-            )
-    };
-
-
-    /*
-     * AUTHORITY → FINANCIAL SCOPE BRIDGE
-     *
-     * When Desktop scope is discovered server-side,
-     * those Passport IDs have already passed:
-     *
-     *   authenticated Entity ownership
-     *   permanent AOS provisioning validation
-     *   Authority aos.discover evaluation
-     *
-     * They therefore become trusted managed
-     * Passport scope for THIS request.
-     *
-     * Browser-supplied Passport IDs do NOT gain
-     * this treatment.
-     */
-
-    const effectiveAccessContext =
-      discoveredScope
-        ? {
-            ...accessContext,
-
-            managedPassportIds:
-              Array.from(
-                new Set([
-                  ...(
-                    Array.isArray(
-                      accessContext
-                        ?.managedPassportIds
-                    )
-                      ? accessContext
-                          .managedPassportIds
-                      : []
-                  ),
-
-                  ...(
-                    Array.isArray(
-                      discoveredScope
-                        ?.scopePassportIds
-                    )
-                      ? discoveredScope
-                          .scopePassportIds
-                      : []
-                  )
-                ])
-              )
-          }
-        : accessContext;
-
-
-    const scopeEnvelope =
-      await authorizedFinancialService
-        .getScopeSnapshot({
-          ...effectiveQuery,
-
-          ...context,
-
-          accessContext:
-            effectiveAccessContext
-        });
-
-
-    if (
-      !scopeEnvelope?.ok
-    ) {
-      return sendEnvelope(
-        res,
-        scopeEnvelope
-      );
-    }
-
-
-    const projection =
-      createFinancialDashboardProjection({
-        scopeSnapshot:
-          scopeEnvelope.data,
-
-        query:
-          effectiveQuery,
-
-        accessContext:
-          effectiveAccessContext
-      });
-
-
-    if (discoveredScope) {
-      projection.scopeDiscovery =
-        discoveredScope;
-    }
-
-
-    return sendEnvelope(
-      res,
-      {
-        ok:
-          true,
-
-        contract:
-          "ixi-financial-dashboard",
-
-        contractVersion:
-          "1.0.0",
-
-        operation:
-          "financial.dashboard.read",
-
-        requestId:
-          context.requestId,
-
-        data:
-          projection,
-
-        errors:
-          [],
-
-        warnings:
-          scopeEnvelope.warnings ||
-          [],
-
-        metadata: {
-          sourceOperation:
-            scopeEnvelope.operation,
-
-          sourceRequestId:
-            scopeEnvelope.requestId
-        }
-      }
-    );
+      entityPassportId: financialIdentity.entityPassportId,
+    });
   }
-);
 
+  const effectiveQuery = {
+    ...requestedQuery,
+
+    rootPassportId:
+      explicitRootPassportId || discoveredScope?.rootPassportId || "",
+
+    scopePassportIds: explicitScopePassportIds.length
+      ? explicitScopePassportIds
+      : discoveredScope?.scopePassportIds || [],
+  };
+
+  /*
+   * AUTHORITY → FINANCIAL SCOPE BRIDGE
+   *
+   * When Desktop scope is discovered server-side,
+   * those Passport IDs have already passed:
+   *
+   *   authenticated Entity ownership
+   *   permanent AOS provisioning validation
+   *   Authority aos.discover evaluation
+   *
+   * They therefore become trusted managed
+   * Passport scope for THIS request.
+   *
+   * Browser-supplied Passport IDs do NOT gain
+   * this treatment.
+   */
+
+  const effectiveAccessContext = discoveredScope
+    ? {
+        ...accessContext,
+
+        managedPassportIds: Array.from(
+          new Set([
+            ...(Array.isArray(accessContext?.managedPassportIds)
+              ? accessContext.managedPassportIds
+              : []),
+
+            ...(Array.isArray(discoveredScope?.scopePassportIds)
+              ? discoveredScope.scopePassportIds
+              : []),
+          ]),
+        ),
+      }
+    : accessContext;
+
+  const scopeEnvelope = await authorizedFinancialService.getScopeSnapshot({
+    ...effectiveQuery,
+
+    ...context,
+
+    accessContext: effectiveAccessContext,
+  });
+
+  if (!scopeEnvelope?.ok) {
+    return sendEnvelope(res, scopeEnvelope);
+  }
+
+  const projection = createFinancialDashboardProjection({
+    scopeSnapshot: scopeEnvelope.data,
+
+    query: effectiveQuery,
+
+    accessContext: effectiveAccessContext,
+  });
+
+  if (discoveredScope) {
+    projection.scopeDiscovery = discoveredScope;
+  }
+
+  return sendEnvelope(res, {
+    ok: true,
+
+    contract: "ixi-financial-dashboard",
+
+    contractVersion: "1.0.0",
+
+    operation: "financial.dashboard.read",
+
+    requestId: context.requestId,
+
+    data: projection,
+
+    errors: [],
+
+    warnings: scopeEnvelope.warnings || [],
+
+    metadata: {
+      sourceOperation: scopeEnvelope.operation,
+
+      sourceRequestId: scopeEnvelope.requestId,
+    },
+  });
+});
 
 /* =========================================================
    DESKTOP ACCESS CONTEXT
@@ -2048,393 +1953,236 @@ router.post(
  *   authoritative discovery sources are connected
  */
 
-router.get(
-  "/access-context",
-  async (
-    req,
-    res
-  ) => {
-    const accessContext =
-      normalizeFinancialAccessContext(
-        await getAccess(
-          req
-        )
-      );
+router.get("/access-context", async (req, res) => {
+  const accessContext = normalizeFinancialAccessContext(await getAccess(req));
 
+  if (!accessContext.authenticated) {
+    return sendEnvelope(
+      res,
+      createAuthorizationFailure({
+        accessContext,
 
-    if (
-      !accessContext.authenticated
-    ) {
-      return sendEnvelope(
-        res,
-        createAuthorizationFailure({
-          accessContext,
+        operation: "financial.access-context.read",
 
-          operation:
-            "financial.access-context.read",
-
-          reason:
-            "authentication-required"
-        })
-      );
-    }
-
-
-    const entityPassportId =
-      clean(
-        accessContext
-          .entityPassportId
-      );
-
-
-    return res
-      .status(200)
-      .json({
-        ok:
-          true,
-
-        contract:
-          "ixi-financial-access-context",
-
-        contractVersion:
-          "1.0.0",
-
-        operation:
-          "financial.access-context.read",
-
-        data: {
-          actor: {
-            passportId:
-              clean(
-                accessContext
-                  .actorPassportId
-              )
-          },
-
-          entities:
-            entityPassportId
-              ? [
-                  {
-                    passportId:
-                      entityPassportId,
-
-                    id:
-                      entityPassportId,
-
-                    label:
-                      entityPassportId,
-
-                    isDefault:
-                      true
-                  }
-                ]
-              : [],
-
-          locations:
-            [],
-
-          periods:
-            [],
-
-          roles:
-            Array.isArray(
-              accessContext.roles
-            )
-              ? accessContext.roles
-              : [],
-
-          permissions:
-            Array.isArray(
-              accessContext.permissions
-            )
-              ? accessContext.permissions
-              : [],
-
-          deniedPermissions:
-            Array.isArray(
-              accessContext.deniedPermissions
-            )
-              ? accessContext.deniedPermissions
-              : [],
-
-          managedPassportIds:
-            Array.isArray(
-              accessContext.managedPassportIds
-            )
-              ? accessContext.managedPassportIds
-              : [],
-
-          defaults: {
-            entityPassportId,
-
-            locationPassportId:
-              "",
-
-            accountingPeriod:
-              ""
-          },
-
-          metadata: {
-            authProvider:
-              clean(
-                accessContext
-                  ?.metadata
-                  ?.authProvider
-              )
-          }
-        },
-
-        errors:
-          [],
-
-        warnings: [
-          {
-            name:
-              "IXIFinancialAccessContextDiscoveryIncomplete",
-
-            message:
-              "Authoritative location and accounting-period discovery are not connected yet."
-          }
-        ]
-      });
+        reason: "authentication-required",
+      }),
+    );
   }
-);
 
+  const entityPassportId = clean(accessContext.entityPassportId);
+
+  return res.status(200).json({
+    ok: true,
+
+    contract: "ixi-financial-access-context",
+
+    contractVersion: "1.0.0",
+
+    operation: "financial.access-context.read",
+
+    data: {
+      actor: {
+        passportId: clean(accessContext.actorPassportId),
+      },
+
+      entities: entityPassportId
+        ? [
+            {
+              passportId: entityPassportId,
+
+              id: entityPassportId,
+
+              label: entityPassportId,
+
+              isDefault: true,
+            },
+          ]
+        : [],
+
+      locations: [],
+
+      periods: [],
+
+      roles: Array.isArray(accessContext.roles) ? accessContext.roles : [],
+
+      permissions: Array.isArray(accessContext.permissions)
+        ? accessContext.permissions
+        : [],
+
+      deniedPermissions: Array.isArray(accessContext.deniedPermissions)
+        ? accessContext.deniedPermissions
+        : [],
+
+      managedPassportIds: Array.isArray(accessContext.managedPassportIds)
+        ? accessContext.managedPassportIds
+        : [],
+
+      defaults: {
+        entityPassportId,
+
+        locationPassportId: "",
+
+        accountingPeriod: "",
+      },
+
+      metadata: {
+        authProvider: clean(accessContext?.metadata?.authProvider),
+      },
+    },
+
+    errors: [],
+
+    warnings: [
+      {
+        name: "IXIFinancialAccessContextDiscoveryIncomplete",
+
+        message:
+          "Authoritative location and accounting-period discovery are not connected yet.",
+      },
+    ],
+  });
+});
 
 /* =========================================================
    GENERAL LEDGER
    ========================================================= */
 
-router.get(
-  "/gl",
-  async (
-    req,
-    res
-  ) => {
+router.get("/gl", async (req, res) => {
+  const accessContext = normalizeFinancialAccessContext(await getAccess(req));
 
-    const accessContext =
-      normalizeFinancialAccessContext(
-        await getAccess(
-          req
-        )
-      );
+  const authorization = authorizeFinancialAction({
+    accessContext,
 
+    action: IXI_FINANCIAL_ACTIONS.VIEW_GENERAL_LEDGER,
+  });
 
-    const authorization =
-      authorizeFinancialAction({
+  if (!authorization.allowed) {
+    return sendEnvelope(
+      res,
+      createAuthorizationFailure({
         accessContext,
 
-        action:
-          IXI_FINANCIAL_ACTIONS
-            .VIEW_GENERAL_LEDGER
-      });
+        operation: "financial.gl.read",
 
+        action: IXI_FINANCIAL_ACTIONS.VIEW_GENERAL_LEDGER,
 
-    if (
-      !authorization.allowed
-    ) {
-      return sendEnvelope(
-        res,
-        createAuthorizationFailure({
-          accessContext,
+        reason: authorization.reason,
+      }),
+    );
+  }
 
-          operation:
-            "financial.gl.read",
+  /*
+   * Authoritative Financial estate.
+   *
+   * Browser does not choose Passport scope.
+   */
 
-          action:
-            IXI_FINANCIAL_ACTIONS
-              .VIEW_GENERAL_LEDGER,
+  const entityPassportId = clean(accessContext?.entityPassportId);
 
-          reason:
-            authorization.reason
-        })
-      );
-    }
+  if (!entityPassportId) {
+    return res.status(400).json({
+      ok: false,
 
+      contract: "ixi-financial-gl",
 
-    /*
-     * Authoritative Financial estate.
-     *
-     * Browser does not choose Passport scope.
-     */
+      contractVersion: "1.0.0",
 
-    const entityPassportId =
-      clean(
-        accessContext
-          ?.entityPassportId
-      );
+      operation: "financial.gl.read",
 
+      data: null,
 
-    if (!entityPassportId) {
-      return res
-        .status(400)
-        .json({
-          ok:
-            false,
+      errors: [
+        {
+          name: "IXIFinancialEntityRequiredError",
 
-          contract:
-            "ixi-financial-gl",
+          message: "Authenticated Financial Entity Passport is required.",
+        },
+      ],
 
-          contractVersion:
-            "1.0.0",
+      warnings: [],
 
-          operation:
-            "financial.gl.read",
+      metadata: {},
+    });
+  }
 
-          data:
-            null,
+  const period = clean(req.query?.period);
 
-          errors: [
-            {
-              name:
-                "IXIFinancialEntityRequiredError",
+  const currency = clean(req.query?.currency || "USD").toUpperCase();
 
-              message:
-                "Authenticated Financial Entity Passport is required."
-            }
-          ],
+  try {
+    const result = await getFinancialGLProjection({
+      entityPassportId,
+      period,
+      currency,
+    });
 
-          warnings:
-            [],
+    return res.json({
+      ok: true,
 
-          metadata:
-            {}
-        });
-    }
+      contract: "ixi-financial-gl",
 
+      contractVersion: "1.0.0",
 
-    const period =
-      clean(
-        req.query
-          ?.period
-      );
+      operation: "financial.gl.read",
 
-
-    const currency =
-      clean(
-        req.query
-          ?.currency ||
-        "USD"
-      ).toUpperCase();
-
-
-    try {
-
-      const result =
-        await getFinancialGLProjection({
+      data: {
+        scope: {
           entityPassportId,
+
+          actorPassportId: clean(accessContext?.actorPassportId),
+
+          accountingScope: "entity",
+
           period,
-          currency
-        });
 
-
-      return res.json({
-        ok:
-          true,
-
-        contract:
-          "ixi-financial-gl",
-
-        contractVersion:
-          "1.0.0",
-
-        operation:
-          "financial.gl.read",
-
-        data: {
-          scope: {
-            entityPassportId,
-
-            actorPassportId:
-              clean(
-                accessContext
-                  ?.actorPassportId
-              ),
-
-            accountingScope:
-              "entity",
-
-            period,
-
-            currency
-          },
-
-          ...result,
-
-          lineage: {
-            storageProvider:
-              result.storageProvider,
-
-            source:
-              "ixi-financial-dynamodb",
-
-            serverCalculated:
-              true,
-
-            browserCalculated:
-              false
-          }
+          currency,
         },
 
-        errors:
-          [],
+        ...result,
 
-        warnings:
-          [],
+        lineage: {
+          storageProvider: result.storageProvider,
 
-        metadata:
-          {}
-      });
+          source: "ixi-financial-dynamodb",
 
+          serverCalculated: true,
 
-    } catch (
-      error
-    ) {
+          browserCalculated: false,
+        },
+      },
 
-      return res
-        .status(500)
-        .json({
-          ok:
-            false,
+      errors: [],
 
-          contract:
-            "ixi-financial-gl",
+      warnings: [],
 
-          contractVersion:
-            "1.0.0",
+      metadata: {},
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
 
-          operation:
-            "financial.gl.read",
+      contract: "ixi-financial-gl",
 
-          data:
-            null,
+      contractVersion: "1.0.0",
 
-          errors: [
-            {
-              name:
-                clean(
-                  error?.name
-                ) ||
-                "IXIFinancialGLError",
+      operation: "financial.gl.read",
 
-              message:
-                clean(
-                  error?.message
-                ) ||
-                "General Ledger projection failed."
-            }
-          ],
+      data: null,
 
-          warnings:
-            [],
+      errors: [
+        {
+          name: clean(error?.name) || "IXIFinancialGLError",
 
-          metadata:
-            {}
-        });
-    }
+          message: clean(error?.message) || "General Ledger projection failed.",
+        },
+      ],
+
+      warnings: [],
+
+      metadata: {},
+    });
   }
-);
-
+});
 
 /* =========================================================
    ENTITY CHART OF ACCOUNTS
@@ -2451,261 +2199,153 @@ router.get(
  * This endpoint is READ ONLY.
  */
 
-router.get(
-  "/accounts",
-  async (
-    req,
-    res
-  ) => {
+router.get("/accounts", async (req, res) => {
+  const accessContext = normalizeFinancialAccessContext(await getAccess(req));
 
-    const accessContext =
-      normalizeFinancialAccessContext(
-        await getAccess(
-          req
-        )
-      );
+  const authorization = authorizeFinancialAction({
+    accessContext,
 
+    action: IXI_FINANCIAL_ACTIONS.VIEW_SCOPE_SNAPSHOT,
+  });
 
-    const authorization =
-      authorizeFinancialAction({
+  if (!authorization.allowed) {
+    return sendEnvelope(
+      res,
+      createAuthorizationFailure({
         accessContext,
 
-        action:
-          IXI_FINANCIAL_ACTIONS
-            .VIEW_SCOPE_SNAPSHOT
-      });
+        operation: "financial.accounts.list",
 
+        action: IXI_FINANCIAL_ACTIONS.VIEW_SCOPE_SNAPSHOT,
 
-    if (
-      !authorization.allowed
-    ) {
-      return sendEnvelope(
-        res,
-        createAuthorizationFailure({
-          accessContext,
+        reason: authorization.reason,
+      }),
+    );
+  }
 
-          operation:
-            "financial.accounts.list",
+  const entityPassportId = clean(accessContext?.entityPassportId);
 
-          action:
-            IXI_FINANCIAL_ACTIONS
-              .VIEW_SCOPE_SNAPSHOT,
+  if (!entityPassportId) {
+    return res.status(400).json({
+      ok: false,
 
-          reason:
-            authorization.reason
-        })
-      );
-    }
+      contract: "ixi-financial-accounts",
 
+      contractVersion: "1.0.0",
 
-    const entityPassportId =
-      clean(
-        accessContext
-          ?.entityPassportId
-      );
+      operation: "financial.accounts.list",
 
+      data: null,
 
-    if (!entityPassportId) {
-      return res
-        .status(400)
-        .json({
-          ok:
-            false,
+      errors: [
+        {
+          name: "IXIFinancialEntityRequiredError",
 
-          contract:
-            "ixi-financial-accounts",
+          message: "Authenticated Financial Entity Passport is required.",
+        },
+      ],
 
-          contractVersion:
-            "1.0.0",
+      warnings: [],
 
-          operation:
-            "financial.accounts.list",
+      metadata: {},
+    });
+  }
 
-          data:
-            null,
+  try {
+    const accounts =
+      await financialStore.listFinancialAccounts(entityPassportId);
 
-          errors: [
-            {
-              name:
-                "IXIFinancialEntityRequiredError",
+    return res.json({
+      ok: true,
 
-              message:
-                "Authenticated Financial Entity Passport is required."
-            }
-          ],
+      contract: "ixi-financial-accounts",
 
-          warnings:
-            [],
+      contractVersion: "1.0.0",
 
-          metadata:
-            {}
-        });
-    }
+      operation: "financial.accounts.list",
 
+      data: {
+        entityPassportId,
 
-    try {
+        accounts,
 
-      const accounts =
-        await financialStore
-          .listFinancialAccounts(
-            entityPassportId
-          );
+        activeAccounts: accounts.filter((account) => account.active === true),
 
+        counts: {
+          total: accounts.length,
 
-      return res.json({
-        ok:
-          true,
+          active: accounts.filter((account) => account.active === true).length,
 
-        contract:
-          "ixi-financial-accounts",
-
-        contractVersion:
-          "1.0.0",
-
-        operation:
-          "financial.accounts.list",
-
-        data: {
-          entityPassportId,
-
-          accounts,
-
-          activeAccounts:
-            accounts.filter(
-              account =>
-                account.active ===
-                  true
-            ),
-
-          counts: {
-            total:
-              accounts.length,
-
-            active:
-              accounts.filter(
-                account =>
-                  account.active ===
-                    true
-              ).length,
-
-            inactive:
-              accounts.filter(
-                account =>
-                  account.active !==
-                    true
-              ).length
-          },
-
-          storageProvider:
-            "dynamodb",
-
-          lineage: {
-            source:
-              "ixi-financial-dynamodb",
-
-            serverCalculated:
-              true,
-
-            browserCalculated:
-              false
-          }
+          inactive: accounts.filter((account) => account.active !== true)
+            .length,
         },
 
-        errors:
-          [],
+        storageProvider: "dynamodb",
 
-        warnings:
-          [],
+        lineage: {
+          source: "ixi-financial-dynamodb",
 
-        metadata:
-          {}
-      });
+          serverCalculated: true,
 
-    } catch (
-      error
-    ) {
+          browserCalculated: false,
+        },
+      },
 
-      return res
-        .status(500)
-        .json({
-          ok:
-            false,
+      errors: [],
 
-          contract:
-            "ixi-financial-accounts",
+      warnings: [],
 
-          operation:
-            "financial.accounts.list",
+      metadata: {},
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
 
-          errors: [
-            {
-              name:
-                clean(
-                  error?.name ||
-                  "IXIFinancialAccountReadError"
-                ),
+      contract: "ixi-financial-accounts",
 
-              message:
-                clean(
-                  error?.message ||
-                  "Chart of Accounts could not be loaded."
-                )
-            }
-          ],
+      operation: "financial.accounts.list",
 
-          warnings:
-            []
-        });
-    }
+      errors: [
+        {
+          name: clean(error?.name || "IXIFinancialAccountReadError"),
+
+          message: clean(
+            error?.message || "Chart of Accounts could not be loaded.",
+          ),
+        },
+      ],
+
+      warnings: [],
+    });
   }
-);
-
+});
 
 /* =========================================================
    FINANCIAL COMMANDS
    ========================================================= */
 
-router.use(
-  "/commands",
-  financialCommandRoutes
-);
-
+router.use("/commands", financialCommandRoutes);
 
 /* =========================================================
    FALLBACK
    ========================================================= */
 
-router.use(
-  (
-    req,
-    res
-  ) => {
+router.use((req, res) => {
+  return res.status(404).json({
+    ok: false,
 
-    return res
-      .status(404)
-      .json({
-        ok:
-          false,
+    contract: "ixi-financial",
 
-        contract:
-          "ixi-financial",
+    operation: "financial.route.not-found",
 
-        operation:
-          "financial.route.not-found",
+    errors: [
+      {
+        name: "IXIFinancialRouteNotFound",
 
-        errors: [
-          {
-            name:
-              "IXIFinancialRouteNotFound",
+        message: `Financial route not found: ${req.method} ${req.originalUrl}`,
+      },
+    ],
+  });
+});
 
-            message:
-              `Financial route not found: ${req.method} ${req.originalUrl}`
-          }
-        ]
-      });
-  }
-);
-
-
-module.exports =
-  router;
+module.exports = router;

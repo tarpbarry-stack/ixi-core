@@ -10,31 +10,37 @@
 
 const crypto = require("crypto");
 
-const clean = value => String(value ?? "").trim();
-const safeArray = value => Array.isArray(value) ? value : [];
-const safeObject = value => value && typeof value === "object" && !Array.isArray(value) ? value : {};
-const safeNumber = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
-const roundMoney = value => Math.round((safeNumber(value) + Number.EPSILON) * 100) / 100;
-const randomId = prefix => `${prefix}_${crypto.randomBytes(12).toString("hex")}`;
-const normalizeCurrency = value => /^[A-Z]{3}$/.test(clean(value || "USD").toUpperCase())
-  ? clean(value || "USD").toUpperCase()
-  : "USD";
+const clean = (value) => String(value ?? "").trim();
+const safeArray = (value) => (Array.isArray(value) ? value : []);
+const safeObject = (value) =>
+  value && typeof value === "object" && !Array.isArray(value) ? value : {};
+const safeNumber = (value, fallback = 0) =>
+  Number.isFinite(Number(value)) ? Number(value) : fallback;
+const roundMoney = (value) =>
+  Math.round((safeNumber(value) + Number.EPSILON) * 100) / 100;
+const randomId = (prefix) =>
+  `${prefix}_${crypto.randomBytes(12).toString("hex")}`;
+const normalizeCurrency = (value) =>
+  /^[A-Z]{3}$/.test(clean(value || "USD").toUpperCase())
+    ? clean(value || "USD").toUpperCase()
+    : "USD";
 
 function normalizeReferences(references = []) {
   const found = new Map();
-  safeArray(references).forEach(item => {
+  safeArray(references).forEach((item) => {
     const source = safeObject(item);
     const passportId = clean(source.passportId);
     const role = clean(source.role).toLowerCase();
     if (!passportId || !role) return;
     const key = `${passportId}|${role}`;
-    if (!found.has(key)) found.set(key, {
-      passportId,
-      role,
-      label: clean(source.label),
-      objectType: clean(source.objectType),
-      metadata: { ...safeObject(source.metadata) }
-    });
+    if (!found.has(key))
+      found.set(key, {
+        passportId,
+        role,
+        label: clean(source.label),
+        objectType: clean(source.objectType),
+        metadata: { ...safeObject(source.metadata) },
+      });
   });
   return Array.from(found.values());
 }
@@ -47,7 +53,7 @@ function createAssetAcquisitionLine({
   currency = "USD",
   occurredAt = "",
   references = [],
-  metadata = {}
+  metadata = {},
 } = {}) {
   return {
     financialLineId: clean(financialLineId) || randomId("ifl"),
@@ -68,8 +74,8 @@ function createAssetAcquisitionLine({
       capitalized: true,
       economicEvent: true,
       nonExpense: true,
-      nonCash: true
-    }
+      nonCash: true,
+    },
   };
 }
 
@@ -93,44 +99,84 @@ function createAssetAcquisitionDocument({
   makeReady = {},
   settlementTerms = {},
   attachments = [],
-  metadata = {}
+  metadata = {},
 } = {}) {
   const documentId = clean(financialDocumentId) || randomId("ifd");
   const currencyCode = normalizeCurrency(currency);
   const supplied = safeObject(assetAcquisition);
-  const acquisitionRecord = safeObject(Object.keys(safeObject(supplied.acquisition)).length
-    ? supplied.acquisition
-    : acquisition);
+  const acquisitionRecord = safeObject(
+    Object.keys(safeObject(supplied.acquisition)).length
+      ? supplied.acquisition
+      : acquisition,
+  );
   const purchaseDate = clean(acquisitionRecord.purchaseDate);
-  const eventDate = clean(occurredAt || purchaseDate) || new Date().toISOString();
-  const number = clean(documentNumber || supplied?.identity?.number) ||
+  const eventDate =
+    clean(occurredAt || purchaseDate) || new Date().toISOString();
+  const number =
+    clean(documentNumber || supplied?.identity?.number) ||
     `ACQ-${documentId.replace(/^ifd_/, "").slice(-6).toUpperCase()}`;
   const documentReferences = normalizeReferences(references);
   const purchasePrice = roundMoney(acquisitionRecord.purchasePrice);
   const buyerPremium = roundMoney(acquisitionRecord.buyerPremium);
-  const tax = roundMoney(acquisitionRecord.tax);
+  const auctionDocumentFees = roundMoney(acquisitionRecord.auctionDocumentFees);
+  const nonrecoverableTax = roundMoney(
+    acquisitionRecord.nonrecoverableTax ?? acquisitionRecord.tax,
+  );
+  const tax = nonrecoverableTax;
   const titleFees = roundMoney(acquisitionRecord.titleFees);
   const brokerFees = roundMoney(acquisitionRecord.brokerFees);
-  const otherAcquisitionFees = roundMoney(acquisitionRecord.otherAcquisitionFees);
+  const otherAcquisitionFees = roundMoney(
+    acquisitionRecord.otherAcquisitionFees,
+  );
+  const tradeAllowance = roundMoney(acquisitionRecord.tradeAllowance);
+  const sellerCredits = roundMoney(acquisitionRecord.sellerCredits);
   const directAcquisitionCost = roundMoney(
-    purchasePrice + buyerPremium + tax + titleFees + brokerFees + otherAcquisitionFees
+    purchasePrice +
+      buyerPremium +
+      auctionDocumentFees +
+      nonrecoverableTax +
+      titleFees +
+      brokerFees +
+      otherAcquisitionFees -
+      tradeAllowance -
+      sellerCredits,
   );
   const normalizedAcquisition = {
     ...acquisitionRecord,
     purchasePrice,
     buyerPremium,
+    auctionDocumentFees,
+    nonrecoverableTax,
     tax,
     titleFees,
     brokerFees,
     otherAcquisitionFees,
-    directAcquisitionCost
+    tradeAllowance,
+    sellerCredits,
+    currentAcquisitionBasis: roundMoney(
+      acquisitionRecord.currentAcquisitionBasis ?? directAcquisitionCost,
+    ),
+    directAcquisitionCost,
   };
-  const fundingSource = safeObject(Object.keys(safeObject(supplied.funding)).length ? supplied.funding : funding);
-  const payments = safeArray(fundingSource.payments).map(item => ({
+  const fundingSource = safeObject(
+    Object.keys(safeObject(supplied.funding)).length
+      ? supplied.funding
+      : funding,
+  );
+  const payments = safeArray(fundingSource.payments).map((item) => ({
     ...safeObject(item),
-    amount: roundMoney(item?.amount)
+    amount: roundMoney(item?.amount),
   }));
-  const amountPaid = roundMoney(payments.reduce((sum, item) => sum + safeNumber(item.amount), 0));
+  const amountPaid = roundMoney(
+    payments
+      .filter(
+        (item) =>
+          !["void", "reversed", "cancelled"].includes(
+            clean(item.status).toLowerCase(),
+          ),
+      )
+      .reduce((sum, item) => sum + safeNumber(item.amount), 0),
+  );
   const normalizedFunding = {
     ...fundingSource,
     payments,
@@ -138,51 +184,122 @@ function createAssetAcquisitionDocument({
     balanceDue: roundMoney(Math.max(0, directAcquisitionCost - amountPaid)),
     createsCashEvent: false,
     createsPayable: false,
-    treatment: "deal-evidence-only"
+    treatment: "deal-evidence-only",
   };
-  const ownershipSource = safeObject(Object.keys(safeObject(supplied.ownership)).length ? supplied.ownership : ownership);
-  const owners = safeArray(ownershipSource.owners).map(item => ({
+  const ownershipSource = safeObject(
+    Object.keys(safeObject(supplied.ownership)).length
+      ? supplied.ownership
+      : ownership,
+  );
+  const owners = safeArray(ownershipSource.owners).map((item) => ({
     ...safeObject(item),
     legalOwnershipPercent: safeNumber(item?.legalOwnershipPercent),
     settlementSharePercent: safeNumber(item?.settlementSharePercent),
-    initialContribution: roundMoney(item?.initialContribution)
+    profitSharePercent: safeNumber(
+      item?.profitSharePercent,
+      safeNumber(item?.settlementSharePercent),
+    ),
+    lossSharePercent: safeNumber(
+      item?.lossSharePercent,
+      safeNumber(item?.settlementSharePercent),
+    ),
+    initialContribution: roundMoney(item?.initialContribution),
   }));
   const normalizedOwnership = {
     ...ownershipSource,
     owners,
-    legalOwnershipTotal: roundMoney(owners.reduce((sum, item) => sum + safeNumber(item.legalOwnershipPercent), 0)),
-    settlementShareTotal: roundMoney(owners.reduce((sum, item) => sum + safeNumber(item.settlementSharePercent), 0)),
-    initialCapitalTotal: roundMoney(owners.reduce((sum, item) => sum + safeNumber(item.initialContribution), 0))
+    legalOwnershipTotal: roundMoney(
+      owners.reduce(
+        (sum, item) => sum + safeNumber(item.legalOwnershipPercent),
+        0,
+      ),
+    ),
+    settlementShareTotal: roundMoney(
+      owners.reduce(
+        (sum, item) => sum + safeNumber(item.settlementSharePercent),
+        0,
+      ),
+    ),
+    profitShareTotal: roundMoney(
+      owners.reduce(
+        (sum, item) => sum + safeNumber(item.profitSharePercent),
+        0,
+      ),
+    ),
+    lossShareTotal: roundMoney(
+      owners.reduce((sum, item) => sum + safeNumber(item.lossSharePercent), 0),
+    ),
+    initialCapitalTotal: roundMoney(
+      owners.reduce(
+        (sum, item) => sum + safeNumber(item.initialContribution),
+        0,
+      ),
+    ),
   };
   const canonical = {
     ...supplied,
-    schema: "ixi-asset-acquisition-v2",
+    schema: clean(supplied.schema) || "ixi-asset-acquisition-v3",
     identity: {
       ...safeObject(supplied.identity),
       acquisitionId: documentId,
       financialDocumentId: documentId,
-      number
+      number,
     },
     acquisition: normalizedAcquisition,
     funding: normalizedFunding,
     ownership: normalizedOwnership,
-    title: { ...safeObject(Object.keys(safeObject(supplied.title)).length ? supplied.title : title) },
-    condition: { ...safeObject(Object.keys(safeObject(supplied.condition)).length ? supplied.condition : condition) },
-    logistics: { ...safeObject(Object.keys(safeObject(supplied.logistics)).length ? supplied.logistics : logistics) },
-    makeReady: { ...safeObject(Object.keys(safeObject(supplied.makeReady)).length ? supplied.makeReady : makeReady) },
-    settlementTerms: { ...safeObject(Object.keys(safeObject(supplied.settlementTerms)).length ? supplied.settlementTerms : settlementTerms) },
-    documents: safeArray(supplied.documents || attachments).map(item => ({ ...safeObject(item) })),
-    status: "recorded"
+    title: {
+      ...safeObject(
+        Object.keys(safeObject(supplied.title)).length ? supplied.title : title,
+      ),
+    },
+    condition: {
+      ...safeObject(
+        Object.keys(safeObject(supplied.condition)).length
+          ? supplied.condition
+          : condition,
+      ),
+    },
+    logistics: {
+      ...safeObject(
+        Object.keys(safeObject(supplied.logistics)).length
+          ? supplied.logistics
+          : logistics,
+      ),
+    },
+    makeReady: {
+      ...safeObject(
+        Object.keys(safeObject(supplied.makeReady)).length
+          ? supplied.makeReady
+          : makeReady,
+      ),
+    },
+    settlementTerms: {
+      ...safeObject(
+        Object.keys(safeObject(supplied.settlementTerms)).length
+          ? supplied.settlementTerms
+          : settlementTerms,
+      ),
+    },
+    documents: safeArray(supplied.documents || attachments).map((item) => ({
+      ...safeObject(item),
+    })),
+    status: "recorded",
   };
   const line = createAssetAcquisitionLine({
     financialDocumentId: documentId,
-    description: description || `Asset Acquisition · ${clean(canonical?.context?.primaryLabel)}`,
+    description:
+      description ||
+      `Asset Acquisition · ${clean(canonical?.context?.primaryLabel)}`,
     amount: directAcquisitionCost,
     currency: currencyCode,
     occurredAt: eventDate,
-    references: documentReferences
+    references: documentReferences,
   });
-  const sourceId = clean(sourceFinancialDocumentId || canonical?.acquisition?.sourceFinancialDocumentId);
+  const sourceId = clean(
+    sourceFinancialDocumentId ||
+      canonical?.acquisition?.sourceFinancialDocumentId,
+  );
 
   return {
     financialDocumentId: documentId,
@@ -204,15 +321,19 @@ function createAssetAcquisitionDocument({
     settlementTerms: canonical.settlementTerms,
     attachments: canonical.documents,
     sourceFinancialDocumentId: sourceId,
-    relationships: sourceId ? [{ financialDocumentId: sourceId, relationshipType: "supported-by" }] : [],
+    relationships: sourceId
+      ? [{ financialDocumentId: sourceId, relationshipType: "supported-by" }]
+      : [],
     references: documentReferences,
     lines: [line],
     totals: {
       purchasePrice,
-      capitalizedAcquisitionCosts: roundMoney(directAcquisitionCost - purchasePrice),
+      capitalizedAcquisitionCosts: roundMoney(
+        directAcquisitionCost - purchasePrice,
+      ),
       acquisitionBasis: directAcquisitionCost,
       subtotal: directAcquisitionCost,
-      total: directAcquisitionCost
+      total: directAcquisitionCost,
     },
     accountingTreatment: {
       classification: "asset-basis",
@@ -220,7 +341,7 @@ function createAssetAcquisitionDocument({
       economicEvent: true,
       nonExpense: true,
       nonCash: true,
-      createsObligation: false
+      createsObligation: false,
     },
     metadata: {
       ...safeObject(metadata),
@@ -229,13 +350,13 @@ function createAssetAcquisitionDocument({
       capitalized: true,
       nonExpense: true,
       nonCash: true,
-      createsObligation: false
-    }
+      createsObligation: false,
+    },
   };
 }
 
 module.exports = {
   normalizeReferences,
   createAssetAcquisitionLine,
-  createAssetAcquisitionDocument
+  createAssetAcquisitionDocument,
 };
