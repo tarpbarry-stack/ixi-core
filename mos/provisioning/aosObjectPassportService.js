@@ -3,7 +3,8 @@
 const {
   ensurePassportForSource,
   findPassportById,
-  findPassportBySource
+  findPassportBySource,
+  bindPassportSource
 } = require(
   "../../passport/passportRegistry"
 );
@@ -147,7 +148,8 @@ function createPassportIdentity(
 
 function ensurePassportForAosObject({
   objectId,
-  entityId
+  entityId,
+  trustedPassportId = ""
 }) {
   const normalizedObjectId =
     requireText(
@@ -198,6 +200,62 @@ function ensurePassportForAosObject({
               normalizedEntityId
           }
         )
+    };
+  }
+
+  /*
+   * Trusted migration paths may already have a Passport for the same
+   * real-world source (for example, a Sharetribe listing created before
+   * canonical MOS provisioning). Reuse that Passport and add the AOS
+   * Object source instead of manufacturing a second identity.
+   *
+   * This value is never accepted from the public MOS route. It is only
+   * supplied by IX-Core services after resolving the existing Passport.
+   */
+  const preferredPassportId =
+    cleanText(trustedPassportId);
+
+  if (preferredPassportId) {
+    const preferred =
+      findPassportById(preferredPassportId);
+
+    if (!preferred) {
+      throw new MosError(
+        "AOS_TRUSTED_PASSPORT_NOT_FOUND",
+        "Trusted Passport reuse target was not found.",
+        {
+          objectId: normalizedObjectId,
+          passportId: preferredPassportId
+        },
+        409
+      );
+    }
+
+    assertPassportEntity({
+      passport: preferred,
+      entityId: normalizedEntityId,
+      objectId: normalizedObjectId
+    });
+
+    const bound = bindPassportSource({
+      passportId: preferredPassportId,
+      sourceType: AOS_PASSPORT_SOURCE_TYPE,
+      sourceId: normalizedObjectId,
+      entityId: normalizedEntityId
+    });
+
+    return {
+      ok: true,
+      created: false,
+      reused: true,
+      passport: bound,
+      identity: createPassportIdentity(
+        bound,
+        {
+          objectId: normalizedObjectId,
+          entityId: normalizedEntityId
+        }
+      )
     };
   }
 
@@ -326,6 +384,18 @@ function verifyAosObjectPassport({
       normalizedPassportId
     );
 
+  const hasObjectSource =
+    byId && [
+      {
+        sourceType: byId.sourceType,
+        sourceId: byId.sourceId
+      },
+      ...(Array.isArray(byId.sources) ? byId.sources : [])
+    ].some(source =>
+      cleanText(source?.sourceType) === AOS_PASSPORT_SOURCE_TYPE &&
+      cleanText(source?.sourceId) === normalizedObjectId
+    );
+
   if (
     !bySource ||
     !byId ||
@@ -333,12 +403,7 @@ function verifyAosObjectPassport({
       normalizedPassportId ||
     byId.passportId !==
       normalizedPassportId ||
-    byId.sourceType !==
-      AOS_PASSPORT_SOURCE_TYPE ||
-    cleanText(
-      byId.sourceId
-    ) !==
-      normalizedObjectId
+    !hasObjectSource
   ) {
     throw new MosError(
       "AOS_PASSPORT_VERIFY_FAILED",

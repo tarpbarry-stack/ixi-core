@@ -126,6 +126,49 @@ function createOwnerMembership({
   return membership;
 }
 
+function bindOwnerMembershipIdentity({
+  accountId,
+  ownerUserId,
+  personObjectId,
+  personPassportId,
+  entityPassportId
+}) {
+  const membership =
+    findOwnerMembership({
+      accountId,
+      ownerUserId: cleanText(ownerUserId)
+    });
+
+  if (!membership) {
+    throw new MosError(
+      "AOS_OWNER_MEMBERSHIP_NOT_FOUND",
+      "The active owner membership was not found.",
+      { accountId },
+      409
+    );
+  }
+
+  const memberships = readMemberships();
+  const updated = {
+    ...membership,
+    personObjectId:
+      cleanText(personObjectId) || null,
+    personPassportId:
+      cleanText(personPassportId) || null,
+    entityPassportId:
+      cleanText(entityPassportId) || null,
+    updatedAt: nowIso()
+  };
+
+  memberships[updated.membershipId] = updated;
+  writeJsonFileAtomic(
+    MOS_PATHS.memberships,
+    memberships
+  );
+
+  return updated;
+}
+
 function ensureAosAccount({
   ownerUserId,
   displayName = "IXI Entity",
@@ -358,5 +401,6 @@ function getAosAccountForUser(
 module.exports = {
   ensureAosAccount,
   getAosAccountForUser,
-  findAccountByOwnerUserId
+  findAccountByOwnerUserId,
+  bindOwnerMembershipIdentity
 };

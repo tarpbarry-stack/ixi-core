@@ -248,6 +248,15 @@ function validateProvisioningInput(
         input.actorId
       ) || null,
 
+    /*
+     * Internal-only Passport adoption. HTTP routes must remove this field
+     * before calling the provisioning service.
+     */
+    trustedPassportId:
+      cleanText(
+        input.trustedPassportId
+      ) || null,
+
     metadata:
       normalizeObject(
         input.metadata
@@ -263,7 +272,13 @@ function validateProvisioningInput(
        * it does not participate in payload
        * equivalence.
        */
-      commandId: undefined
+      commandId: undefined,
+
+      /* Passport adoption is an internal migration mechanism, not
+       * customer-visible request meaning. It may become discoverable only
+       * after the first successful call, so it cannot alter replay identity.
+       */
+      trustedPassportId: undefined
     });
 
   return {

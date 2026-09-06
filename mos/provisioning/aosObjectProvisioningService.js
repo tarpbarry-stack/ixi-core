@@ -247,7 +247,10 @@ function provisionAosObject(
           object.objectId,
 
         entityId:
-          object.entityId
+          object.entityId,
+
+        trustedPassportId:
+          normalized.trustedPassportId
       });
 
 
