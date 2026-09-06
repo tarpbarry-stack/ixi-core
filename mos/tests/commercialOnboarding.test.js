@@ -133,6 +133,17 @@ test("existing accounts adopt their sole legacy Person instead of creating a dup
     actorId: "sharetribe-legacy-owner"
   });
 
+  const legacyObjects = readJsonFile(MOS_PATHS.objects, {});
+  legacyObjects[legacyPerson.objectId] = {
+    ...legacyObjects[legacyPerson.objectId],
+    capabilities: {
+      ...legacyObjects[legacyPerson.objectId].capabilities,
+      canContain: false,
+      canCreate: false
+    }
+  };
+  writeJsonFileAtomic(MOS_PATHS.objects, legacyObjects);
+
   const result = ensureCommercialOnboarding({
     ownerUserId: "sharetribe-legacy-owner",
     entityDisplayName: "Legacy Equipment",
@@ -141,6 +152,15 @@ test("existing accounts adopt their sole legacy Person instead of creating a dup
 
   assert.equal(result.person.objectId, legacyPerson.objectId);
   assert.equal(result.person.metadata.onboarding.adoptedExistingPerson, true);
+  assert.equal(result.person.capabilities.canContain, true);
+  assert.equal(result.person.capabilities.canCreate, true);
+
+  const replay = ensureCommercialOnboarding({
+    ownerUserId: "sharetribe-legacy-owner",
+    entityDisplayName: "Legacy Equipment",
+    person: { displayName: "Legacy Owner" }
+  });
+  assert.equal(replay.person.revision, result.person.revision);
   assert.equal(
     listObjects({ entityId: result.entity.entityId, status: "active" })
       .filter(object => object.objectType === "person").length,

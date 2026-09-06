@@ -4,6 +4,7 @@ const {
 
 const BASE_CAPABILITIES = Object.freeze({
   canContain: false,
+  canCreate: false,
   canMove: true,
   canHaveQr: true,
   canHaveMedia: true,
@@ -36,6 +37,8 @@ const MOS_OBJECT_TEMPLATES = Object.freeze({
     objectType: MOS_OBJECT_TYPES.PERSON,
     label: "Person",
     capabilities: capabilities({
+      canContain: true,
+      canCreate: true,
       canHaveJobTickets: true
     })
   },

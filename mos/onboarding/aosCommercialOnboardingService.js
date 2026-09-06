@@ -9,6 +9,7 @@ const {
   getObject,
   listObjects,
   updateObject,
+  ensureObjectCapabilities,
   restoreObject
 } = require("../objects/objectService");
 
@@ -150,6 +151,15 @@ function ensureOwnerPerson({
         }
       });
     }
+
+    existing = ensureObjectCapabilities({
+      objectId: existing.objectId,
+      requiredCapabilities: {
+        canContain: true,
+        canCreate: true
+      },
+      actorId: principalId
+    });
 
     const personIdentity = ensurePersonPassport({
       objectId: existing.objectId,

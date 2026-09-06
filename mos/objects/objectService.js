@@ -1059,6 +1059,71 @@ function updateObject({
 }
 
 
+/*
+ * Internal system-schema upgrade. This is deliberately separate from
+ * updateObject so public Object PATCH requests cannot mass-assign operating
+ * capabilities. It performs no write when the required capabilities already
+ * exist, keeping onboarding idempotent.
+ */
+function ensureObjectCapabilities({
+  objectId,
+  requiredCapabilities = {},
+  actorId = null
+}) {
+  const objects = readObjects();
+  const current = objects[objectId];
+
+  if (!current) {
+    throw new MosError(
+      "OBJECT_NOT_FOUND",
+      `Object not found: ${objectId}`,
+      { objectId },
+      404
+    );
+  }
+
+  const required = normalizePlainObject(requiredCapabilities, {});
+  const currentCapabilities = normalizePlainObject(current.capabilities, {});
+  const changed = Object.entries(required).some(
+    ([key, value]) => currentCapabilities[key] !== value
+  );
+
+  if (!changed) return current;
+
+  const currentRevision =
+    Number.isInteger(Number(current.revision)) && Number(current.revision) >= 0
+      ? Number(current.revision)
+      : 0;
+  const timestamp = nowIso();
+  const updated = {
+    ...current,
+    capabilities: {
+      ...currentCapabilities,
+      ...required
+    },
+    revision: currentRevision + 1,
+    updatedAt: timestamp
+  };
+
+  objects[objectId] = updated;
+  writeObjects(objects);
+
+  appendEvent({
+    entityId: updated.entityId,
+    eventType: "object.capabilities-upgraded",
+    objectId: updated.objectId,
+    actorId,
+    payload: {
+      requiredCapabilities: required,
+      previousRevision: currentRevision,
+      revision: updated.revision
+    }
+  });
+
+  return updated;
+}
+
+
 function softDeleteObject({
   objectId,
   actorId = null
@@ -1258,6 +1323,7 @@ module.exports = {
   getObject,
   listObjects,
   updateObject,
+  ensureObjectCapabilities,
   softDeleteObject,
   restoreObject
 };
