@@ -4,7 +4,7 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { DatabaseSync, backup } = require("node:sqlite");
+const Database = require("better-sqlite3");
 const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 
 function timestampId() {
@@ -26,20 +26,20 @@ async function main() {
   );
   fs.mkdirSync(backupRoot, { recursive: true, mode: 0o700 });
   const destinationPath = path.join(backupRoot, `ixi-aos-${timestampId()}.sqlite`);
-  const source = new DatabaseSync(sourcePath, { readOnly: true });
+  const source = new Database(sourcePath, { readonly: true, fileMustExist: true });
 
   try {
     const sourceIntegrity = source.prepare("PRAGMA quick_check;").get()?.quick_check;
     if (sourceIntegrity !== "ok") {
       throw new Error(`Source database integrity failed: ${sourceIntegrity || "unknown"}`);
     }
-    await backup(source, destinationPath);
+    await source.backup(destinationPath);
   } finally {
     source.close();
   }
 
   fs.chmodSync(destinationPath, 0o600);
-  const copy = new DatabaseSync(destinationPath, { readOnly: true });
+  const copy = new Database(destinationPath, { readonly: true, fileMustExist: true });
   const backupIntegrity = copy.prepare("PRAGMA quick_check;").get()?.quick_check;
   copy.close();
   if (backupIntegrity !== "ok") {

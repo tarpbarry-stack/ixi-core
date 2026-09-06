@@ -3,7 +3,7 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { DatabaseSync } = require("node:sqlite");
+const Database = require("better-sqlite3");
 
 const stores = new Map();
 
@@ -50,7 +50,7 @@ class MosSqliteStore {
     this.observedVersions = new Map();
 
     fs.mkdirSync(path.dirname(this.databasePath), { recursive: true });
-    this.database = new DatabaseSync(this.databasePath);
+    this.database = new Database(this.databasePath);
     this.database.exec("PRAGMA journal_mode = WAL;");
     this.database.exec("PRAGMA synchronous = FULL;");
     this.database.exec("PRAGMA foreign_keys = ON;");

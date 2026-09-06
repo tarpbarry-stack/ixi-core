@@ -23,8 +23,9 @@ IXI_MOS_STORAGE_PROVIDER=sqlite
 
 Use a durable encrypted EBS volume for `/var/lib/ixi-core`. Do not place the
 database in a release directory. The runtime user needs read/write access to
-the directory and database. Use Node 24, the tested runtime with stable
-`node:sqlite` support.
+the directory and database. Use Node 24 with the pinned `better-sqlite3`
+production driver. Do not substitute Node's release-candidate `node:sqlite`
+module in production.
 
 ## Controlled cutover
 
