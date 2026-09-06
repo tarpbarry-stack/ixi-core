@@ -71,6 +71,16 @@ const {
 } = require("../events/eventService");
 
 const {
+  createObjectRelationship,
+  endObjectRelationship,
+  getRelationship,
+  listRelatedObjects,
+  traverseRelationships
+} = require(
+  "../relationships/relationshipService"
+);
+
+const {
   sendMosError
 } = require("./httpHelpers");
 
@@ -168,6 +178,82 @@ const {
 
 
 const router = express.Router();
+
+function beginHttpCommand({
+  req,
+  entityId,
+  commandType,
+  payload
+}) {
+  const bodyCommandId = String(
+    req.body?.commandId || ""
+  ).trim();
+  const idempotencyKey = String(
+    req.headers["idempotency-key"] || ""
+  ).trim();
+
+  if (
+    !bodyCommandId ||
+    !idempotencyKey ||
+    bodyCommandId !== idempotencyKey
+  ) {
+    throw new MosError(
+      "RELATIONSHIP_COMMAND_ID_REQUIRED",
+      "A matching commandId and Idempotency-Key are required.",
+      null,
+      428
+    );
+  }
+
+  const payloadHash = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(payload || {}))
+    .digest("hex");
+
+  const command = beginCommand({
+    commandId: bodyCommandId,
+    entityId,
+    commandType,
+    payloadHash
+  });
+
+  if (command.duplicate) {
+    const record = command.record;
+    if (
+      record.entityId !== entityId ||
+      record.commandType !== commandType ||
+      record.payloadHash !== payloadHash
+    ) {
+      throw new MosError(
+        "RELATIONSHIP_COMMAND_REUSE_CONFLICT",
+        "commandId was already used for a different relationship mutation.",
+        { commandId: bodyCommandId },
+        409
+      );
+    }
+
+    if (record.status === "completed" && record.result) {
+      return {
+        commandId: bodyCommandId,
+        duplicate: true,
+        result: record.result
+      };
+    }
+
+    throw new MosError(
+      "RELATIONSHIP_COMMAND_NOT_REPLAYABLE",
+      "The prior relationship command did not complete and cannot be replayed.",
+      { commandId: bodyCommandId, status: record.status },
+      409
+    );
+  }
+
+  return {
+    commandId: bodyCommandId,
+    duplicate: false,
+    result: null
+  };
+}
 
 /* ---------- HEALTH ---------- */
 
@@ -1422,7 +1508,304 @@ router.get(
   }
 );
 
-/* ---------- CONTAINERS ---------- */
+/* ---------- NEUTRAL OBJECT RELATIONSHIPS ---------- */
+
+router.get(
+  "/objects/:objectId/relationships",
+  async (req, res) => {
+    try {
+      const object = getObject(req.params.objectId);
+      await assertMosObjectAuthority({
+        principal: req.ixiAuthorityPrincipal,
+        object,
+        capability: "aos.view"
+      });
+
+      const related = listRelatedObjects({
+        objectId: object.objectId,
+        relationshipType: req.query.relationshipType || null,
+        direction: req.query.direction || "both",
+        status: req.query.status === "all" ? null : (req.query.status || "active")
+      });
+      const visibleObjects = await filterDiscoverableObjects({
+        principal: req.ixiAuthorityPrincipal,
+        objects: related.map(item => item.relatedObject).filter(Boolean)
+      });
+      const visibleIds = new Set(visibleObjects.map(item => item.objectId));
+      const visibleRelationships = related.filter(item =>
+        item.relatedObject && visibleIds.has(item.relatedObject.objectId)
+      );
+
+      return res.json({
+        ok: true,
+        object,
+        count: visibleRelationships.length,
+        relationships: visibleRelationships
+      });
+    } catch (error) {
+      return sendMosError(res, error);
+    }
+  }
+);
+
+router.get(
+  "/objects/:objectId/relationship-graph",
+  async (req, res) => {
+    try {
+      const object = getObject(req.params.objectId);
+      await assertMosObjectAuthority({
+        principal: req.ixiAuthorityPrincipal,
+        object,
+        capability: "aos.view"
+      });
+
+      const graph = traverseRelationships({
+        objectId: object.objectId,
+        relationshipTypes: String(req.query.relationshipTypes || "")
+          .split(",")
+          .map(value => value.trim())
+          .filter(Boolean),
+        direction: req.query.direction || "both",
+        maxDepth: req.query.maxDepth || 4,
+        maxObjects: req.query.maxObjects || 500,
+        status: req.query.status === "all" ? null : (req.query.status || "active")
+      });
+      const visibleObjects = await filterDiscoverableObjects({
+        principal: req.ixiAuthorityPrincipal,
+        objects: graph.objects.map(item => item.object)
+      });
+      const visibleIds = new Set([
+        object.objectId,
+        ...visibleObjects.map(item => item.objectId)
+      ]);
+
+      const visibleEdges = graph.relationships.filter(relationship =>
+        visibleIds.has(relationship.sourceObjectId) &&
+        visibleIds.has(relationship.targetObjectId)
+      );
+      const graphDirection = ["incoming", "outgoing", "both"]
+        .includes(String(req.query.direction || "both").toLowerCase())
+          ? String(req.query.direction || "both").toLowerCase()
+          : "both";
+      const reachableIds = new Set([object.objectId]);
+      let expanded = true;
+
+      while (expanded) {
+        expanded = false;
+        visibleEdges.forEach(relationship => {
+          const sourceReachable = reachableIds.has(relationship.sourceObjectId);
+          const targetReachable = reachableIds.has(relationship.targetObjectId);
+
+          if ((graphDirection === "outgoing" || graphDirection === "both") &&
+              sourceReachable && !targetReachable) {
+            reachableIds.add(relationship.targetObjectId);
+            expanded = true;
+          }
+          if ((graphDirection === "incoming" || graphDirection === "both") &&
+              targetReachable && !sourceReachable) {
+            reachableIds.add(relationship.sourceObjectId);
+            expanded = true;
+          }
+        });
+      }
+
+      const reachableObjects = graph.objects.filter(item =>
+        reachableIds.has(item.object.objectId)
+      );
+      const reachableEdges = visibleEdges.filter(relationship =>
+        reachableIds.has(relationship.sourceObjectId) &&
+        reachableIds.has(relationship.targetObjectId)
+      );
+      const depthByObjectId = new Map([[object.objectId, 0]]);
+      const depthQueue = [object.objectId];
+
+      while (depthQueue.length) {
+        const currentId = depthQueue.shift();
+        const currentDepth = depthByObjectId.get(currentId);
+        reachableEdges.forEach(relationship => {
+          const nextIds = [];
+          if ((graphDirection === "outgoing" || graphDirection === "both") &&
+              relationship.sourceObjectId === currentId) {
+            nextIds.push(relationship.targetObjectId);
+          }
+          if ((graphDirection === "incoming" || graphDirection === "both") &&
+              relationship.targetObjectId === currentId) {
+            nextIds.push(relationship.sourceObjectId);
+          }
+          nextIds.forEach(nextId => {
+            if (!depthByObjectId.has(nextId)) {
+              depthByObjectId.set(nextId, currentDepth + 1);
+              depthQueue.push(nextId);
+            }
+          });
+        });
+      }
+
+      const responseObjects = reachableObjects.map(item => ({
+        object: item.object,
+        depth: depthByObjectId.get(item.object.objectId)
+      }));
+
+      return res.json({
+        ok: true,
+        rootObject: object,
+        maxDepth: graph.maxDepth,
+        maxObjects: graph.maxObjects,
+        truncated: responseObjects.length >= graph.maxObjects,
+        objects: responseObjects,
+        relationships: reachableEdges
+      });
+    } catch (error) {
+      return sendMosError(res, error);
+    }
+  }
+);
+
+router.post(
+  "/relationships",
+  async (req, res) => {
+    let activeCommandId = "";
+    let commandStarted = false;
+
+    try {
+      const sourceObject = getObject(req.body?.sourceObjectId);
+      const targetObject = getObject(req.body?.targetObjectId);
+
+      await assertMosObjectAuthority({
+        principal: req.ixiAuthorityPrincipal,
+        object: sourceObject,
+        capability: "aos.move"
+      });
+      await assertMosObjectAuthority({
+        principal: req.ixiAuthorityPrincipal,
+        object: targetObject,
+        capability: "aos.move"
+      });
+
+      const command = beginHttpCommand({
+        req,
+        entityId: sourceObject.entityId,
+        commandType: "relationship.create",
+        payload: {
+          sourceObjectId: sourceObject.objectId,
+          targetObjectId: targetObject.objectId,
+          relationshipType: req.body?.relationshipType || req.body?.relationshipLabel,
+          effectiveFrom: req.body?.effectiveFrom || null,
+          effectiveTo: req.body?.effectiveTo || null,
+          metadata: req.body?.metadata || {}
+        }
+      });
+      activeCommandId = command.commandId;
+      commandStarted = !command.duplicate;
+
+      if (command.duplicate) {
+        return res.json({ ...command.result, replayed: true });
+      }
+
+      const trustedActorId = req.ixiAuthorityPrincipal?.principalId || null;
+      const result = createObjectRelationship({
+        relationshipType: req.body?.relationshipType,
+        relationshipLabel: req.body?.relationshipLabel,
+        sourceObjectId: sourceObject.objectId,
+        targetObjectId: targetObject.objectId,
+        actorId: trustedActorId,
+        commandId: activeCommandId,
+        effectiveFrom: req.body?.effectiveFrom,
+        effectiveTo: req.body?.effectiveTo,
+        metadata: req.body?.metadata || {}
+      });
+      const response = { ok: true, result };
+      completeCommand({ commandId: activeCommandId, result: response });
+      return res.status(result.changed ? 201 : 200).json({ ...response, replayed: false });
+    } catch (error) {
+      if (activeCommandId && commandStarted) {
+        failCommand({ commandId: activeCommandId, error });
+      }
+      return sendMosError(res, error);
+    }
+  }
+);
+
+router.post(
+  "/relationships/:relationshipId/end",
+  async (req, res) => {
+    let activeCommandId = "";
+    let commandStarted = false;
+
+    try {
+      const current = getRelationship(req.params.relationshipId);
+      const sourceObject = getObject(current.sourceObjectId);
+      const targetObject = getObject(current.targetObjectId);
+
+      await assertMosObjectAuthority({
+        principal: req.ixiAuthorityPrincipal,
+        object: sourceObject,
+        capability: "aos.move"
+      });
+      await assertMosObjectAuthority({
+        principal: req.ixiAuthorityPrincipal,
+        object: targetObject,
+        capability: "aos.move"
+      });
+
+      const bodyRevision = Number(req.body?.expectedRevision);
+      const rawHeaderRevision = String(req.headers["if-match"] || "")
+        .replace(/^W\//i, "")
+        .replace(/^\"|\"$/g, "")
+        .trim();
+      const headerRevision = Number(rawHeaderRevision);
+      if (!Number.isInteger(bodyRevision) || !rawHeaderRevision ||
+          !Number.isInteger(headerRevision) || headerRevision !== bodyRevision) {
+        throw new MosError(
+          "RELATIONSHIP_REVISION_REQUIRED",
+          "Matching expectedRevision and If-Match values are required.",
+          { expectedRevision: req.body?.expectedRevision, ifMatch: req.headers["if-match"] || null },
+          428
+        );
+      }
+
+      const command = beginHttpCommand({
+        req,
+        entityId: current.entityId,
+        commandType: "relationship.end",
+        payload: {
+          relationshipId: current.relationshipId,
+          expectedRevision: bodyRevision,
+          effectiveTo: req.body?.effectiveTo || null,
+          reason: req.body?.reason || null,
+          metadata: req.body?.metadata || {}
+        }
+      });
+      activeCommandId = command.commandId;
+      commandStarted = !command.duplicate;
+
+      if (command.duplicate) {
+        return res.json({ ...command.result, replayed: true });
+      }
+
+      const trustedActorId = req.ixiAuthorityPrincipal?.principalId || null;
+      const result = endObjectRelationship({
+        relationshipId: current.relationshipId,
+        expectedRevision: bodyRevision,
+        actorId: trustedActorId,
+        commandId: activeCommandId,
+        reason: req.body?.reason,
+        effectiveTo: req.body?.effectiveTo,
+        metadata: req.body?.metadata || {}
+      });
+      const response = { ok: true, result };
+      completeCommand({ commandId: activeCommandId, result: response });
+      return res.json({ ...response, replayed: false });
+    } catch (error) {
+      if (activeCommandId && commandStarted) {
+        failCommand({ commandId: activeCommandId, error });
+      }
+      return sendMosError(res, error);
+    }
+  }
+);
+
+/* ---------- LEGACY EXCLUSIVE CONTAINMENT ---------- */
 
 router.get(
   "/containers/:containerId",

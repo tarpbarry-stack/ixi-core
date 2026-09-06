@@ -1,173 +1,500 @@
-const {
-  readJsonFile,
-  writeJsonFileAtomic
-} = require("../storage/jsonStore");
-
-const {
-  MOS_PATHS
-} = require("../storage/mosPaths");
-
-const {
-  MOS_RELATIONSHIP_TYPES
-} = require("../constants");
-
-const {
-  createMosId
-} = require("../objects/objectIdEngine");
-
-const {
-  cleanText,
-  nowIso
-} = require("../util/normalize");
-
-const {
-  MosError
-} = require("../errors/MosError");
+const { readJsonFile, writeJsonFileAtomic } = require("../storage/jsonStore");
+const { MOS_PATHS } = require("../storage/mosPaths");
+const { MOS_RELATIONSHIP_TYPES, MOS_OBJECT_STATUS } = require("../constants");
+const { createMosId } = require("../objects/objectIdEngine");
+const { cleanText, normalizeKey, nowIso } = require("../util/normalize");
+const { MosError } = require("../errors/MosError");
+const { appendEvent } = require("../events/eventService");
 
 function readRelationships() {
-  return readJsonFile(
-    MOS_PATHS.relationships,
-    {}
-  );
+  return readJsonFile(MOS_PATHS.relationships, {});
 }
 
 function writeRelationships(relationships) {
-  writeJsonFileAtomic(
-    MOS_PATHS.relationships,
-    relationships
-  );
-
+  writeJsonFileAtomic(MOS_PATHS.relationships, relationships);
   return relationships;
+}
+
+function readObjects() {
+  return readJsonFile(MOS_PATHS.objects, {});
+}
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function normalizeMetadata(value) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? clone(value)
+    : {};
+}
+
+function normalizeRelationshipType(value) {
+  const displayName = cleanText(value);
+
+  if (!displayName) {
+    throw new MosError(
+      "RELATIONSHIP_TYPE_REQUIRED",
+      "A user-defined relationship name is required.",
+      null,
+      400
+    );
+  }
+
+  if (displayName.length > 160) {
+    throw new MosError(
+      "RELATIONSHIP_TYPE_TOO_LONG",
+      "Relationship names cannot exceed 160 characters.",
+      { maximumLength: 160 },
+      400
+    );
+  }
+
+  return { displayName, key: normalizeKey(displayName) };
+}
+
+function requireObject(objects, objectId, endpoint) {
+  const normalizedObjectId = cleanText(objectId);
+  const object = objects[normalizedObjectId];
+
+  if (!normalizedObjectId || !object) {
+    throw new MosError(
+      "RELATIONSHIP_OBJECT_NOT_FOUND",
+      `${endpoint} Object not found: ${normalizedObjectId || "missing"}`,
+      { objectId: normalizedObjectId || null, endpoint: endpoint.toLowerCase() },
+      404
+    );
+  }
+
+  if (object.status !== MOS_OBJECT_STATUS.ACTIVE) {
+    throw new MosError(
+      "RELATIONSHIP_OBJECT_INACTIVE",
+      `${endpoint} Object is not active: ${normalizedObjectId}`,
+      { objectId: normalizedObjectId, status: object.status || null },
+      409
+    );
+  }
+
+  return object;
+}
+
+function assertSameEntity(sourceObject, targetObject) {
+  if (sourceObject.entityId !== targetObject.entityId) {
+    throw new MosError(
+      "CROSS_ENTITY_RELATIONSHIP_FORBIDDEN",
+      "Objects from different Entities require an explicit cross-Entity agreement.",
+      {
+        sourceEntityId: sourceObject.entityId,
+        targetEntityId: targetObject.entityId
+      },
+      403
+    );
+  }
 }
 
 function createRelationshipRecord({
   entityId,
   relationshipType,
+  relationshipLabel = null,
   sourceObjectId,
   targetObjectId,
   actorId = null,
+  commandId = null,
+  effectiveFrom = null,
+  effectiveTo = null,
   metadata = {}
 }) {
-  const relationshipId =
-    createMosId("relationship");
-
   const timestamp = nowIso();
+  const normalizedType = normalizeRelationshipType(
+    relationshipLabel || relationshipType
+  );
 
   return {
-    relationshipId,
+    relationshipId: createMosId("relationship"),
     entityId: cleanText(entityId),
-    relationshipType:
-      cleanText(relationshipType),
 
-    sourceObjectId:
-      cleanText(sourceObjectId),
+    /* User vocabulary is preserved; IX Core does not infer its meaning. */
+    relationshipType: normalizedType.displayName,
+    relationshipKey: normalizedType.key,
+    relationshipLabel: normalizedType.displayName,
 
-    targetObjectId:
-      cleanText(targetObjectId),
-
+    sourceObjectId: cleanText(sourceObjectId),
+    targetObjectId: cleanText(targetObjectId),
     status: "active",
-
+    revision: 1,
     actorId: cleanText(actorId) || null,
-
-    metadata:
-      metadata &&
-      typeof metadata === "object"
-        ? metadata
-        : {},
-
+    createdBy: cleanText(actorId) || null,
+    updatedBy: cleanText(actorId) || null,
+    commandId: cleanText(commandId) || null,
+    effectiveFrom: cleanText(effectiveFrom) || timestamp,
+    effectiveTo: cleanText(effectiveTo) || null,
+    metadata: normalizeMetadata(metadata),
     createdAt: timestamp,
     updatedAt: timestamp,
     endedAt: null
   };
 }
 
-function listRelationships({
-  entityId = null,
-  relationshipType = null,
-  sourceObjectId = null,
-  targetObjectId = null,
-  status = "active"
-} = {}) {
-  const relationships =
-    readRelationships();
-
-  return Object.values(relationships).filter(
-    relationship => {
-      if (
-        entityId &&
-        relationship.entityId !== entityId
-      ) {
-        return false;
-      }
-
-      if (
-        relationshipType &&
-        relationship.relationshipType !==
-          relationshipType
-      ) {
-        return false;
-      }
-
-      if (
-        sourceObjectId &&
-        relationship.sourceObjectId !==
-          sourceObjectId
-      ) {
-        return false;
-      }
-
-      if (
-        targetObjectId &&
-        relationship.targetObjectId !==
-          targetObjectId
-      ) {
-        return false;
-      }
-
-      if (
-        status &&
-        relationship.status !== status
-      ) {
-        return false;
-      }
-
-      return true;
-    }
+function storedRelationshipKey(relationship) {
+  return cleanText(relationship?.relationshipKey) || normalizeKey(
+    relationship?.relationshipLabel || relationship?.relationshipType
   );
 }
 
-function getActiveContainmentForObject(
-  objectId
-) {
-  const matches = listRelationships({
-    relationshipType:
-      MOS_RELATIONSHIP_TYPES.CONTAINED_IN,
-    sourceObjectId: objectId,
-    status: "active"
-  });
+function listRelationships({
+  entityId = null,
+  relationshipType = null,
+  relationshipKey = null,
+  sourceObjectId = null,
+  targetObjectId = null,
+  objectId = null,
+  direction = "both",
+  status = "active"
+} = {}) {
+  const requestedKey = cleanText(relationshipKey) || (
+    cleanText(relationshipType) ? normalizeKey(relationshipType) : null
+  );
+  const normalizedDirection = cleanText(direction).toLowerCase() || "both";
 
-  if (matches.length > 1) {
+  return Object.values(readRelationships()).filter(relationship => {
+    if (entityId && relationship.entityId !== entityId) return false;
+    if (requestedKey && storedRelationshipKey(relationship) !== requestedKey) return false;
+    if (sourceObjectId && relationship.sourceObjectId !== sourceObjectId) return false;
+    if (targetObjectId && relationship.targetObjectId !== targetObjectId) return false;
+
+    if (objectId) {
+      const outgoing = relationship.sourceObjectId === objectId;
+      const incoming = relationship.targetObjectId === objectId;
+      if (normalizedDirection === "outgoing" ? !outgoing :
+          normalizedDirection === "incoming" ? !incoming :
+          !outgoing && !incoming) return false;
+    }
+
+    return !status || relationship.status === status;
+  });
+}
+
+function getRelationship(relationshipId) {
+  const id = cleanText(relationshipId);
+  const relationship = readRelationships()[id];
+  if (!relationship) {
     throw new MosError(
-      "MULTIPLE_ACTIVE_CONTAINERS",
-      `Object has more than one active physical container: ${objectId}`,
-      {
-        objectId,
-        relationshipIds: matches.map(
-          relationship =>
-            relationship.relationshipId
-        )
-      },
+      "RELATIONSHIP_NOT_FOUND",
+      `Relationship not found: ${id || "missing"}`,
+      { relationshipId: id || null },
+      404
+    );
+  }
+  return relationship;
+}
+
+function createObjectRelationship({
+  relationshipType,
+  relationshipLabel = null,
+  sourceObjectId,
+  targetObjectId,
+  actorId = null,
+  commandId = null,
+  effectiveFrom = null,
+  effectiveTo = null,
+  metadata = {}
+}) {
+  const objects = readObjects();
+  const sourceObject = requireObject(objects, sourceObjectId, "Source");
+  const targetObject = requireObject(objects, targetObjectId, "Target");
+  assertSameEntity(sourceObject, targetObject);
+
+  const normalizedType = normalizeRelationshipType(
+    relationshipLabel || relationshipType
+  );
+  const relationshipsBefore = readRelationships();
+  const existing = Object.values(relationshipsBefore).find(relationship =>
+    relationship.status === "active" &&
+    relationship.entityId === sourceObject.entityId &&
+    relationship.sourceObjectId === sourceObject.objectId &&
+    relationship.targetObjectId === targetObject.objectId &&
+    storedRelationshipKey(relationship) === normalizedType.key
+  );
+
+  if (existing) {
+    return {
+      changed: false,
+      replayed: true,
+      relationship: existing,
+      sourceObject,
+      targetObject
+    };
+  }
+
+  const relationship = createRelationshipRecord({
+    entityId: sourceObject.entityId,
+    relationshipType: normalizedType.displayName,
+    sourceObjectId: sourceObject.objectId,
+    targetObjectId: targetObject.objectId,
+    actorId,
+    commandId,
+    effectiveFrom,
+    effectiveTo,
+    metadata
+  });
+  const relationshipsNext = {
+    ...relationshipsBefore,
+    [relationship.relationshipId]: relationship
+  };
+
+  writeRelationships(relationshipsNext);
+  let event;
+  try {
+    event = appendEvent({
+      entityId: sourceObject.entityId,
+      eventType: "relationship.created",
+      objectId: sourceObject.objectId,
+      actorId,
+      commandId,
+      payload: {
+        relationshipId: relationship.relationshipId,
+        relationshipType: relationship.relationshipType,
+        relationshipKey: relationship.relationshipKey,
+        sourceObjectId: sourceObject.objectId,
+        targetObjectId: targetObject.objectId,
+        effectiveFrom: relationship.effectiveFrom,
+        effectiveTo: relationship.effectiveTo,
+        metadata: relationship.metadata
+      }
+    });
+  } catch (error) {
+    writeRelationships(relationshipsBefore);
+    throw error;
+  }
+
+  return {
+    changed: true,
+    replayed: false,
+    relationship,
+    sourceObject,
+    targetObject,
+    event
+  };
+}
+
+function endObjectRelationship({
+  relationshipId,
+  expectedRevision,
+  actorId = null,
+  commandId = null,
+  reason = null,
+  effectiveTo = null,
+  metadata = {}
+}) {
+  const relationshipsBefore = readRelationships();
+  const current = relationshipsBefore[cleanText(relationshipId)];
+  if (!current) {
+    getRelationship(relationshipId);
+  }
+
+  if (current.status === "ended") {
+    return { changed: false, replayed: true, relationship: current };
+  }
+
+  const currentRevision = Number.isInteger(Number(current.revision))
+    ? Number(current.revision)
+    : 0;
+  if (!Number.isInteger(Number(expectedRevision)) ||
+      Number(expectedRevision) !== currentRevision) {
+    throw new MosError(
+      "RELATIONSHIP_REVISION_CONFLICT",
+      "The relationship changed before this command was applied.",
+      { relationshipId: current.relationshipId, expectedRevision, currentRevision },
       409
     );
   }
 
+  const timestamp = nowIso();
+  const relationship = {
+    ...current,
+    status: "ended",
+    revision: currentRevision + 1,
+    updatedBy: cleanText(actorId) || null,
+    commandId: cleanText(commandId) || null,
+    effectiveTo: cleanText(effectiveTo) || timestamp,
+    endedAt: timestamp,
+    updatedAt: timestamp,
+    metadata: {
+      ...normalizeMetadata(current.metadata),
+      ...normalizeMetadata(metadata),
+      ...(cleanText(reason) ? { endReason: cleanText(reason) } : {})
+    }
+  };
+  const relationshipsNext = {
+    ...relationshipsBefore,
+    [relationship.relationshipId]: relationship
+  };
+
+  writeRelationships(relationshipsNext);
+  let event;
+  try {
+    event = appendEvent({
+      entityId: relationship.entityId,
+      eventType: "relationship.ended",
+      objectId: relationship.sourceObjectId,
+      actorId,
+      commandId,
+      payload: {
+        relationshipId: relationship.relationshipId,
+        relationshipType: relationship.relationshipType,
+        sourceObjectId: relationship.sourceObjectId,
+        targetObjectId: relationship.targetObjectId,
+        effectiveTo: relationship.effectiveTo,
+        reason: cleanText(reason) || null,
+        metadata: normalizeMetadata(metadata)
+      }
+    });
+  } catch (error) {
+    writeRelationships(relationshipsBefore);
+    throw error;
+  }
+
+  return { changed: true, replayed: false, relationship, event };
+}
+
+function listRelatedObjects({
+  objectId,
+  entityId = null,
+  relationshipType = null,
+  direction = "both",
+  status = "active"
+}) {
+  const objects = readObjects();
+  const object = requireObject(objects, objectId, "Root");
+  if (entityId && object.entityId !== entityId) {
+    throw new MosError(
+      "RELATIONSHIP_ENTITY_MISMATCH",
+      "The requested Object does not belong to the requested Entity.",
+      { objectId: object.objectId, requestedEntityId: entityId, objectEntityId: object.entityId },
+      403
+    );
+  }
+
+  return listRelationships({
+    entityId: object.entityId,
+    relationshipType,
+    objectId: object.objectId,
+    direction,
+    status
+  }).map(relationship => {
+    const outgoing = relationship.sourceObjectId === object.objectId;
+    const relatedObjectId = outgoing
+      ? relationship.targetObjectId
+      : relationship.sourceObjectId;
+    return {
+      relationship,
+      direction: outgoing ? "outgoing" : "incoming",
+      relatedObject: objects[relatedObjectId] || null
+    };
+  });
+}
+
+function traverseRelationships({
+  objectId,
+  relationshipTypes = [],
+  direction = "both",
+  maxDepth = 4,
+  maxObjects = 500,
+  status = "active"
+}) {
+  const objects = readObjects();
+  const rootObject = requireObject(objects, objectId, "Root");
+  const depthLimit = Math.min(Math.max(Number(maxDepth) || 1, 1), 12);
+  const objectLimit = Math.min(Math.max(Number(maxObjects) || 1, 1), 5000);
+  const allowedKeys = new Set(
+    (Array.isArray(relationshipTypes) ? relationshipTypes : [relationshipTypes])
+      .map(normalizeKey)
+      .filter(Boolean)
+  );
+  const requestedDirection = cleanText(direction).toLowerCase();
+  const resolvedDirection = ["incoming", "outgoing", "both"].includes(requestedDirection)
+    ? requestedDirection
+    : "both";
+  const relationships = Object.values(readRelationships()).filter(relationship =>
+    relationship.entityId === rootObject.entityId &&
+    (!status || relationship.status === status) &&
+    (allowedKeys.size === 0 || allowedKeys.has(storedRelationshipKey(relationship)))
+  );
+
+  const visited = new Set([rootObject.objectId]);
+  const queue = [{ objectId: rootObject.objectId, depth: 0 }];
+  const discoveredObjects = [];
+  const discoveredRelationships = [];
+  const relationshipIds = new Set();
+
+  while (queue.length && discoveredObjects.length < objectLimit) {
+    const current = queue.shift();
+    if (current.depth >= depthLimit) continue;
+
+    relationships.forEach(relationship => {
+      const outgoing = relationship.sourceObjectId === current.objectId;
+      const incoming = relationship.targetObjectId === current.objectId;
+      const included = resolvedDirection === "outgoing"
+        ? outgoing
+        : resolvedDirection === "incoming"
+          ? incoming
+          : outgoing || incoming;
+      if (!included) return;
+
+      if (!relationshipIds.has(relationship.relationshipId)) {
+        relationshipIds.add(relationship.relationshipId);
+        discoveredRelationships.push(relationship);
+      }
+
+      const relatedObjectId = outgoing
+        ? relationship.targetObjectId
+        : relationship.sourceObjectId;
+      if (visited.has(relatedObjectId) || discoveredObjects.length >= objectLimit) return;
+
+      const relatedObject = objects[relatedObjectId];
+      if (!relatedObject) return;
+      visited.add(relatedObjectId);
+      discoveredObjects.push({
+        object: relatedObject,
+        depth: current.depth + 1,
+        viaRelationshipId: relationship.relationshipId,
+        fromObjectId: current.objectId
+      });
+      queue.push({ objectId: relatedObjectId, depth: current.depth + 1 });
+    });
+  }
+
+  return {
+    rootObject,
+    maxDepth: depthLimit,
+    maxObjects: objectLimit,
+    truncated: discoveredObjects.length >= objectLimit,
+    objects: discoveredObjects,
+    relationships: discoveredRelationships
+  };
+}
+
+/* Legacy exclusive containment remains available for backward compatibility only. */
+function getActiveContainmentForObject(objectId) {
+  const matches = listRelationships({
+    relationshipType: MOS_RELATIONSHIP_TYPES.CONTAINED_IN,
+    sourceObjectId: objectId,
+    status: "active"
+  });
+  if (matches.length > 1) {
+    throw new MosError(
+      "MULTIPLE_ACTIVE_CONTAINERS",
+      `Object has more than one active physical container: ${objectId}`,
+      { objectId, relationshipIds: matches.map(item => item.relationshipId) },
+      409
+    );
+  }
   return matches[0] || null;
 }
 
 function getDirectChildren(containerId) {
   return listRelationships({
-    relationshipType:
-      MOS_RELATIONSHIP_TYPES.CONTAINED_IN,
+    relationshipType: MOS_RELATIONSHIP_TYPES.CONTAINED_IN,
     targetObjectId: containerId,
     status: "active"
   });
@@ -177,7 +504,12 @@ module.exports = {
   readRelationships,
   writeRelationships,
   createRelationshipRecord,
+  createObjectRelationship,
+  endObjectRelationship,
+  getRelationship,
   listRelationships,
+  listRelatedObjects,
+  traverseRelationships,
   getActiveContainmentForObject,
   getDirectChildren
 };

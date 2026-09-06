@@ -7,6 +7,10 @@ const {
 } = require("../objects/objectService");
 
 const {
+  listRelationships
+} = require("../relationships/relationshipService");
+
+const {
   rebuildEntityProjections
 } = require("../projections/projectionService");
 
@@ -152,6 +156,16 @@ async function loadAosEnvironment({
       )
     );
 
+  /* Return an edge only when both endpoints are discoverable. */
+  const relationships =
+    listRelationships({
+      entityId: entity.entityId,
+      status: "active"
+    }).filter(relationship =>
+      visibleObjectIds.has(relationship.sourceObjectId) &&
+      visibleObjectIds.has(relationship.targetObjectId)
+    );
+
   const rootObjects =
     discoverableObjects.filter(
       object =>
@@ -222,6 +236,8 @@ async function loadAosEnvironment({
 
     objects:
       discoverableObjects,
+
+    relationships,
 
     rootObjects,
 
