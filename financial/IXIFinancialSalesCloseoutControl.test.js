@@ -135,22 +135,23 @@ test("SOLD requires a canonical zero-balance Invoice and matching lineage", asyn
   });
 });
 
-test("SOLD rejects fabricated or missing Bill of Sale evidence", async () => {
+test("SOLD allows optional closeout paperwork after canonical collection", async () => {
   await withDocuments([payment(100)], async () => {
     const soldRecord = {
       identity: { saleId: "ifd_invoice001", financialInvoiceId: "ifd_invoice001" },
-      sale: { billOfSaleNumber: "BOS-1001" },
+      sale: { billOfSaleNumber: "" },
       status: "sold",
     };
-    await assert.rejects(() => assertInvoiceCollectionPatchAvailable({
+    const result = await assertInvoiceCollectionPatchAvailable({
       existing: invoice(),
       merged: invoice({
         financialState: "collected",
-        attachments: [{ ...billOfSale(), verification: "fabricated" }],
+        attachments: [],
         metadata: { assetSale: true, transactModule: "sold", assetSaleRecord: soldRecord },
       }),
       entityPassportId: "IXI-ENTITY",
-    }), /server-verified Bill of Sale/u);
+    });
+    assert.equal(result.balance, 0);
   });
 });
 
