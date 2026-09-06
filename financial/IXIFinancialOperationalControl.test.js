@@ -62,12 +62,15 @@ test("Collection and Settlement permissions preserve approval segregation", () =
 
 test("server controls enforce canonical source lineage and A/R open balance", async () => {
   const get = providerService.getDocument, list = providerService.listDocumentsByPassport;
-  providerService.getDocument = async ({ financialDocumentId }) => ({ ok: true, data: { record: { financialDocument: financialDocumentId === "ifd_sale001" ? { financialDocumentId, documentType: "invoice", financialState: "receivable", metadata: { assetSale: true }, totals: { total: 200 }, references } : { financialDocumentId, documentType: "invoice", financialState: "receivable", totals: { total: 100 }, references } } } });
-  providerService.listDocumentsByPassport = async () => ({ ok: true, data: { documents: [{ financialDocument: { documentType: "payment", financialState: "received", paymentDirection: "inflow", sourceFinancialDocumentId: "ifd_invoice001", totals: { total: 80 }, metadata: { arPayment: true } } }] } });
+  providerService.getDocument = async ({ financialDocumentId }) => ({ ok: true, data: { record: { financialDocument: financialDocumentId === "ifd_sale001" ? { financialDocumentId, documentType: "invoice", financialState: "collected", metadata: { assetSale: true, assetSaleRecord: { status: "sold" } }, totals: { total: 200 }, references } : { financialDocumentId, documentType: "invoice", financialState: "billed", totals: { total: 100 }, references } } } });
+  providerService.listDocumentsByPassport = async () => ({ ok: true, data: { documents: [
+    { financialDocument: { documentType: "payment", financialState: "paid", paymentDirection: "inflow", sourceFinancialDocumentId: "ifd_invoice001", totals: { total: 80 }, metadata: { arPayment: true } } },
+    { financialDocument: { documentType: "payment", financialState: "paid", paymentDirection: "inflow", sourceFinancialDocumentId: "ifd_sale001", totals: { total: 200 }, metadata: { assetSalePayment: true } } },
+  ] } });
   try {
     await assertCollectionControlSource({ financialDocument: collection(), entityPassportId });
     await assertSettlementControlSource({ financialDocument: settlement(), entityPassportId });
-    await assert.rejects(() => assertReceivablesSettlementAvailable({ entityPassportId, financialDocument: { documentType: "payment", financialState: "received", paymentDirection: "inflow", sourceFinancialDocumentId: "ifd_invoice001", totals: { total: 25 }, metadata: { arPayment: true } } }), /exceeds the canonical open Invoice balance/u);
+    await assert.rejects(() => assertReceivablesSettlementAvailable({ entityPassportId, financialDocument: { documentType: "payment", financialState: "paid", paymentDirection: "inflow", sourceFinancialDocumentId: "ifd_invoice001", totals: { total: 25 }, metadata: { arPayment: true } } }), /exceeds the canonical open Invoice balance/u);
   } finally { providerService.getDocument = get; providerService.listDocumentsByPassport = list; }
 });
 
