@@ -79,6 +79,10 @@ const providerService =
     "./IXIFinancialProviderService"
   );
 
+const {
+  assertCollectedAssetSaleInvoice
+} = require("./IXIFinancialSalesCloseoutControl");
+
 
 const {
   postJournalEntry
@@ -153,6 +157,13 @@ function financialAmount(document={}) {
   return Math.round(safeArray(source.lines).reduce((sum,line)=>sum+Math.abs(Number(line?.amount)||0),0)*100)/100;
 }
 
+function isActiveReceivableSettlement(document={}) {
+  const source=financialDocumentFromRecord(document),type=clean(source.documentType).toLowerCase(),state=clean(source.financialState).toLowerCase();
+  if(type==="payment") return clean(source.paymentDirection).toLowerCase()==="inflow"&&["paid","posted","collected","closed"].includes(state);
+  if(type==="credit") return ["approved","incurred","posted","closed"].includes(state);
+  return false;
+}
+
 async function assertPayablesSettlementAvailable({financialDocument={},entityPassportId=""}={}) {
   const settlement=financialDocumentFromRecord(financialDocument),type=clean(settlement.documentType).toLowerCase();
   const sourceId=clean(settlement.sourceFinancialDocumentId);
@@ -208,7 +219,8 @@ async function assertSettlementControlSource({financialDocument={},entityPasspor
   const sale=await readCanonicalSource({sourceId:control.sourceFinancialDocumentId,entityPassportId,documentTypes:["invoice"],errorPrefix:"Settlement"});
   const assetSale=sale?.metadata?.assetSale===true||clean(sale?.metadata?.invoiceType).toLowerCase()==="asset-sale"||clean(sale?.invoiceType).toLowerCase()==="asset-sale";
   if(!assetSale) throw Object.assign(new Error("Settlement requires a canonical asset-sale Invoice."),{name:"IXIFinancialSettlementSaleSourceError",details:{sourceFinancialDocumentId:clean(control.sourceFinancialDocumentId)}});
-  return {checked:true,sourceFinancialDocumentId:clean(sale.financialDocumentId)};
+  const collection=await assertCollectedAssetSaleInvoice({invoice:sale,entityPassportId});
+  return {checked:true,sourceFinancialDocumentId:clean(sale.financialDocumentId),collection};
 }
 
 async function assertReceivablesSettlementAvailable({financialDocument={},entityPassportId=""}={}) {
@@ -223,7 +235,7 @@ async function assertReceivablesSettlementAvailable({financialDocument={},entity
   if(type==="payment"&&clean(settlement.paymentDirection).toLowerCase()!=="inflow") throw Object.assign(new Error("A/R payment direction must be inflow."),{name:"IXIFinancialReceivablesDirectionError"});
   const listed=await providerService.listDocumentsByPassport({passportId:clean(entityPassportId)});
   if(!listed?.ok) throw Object.assign(new Error("A/R settlement balance could not be verified."),{name:"IXIFinancialReceivablesReadError"});
-  const existing=safeArray(listed?.data?.documents).map(financialDocumentFromRecord).filter(item=>clean(item.sourceFinancialDocumentId)===sourceId&&!['void','reversed'].includes(clean(item.financialState).toLowerCase())&&((clean(item.documentType).toLowerCase()==="payment"&&clean(item.paymentDirection).toLowerCase()==="inflow")||clean(item.documentType).toLowerCase()==="credit"));
+  const existing=safeArray(listed?.data?.documents).map(financialDocumentFromRecord).filter(item=>clean(item.sourceFinancialDocumentId)===sourceId&&isActiveReceivableSettlement(item));
   const settled=Math.round(existing.reduce((sum,item)=>sum+financialAmount(item),0)*100)/100,newAmount=financialAmount(settlement),invoiceAmount=financialAmount(invoice);
   if(!(newAmount>0)) throw Object.assign(new Error("A/R settlement amount must be greater than zero."),{name:"IXIFinancialReceivablesAmountError"});
   if(settled+newAmount>invoiceAmount+0.005) throw Object.assign(new Error("A/R settlement exceeds the canonical open Invoice balance."),{name:"IXIFinancialReceivablesOverpaymentError",details:{invoiceAmount,settled,newAmount,openBalance:Math.max(0,invoiceAmount-settled)}});

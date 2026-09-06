@@ -84,6 +84,10 @@ const authorizedFinancialService =
   );
 
 const {
+  assertInvoiceCollectionPatchAvailable
+} = require("./IXIFinancialSalesCloseoutControl");
+
+const {
   createInvitation: createSalesOrderSigningInvitation,
   packageSnapshot: createSalesOrderPackageSnapshot
 } = require("../sales/IXISalesSigningService");
@@ -1079,6 +1083,23 @@ router.patch(
 
     if (clean(mergedDocument.documentType).toLowerCase() === "payables-control") {
       mergedDocument={...mergedDocument,payablesControl:{...safeObject(mergedDocument.payablesControl),context:{...safeObject(mergedDocument?.payablesControl?.context),entityPassportId:clean(accessContext.entityPassportId),updatedByPassportId:clean(accessContext.actorPassportId)}}};
+    }
+
+    try {
+      await assertInvoiceCollectionPatchAvailable({
+        existing: safeObject(existing?.financialDocument),
+        merged: mergedDocument,
+        entityPassportId: accessContext.entityPassportId
+      });
+    } catch (error) {
+      return res.status(409).json({
+        ok: false,
+        errors: [{
+          name: clean(error?.name || "IXIFinancialSalesCloseoutControlError"),
+          message: clean(error?.message || "Sales closeout control failed."),
+          details: safeObject(error?.details)
+        }]
+      });
     }
 
     if(["treasury-account","treasury-reconciliation"].includes(clean(mergedDocument.documentType).toLowerCase())||clean(mergedDocument?.treasuryMovement?.transactionClass)) return res.status(409).json({ok:false,error:{name:"IXITreasuryImmutableRecordError",message:"Canonical Treasury records are immutable; post a new controlled Treasury event."}});
