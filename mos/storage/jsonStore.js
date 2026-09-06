@@ -1,65 +1,55 @@
-const fs = require("fs");
 const path = require("path");
+const jsonFileStore = require("./jsonFileStore");
 
-function ensureParentDirectory(filePath) {
-  fs.mkdirSync(path.dirname(filePath), {
-    recursive: true
-  });
+function configuredProvider() {
+  const provider = String(process.env.IXI_MOS_STORAGE_PROVIDER || "json")
+    .trim().toLowerCase();
+  if (!["json", "sqlite"].includes(provider)) {
+    const error = new Error(`Unsupported MOS storage provider: ${provider}`);
+    error.code = "MOS_STORAGE_PROVIDER_UNSUPPORTED";
+    throw error;
+  }
+  return provider;
 }
 
-function clone(value) {
-  return JSON.parse(JSON.stringify(value));
+function sqlite() {
+  /* Load node:sqlite only when the database provider is explicitly selected. */
+  const { getMosSqliteStore } = require("./sqliteStore");
+  const dataRoot = process.env.IXI_MOS_DATA_ROOT || path.join(process.cwd(), "data", "mos");
+  return getMosSqliteStore({ dataRoot });
 }
 
 function readJsonFile(filePath, fallback) {
-  ensureParentDirectory(filePath);
-
-  if (!fs.existsSync(filePath)) {
-    writeJsonFileAtomic(filePath, fallback);
-    return clone(fallback);
-  }
-
-  try {
-    const raw = fs.readFileSync(filePath, "utf8");
-    return JSON.parse(raw);
-  } catch (error) {
-    console.error("MOS JSON READ FAILED:", {
-      filePath,
-      error: error?.message || String(error)
-    });
-
-    throw error;
-  }
+  return configuredProvider() === "sqlite"
+    ? sqlite().read(filePath, fallback)
+    : jsonFileStore.readJsonFile(filePath, fallback);
 }
 
 function writeJsonFileAtomic(filePath, value) {
-  ensureParentDirectory(filePath);
-
-  const temporaryPath =
-    `${filePath}.${process.pid}.${Date.now()}.tmp`;
-
-  fs.writeFileSync(
-    temporaryPath,
-    JSON.stringify(value, null, 2),
-    "utf8"
-  );
-
-  fs.renameSync(temporaryPath, filePath);
-
-  return value;
+  return configuredProvider() === "sqlite"
+    ? sqlite().write(filePath, value)
+    : jsonFileStore.writeJsonFileAtomic(filePath, value);
 }
 
 function updateJsonFile(filePath, fallback, updater) {
-  const current = readJsonFile(filePath, fallback);
-  const next = updater(clone(current));
+  return configuredProvider() === "sqlite"
+    ? sqlite().update(filePath, fallback, updater)
+    : jsonFileStore.updateJsonFile(filePath, fallback, updater);
+}
 
-  writeJsonFileAtomic(filePath, next);
-
-  return next;
+function describeMosStorage() {
+  if (configuredProvider() === "sqlite") return sqlite().health();
+  return {
+    ok: true,
+    provider: "json",
+    durableDatabase: false,
+    migrationRequired: true
+  };
 }
 
 module.exports = {
   readJsonFile,
   writeJsonFileAtomic,
-  updateJsonFile
+  updateJsonFile,
+  describeMosStorage
 };

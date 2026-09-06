@@ -27,8 +27,9 @@ const {
   "../objects/objectService"
 );
 
+(async () => {
 const first =
-  loadAosEnvironment({
+  await loadAosEnvironment({
     ownerUserId:
       "sharetribe-owner-2",
 
@@ -92,7 +93,7 @@ const tool =
   });
 
 const second =
-  loadAosEnvironment({
+  await loadAosEnvironment({
     ownerUserId:
       "sharetribe-owner-2",
 
@@ -170,3 +171,7 @@ console.log(
     2
   )
 );
+})().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});

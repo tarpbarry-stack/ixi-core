@@ -4,7 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node --test financial/*.test.js freight/*.test.js sales/*.test.js tickets/*.test.js mos/relationships/*.test.js"
+    "test": "node --test financial/*.test.js freight/*.test.js sales/*.test.js tickets/*.test.js mos/relationships/*.test.js mos/storage/*.test.js mos/tests/*.test.js",
+    "mos:storage:migrate": "node mos/storage/migrateLegacyJson.js --apply",
+    "mos:storage:verify": "node mos/storage/migrateLegacyJson.js --verify",
+    "mos:storage:backup": "node mos/storage/backupSqlite.js"
   },
   "keywords": [],
   "author": "",

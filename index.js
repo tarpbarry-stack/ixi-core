@@ -66,6 +66,10 @@ const {
   mosRouter
 } = require("./mos/routes/mosRouter");
 
+const {
+  describeMosStorage
+} = require("./mos/storage/jsonStore");
+
 const financialRoutes = require("./financial/IXIFinancialRoutes");
 const salesSigningRoutes = require("./sales/IXISalesSigningRoutes");
 const { freightRouter } = require("./freight/routes/freightRouter");
@@ -179,10 +183,24 @@ app.get("/", (req, res) => {
 });
 
 app.get("/health", (req, res) => {
-  res.json({
-    ok: true,
-    service: "ix-core"
-  });
+  try {
+    const mosStorage = describeMosStorage();
+    res.status(mosStorage.ok ? 200 : 503).json({
+      ok: mosStorage.ok,
+      service: "ix-core",
+      mosStorage
+    });
+  } catch (error) {
+    res.status(503).json({
+      ok: false,
+      service: "ix-core",
+      mosStorage: {
+        ok: false,
+        code: error?.code || "MOS_STORAGE_UNAVAILABLE",
+        error: error?.message || String(error)
+      }
+    });
+  }
 });
 
 app.post("/passport/ensure", (req, res) => {

@@ -85,6 +85,10 @@ const {
 } = require("./httpHelpers");
 
 const {
+  describeMosStorage
+} = require("../storage/jsonStore");
+
+const {
   MosError
 } = require("../errors/MosError");
 
@@ -258,11 +262,26 @@ function beginHttpCommand({
 /* ---------- HEALTH ---------- */
 
 router.get("/health", (req, res) => {
-  return res.json({
-    ok: true,
-    service: "ixi-mos",
-    version: "v1"
-  });
+  try {
+    const storage = describeMosStorage();
+    return res.status(storage.ok ? 200 : 503).json({
+      ok: storage.ok,
+      service: "ixi-mos",
+      version: "v1",
+      storage
+    });
+  } catch (error) {
+    return res.status(503).json({
+      ok: false,
+      service: "ixi-mos",
+      version: "v1",
+      storage: {
+        ok: false,
+        code: error?.code || "MOS_STORAGE_UNAVAILABLE",
+        error: error?.message || String(error)
+      }
+    });
+  }
 });
 
 /*
