@@ -1087,6 +1087,24 @@ function softDeleteObject({
     return current;
   }
 
+  const isCanonicalOwnerPerson =
+    current.objectType === MOS_OBJECT_TYPES.PERSON &&
+    (
+      current?.metadata?.onboarding?.relationship === "owner" ||
+      (Array.isArray(current.identities) && current.identities.some(identity =>
+        cleanText(identity?.sourceType) === "sharetribe-user"
+      ))
+    );
+
+  if (isCanonicalOwnerPerson) {
+    throw new MosError(
+      "OBJECT_DELETE_CANONICAL_OWNER_FORBIDDEN",
+      "The canonical owner Person cannot be deleted while it anchors the Entity membership.",
+      { objectId: current.objectId, entityId: current.entityId },
+      409
+    );
+  }
+
   const activeChildren =
     Object.values(objects)
       .filter(
@@ -1164,10 +1182,82 @@ function softDeleteObject({
 }
 
 
+function restoreObject({
+  objectId,
+  actorId = null,
+  reason = "administrative-recovery"
+}) {
+  const objects = readObjects();
+  const current = objects[objectId];
+
+  if (!current) {
+    throw new MosError(
+      "OBJECT_NOT_FOUND",
+      `Object not found: ${objectId}`,
+      { objectId },
+      404
+    );
+  }
+
+  if (current.status === MOS_OBJECT_STATUS.ACTIVE) {
+    return current;
+  }
+
+  if (current.status !== MOS_OBJECT_STATUS.SOFT_DELETED) {
+    throw new MosError(
+      "OBJECT_RESTORE_STATUS_INVALID",
+      "Only soft-deleted objects can be restored.",
+      { objectId, status: current.status },
+      409
+    );
+  }
+
+  const timestamp = nowIso();
+  const currentRevision =
+    Number.isInteger(Number(current.revision)) && Number(current.revision) >= 0
+      ? Number(current.revision)
+      : 0;
+
+  const restored = {
+    ...current,
+    status: MOS_OBJECT_STATUS.ACTIVE,
+    softDeletedAt: null,
+    updatedAt: timestamp,
+    revision: currentRevision + 1,
+    metadata: {
+      ...normalizePlainObject(current.metadata, {}),
+      recovery: {
+        restoredAt: timestamp,
+        restoredBy: cleanText(actorId) || null,
+        reason: cleanText(reason) || "administrative-recovery"
+      }
+    }
+  };
+
+  objects[objectId] = restored;
+  writeObjects(objects);
+
+  appendEvent({
+    entityId: restored.entityId,
+    eventType: "object.restored",
+    objectId: restored.objectId,
+    actorId,
+    payload: {
+      previousStatus: current.status,
+      reason: restored.metadata.recovery.reason,
+      revision: restored.revision
+    }
+  });
+
+  return restored;
+}
+
+
 module.exports = {
   createObject,
   getObject,
   listObjects,
   updateObject,
-  softDeleteObject
+  softDeleteObject,
+  restoreObject
 };

@@ -23,8 +23,17 @@ const {
 
 const {
   createObject,
-  listObjects
+  listObjects,
+  getObject,
+  softDeleteObject
 } = require("../objects/objectService");
+
+const {
+  readJsonFile,
+  writeJsonFileAtomic
+} = require("../storage/jsonStore");
+
+const { MOS_PATHS } = require("../storage/mosPaths");
 
 const {
   readPassportRecords
@@ -137,4 +146,59 @@ test("existing accounts adopt their sole legacy Person instead of creating a dup
       .filter(object => object.objectType === "person").length,
     1
   );
+});
+
+test("onboarding restores the same canonical owner Person after legacy soft deletion", () => {
+  const principalId = "sharetribe-owner-recovery";
+  const first = ensureCommercialOnboarding({
+    ownerUserId: principalId,
+    entityDisplayName: "Recovery Equipment",
+    person: { displayName: "Recovery Owner" }
+  });
+
+  // Simulate the legacy defect that allowed a canonical owner to be deleted.
+  const objects = readJsonFile(MOS_PATHS.objects, {});
+  objects[first.person.objectId] = {
+    ...objects[first.person.objectId],
+    status: "soft-deleted",
+    softDeletedAt: new Date().toISOString()
+  };
+  writeJsonFileAtomic(MOS_PATHS.objects, objects);
+
+  const recovered = ensureCommercialOnboarding({
+    ownerUserId: principalId,
+    entityDisplayName: "Recovery Equipment",
+    person: { displayName: "Recovery Owner" }
+  });
+
+  assert.equal(recovered.person.objectId, first.person.objectId);
+  assert.equal(recovered.person.status, "active");
+  assert.equal(recovered.person.softDeletedAt, null);
+  assert.equal(recovered.created.person, false);
+  assert.equal(
+    recovered.passports.personPassportId,
+    first.passports.personPassportId
+  );
+  assert.equal(
+    listObjects({ entityId: first.entity.entityId, status: "active" })
+      .filter(object => object.objectType === "person").length,
+    1
+  );
+});
+
+test("canonical owner Person cannot be deleted again", () => {
+  const result = ensureCommercialOnboarding({
+    ownerUserId: "sharetribe-protected-owner",
+    entityDisplayName: "Protected Equipment",
+    person: { displayName: "Protected Owner" }
+  });
+
+  assert.throws(
+    () => softDeleteObject({
+      objectId: result.person.objectId,
+      actorId: "sharetribe-protected-owner"
+    }),
+    error => error?.code === "OBJECT_DELETE_CANONICAL_OWNER_FORBIDDEN"
+  );
+  assert.equal(getObject(result.person.objectId).status, "active");
 });

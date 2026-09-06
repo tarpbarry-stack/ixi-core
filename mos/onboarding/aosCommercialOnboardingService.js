@@ -8,7 +8,8 @@ const {
 const {
   getObject,
   listObjects,
-  updateObject
+  updateObject,
+  restoreObject
 } = require("../objects/objectService");
 
 const {
@@ -65,7 +66,7 @@ function ensureOwnerPerson({
   let existing = directlyLinked;
 
   if (!existing && explicitObjectId) {
-    const explicit = getObject(explicitObjectId);
+    let explicit = getObject(explicitObjectId);
     if (
       cleanText(explicit?.entityId) !== entityId ||
       cleanText(explicit?.objectType) !== "person"
@@ -77,6 +78,31 @@ function ensureOwnerPerson({
         409
       );
     }
+
+    const belongsToPrincipal =
+      explicit?.metadata?.onboarding?.principalId === principalId ||
+      (Array.isArray(explicit?.identities) && explicit.identities.some(identity =>
+        cleanText(identity?.sourceType) === "sharetribe-user" &&
+        cleanText(identity?.sourceId) === principalId
+      ));
+
+    if (!belongsToPrincipal) {
+      throw new MosError(
+        "IXI_ONBOARDING_OWNER_PERSON_AUTHORITY_MISMATCH",
+        "The owner membership Person is not bound to the authenticated principal.",
+        { entityId, personObjectId: explicitObjectId },
+        403
+      );
+    }
+
+    if (explicit.status === "soft-deleted") {
+      explicit = restoreObject({
+        objectId: explicitObjectId,
+        actorId: principalId,
+        reason: "canonical-owner-onboarding-recovery"
+      });
+    }
+
     existing = explicit;
   }
 
