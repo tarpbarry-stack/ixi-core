@@ -32,6 +32,11 @@ function packageSnapshot(order = {}) {
 
 function getRecord(envelope = {}) { return envelope?.data?.record || envelope?.record || null; }
 
+function workflowErrorMessage(envelope = {}, fallback = "Sales workflow could not be completed.") {
+  const first = array(envelope?.errors)[0];
+  return clean(typeof first === "string" ? first : first?.message) || fallback;
+}
+
 function publicOrder(order = {}) {
   return {
     schema: order.schema,
@@ -371,7 +376,7 @@ async function completeExternalSignature(financialDocumentId, input = {}, eviden
     sourceIp: clean(evidence.sourceIp),
     userAgent: clean(evidence.userAgent),
   });
-  if (!signed?.ok) throw new Error(signed?.errors?.[0]?.message || "Manual signature attestation could not be saved.");
+  if (!signed?.ok) throw new Error(workflowErrorMessage(signed, "Manual signature attestation could not be saved."));
   sourceRecord = getRecord(signed);
   financialDocument = sourceRecord.financialDocument;
   order = financialDocument.salesOrder;
