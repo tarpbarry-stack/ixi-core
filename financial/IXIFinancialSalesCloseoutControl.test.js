@@ -3,7 +3,10 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
+process.env.IXI_FINANCIAL_EVIDENCE_SECRET = "test-financial-evidence-secret-at-least-32-characters";
+
 const providerService = require("./IXIFinancialProviderService");
+const { signFinancialAttachmentEvidence } = require("./IXIFinancialAttachmentService");
 const {
   getInvoiceCollectionPosition,
   assertInvoiceCollectionPatchAvailable,
@@ -31,6 +34,22 @@ const payment = (amount, overrides = {}) => ({
     ...overrides,
   },
 });
+
+const billOfSale = () => {
+  const attachment = {
+    attachmentId: "ifa_bill_of_sale",
+    financialDocumentId: "ifd_invoice001",
+    type: "bill-of-sale",
+    fileName: "bill-of-sale.pdf",
+    mimeType: "application/pdf",
+    size: 256,
+    sizeBytes: 256,
+    checksumSha256: Buffer.alloc(32, 9).toString("base64"),
+    storageKey: "financial-evidence/IXI-ENTITY/ifd_invoice001/ifa_bill_of_sale.pdf",
+    status: "verified",
+  };
+  return { ...attachment, verification: signFinancialAttachmentEvidence(attachment) };
+};
 
 async function withDocuments(documents, operation) {
   const original = providerService.listDocumentsByPassport;
@@ -100,17 +119,38 @@ test("SOLD requires a canonical zero-balance Invoice and matching lineage", asyn
         saleId: "ifd_invoice001",
         financialInvoiceId: "ifd_invoice001",
       },
+      sale: { billOfSaleNumber: "BOS-1001" },
       status: "sold",
     };
     const result = await assertInvoiceCollectionPatchAvailable({
       existing: invoice(),
       merged: invoice({
         financialState: "collected",
+        attachments: [billOfSale()],
         metadata: { assetSale: true, transactModule: "sold", assetSaleRecord: soldRecord },
       }),
       entityPassportId: "IXI-ENTITY",
     });
     assert.equal(result.balance, 0);
+  });
+});
+
+test("SOLD rejects fabricated or missing Bill of Sale evidence", async () => {
+  await withDocuments([payment(100)], async () => {
+    const soldRecord = {
+      identity: { saleId: "ifd_invoice001", financialInvoiceId: "ifd_invoice001" },
+      sale: { billOfSaleNumber: "BOS-1001" },
+      status: "sold",
+    };
+    await assert.rejects(() => assertInvoiceCollectionPatchAvailable({
+      existing: invoice(),
+      merged: invoice({
+        financialState: "collected",
+        attachments: [{ ...billOfSale(), verification: "fabricated" }],
+        metadata: { assetSale: true, transactModule: "sold", assetSaleRecord: soldRecord },
+      }),
+      entityPassportId: "IXI-ENTITY",
+    }), /server-verified Bill of Sale/u);
   });
 });
 
