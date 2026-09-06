@@ -3,7 +3,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const { createSalesSigningToken, verifySalesSigningToken } = require("./IXISalesSigningToken");
-const { signOrder, invoiceInput, createInvitation } = require("./IXISalesSigningService");
+const { signOrder, attestExternalSignature, invoiceInput, createInvitation } = require("./IXISalesSigningService");
 
 test("sales signing token is scoped, expiring, and tamper evident", () => {
   process.env.IXI_SALES_SIGNING_SECRET = "test-secret-that-is-at-least-thirty-two-characters";
@@ -52,4 +52,49 @@ test("signing invitation retries return the same token without creating a new ve
   assert.equal(replay.idempotentReplay, true);
   assert.equal(replay.token, first.token);
   assert.equal(replay.tokenVersion, 1);
+});
+
+test("authenticated staff can attest a signed copy received outside IXI with immutable evidence", () => {
+  const order = {
+    schema: "ixi-equipment-sales-order-v1",
+    identity: { salesOrderId: "ifd_order_manual", number: "SO-2001", revision: 1 },
+    customer: { name: "Clements Farm" },
+    asset: { label: "2017 Deere 544K II", serialNumber: "1DW544KZCHF681737" },
+    commercial: { currency: "USD", paymentTerms: "Wire before release" },
+    totals: { subtotal: 82000, total: 82000, balanceDue: 82000 },
+    termsDocument: { documentId: "terms-v4", sha256: "a".repeat(64), url: "https://example.com/terms.pdf", pageCount: 2 },
+    signing: {}, related: {}, activity: [], audit: {}, status: "draft",
+  };
+  const signed = attestExternalSignature(order, {
+    signerName: "Keith Clements",
+    signerDate: "2026-02-04",
+    receivedVia: "email",
+    externalReference: "Signed PDF retained in deal file",
+    attestation: true,
+  }, {
+    actorPassportId: "pass_sales_manager",
+    requestId: "req-manual-sign",
+  });
+  assert.equal(signed.status, "signed-invoice-pending");
+  assert.equal(signed.signing.signatureType, "external-document-attestation");
+  assert.equal(signed.signing.receivedVia, "email");
+  assert.equal(signed.signing.attestedByPassportId, "pass_sales_manager");
+  assert.match(signed.signing.sourcePackageHash, /^[a-f0-9]{64}$/);
+  assert.match(signed.signing.signedPackageHash, /^[a-f0-9]{64}$/);
+  assert.equal(signed.activity.at(-1).type, "sales-order-signature-attested");
+});
+
+test("manual signature attestation rejects an unauthenticated or unconfirmed override", () => {
+  assert.throws(() => attestExternalSignature({}, {
+    signerName: "Keith Clements",
+    signerDate: "2026-02-04",
+    receivedVia: "paper",
+    attestation: false,
+  }, { actorPassportId: "pass_sales_manager" }), /attestation/i);
+  assert.throws(() => attestExternalSignature({}, {
+    signerName: "Keith Clements",
+    signerDate: "2026-02-04",
+    receivedVia: "paper",
+    attestation: true,
+  }, {}), /authenticated actor/i);
 });

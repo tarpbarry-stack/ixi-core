@@ -94,7 +94,9 @@ const {
 
 const {
   createInvitation: createSalesOrderSigningInvitation,
-  packageSnapshot: createSalesOrderPackageSnapshot
+  packageSnapshot: createSalesOrderPackageSnapshot,
+  ensureInvoiceForSalesOrder,
+  completeExternalSignature
 } = require("../sales/IXISalesSigningService");
 
 const {
@@ -1026,6 +1028,112 @@ router.post(
         ok: false,
         errors: [{ name: clean(error?.name || "IXISalesSigningInvitationError"), message: clean(error?.message || "Signing invitation could not be created.") }]
       });
+    }
+  }
+);
+
+router.post(
+  "/sales-orders/:financialDocumentId/ensure-invoice",
+  async (req, res) => {
+    const accessContext = await getAccess(req);
+    const financialDocumentId = clean(req.params.financialDocumentId);
+    const baseAuthorization = authorizeFinancialAction({ accessContext, action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT });
+    if (!baseAuthorization.allowed) return sendEnvelope(res, createAuthorizationFailure({
+      accessContext,
+      operation: "financial.sales-order.invoice.ensure",
+      action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
+      reason: baseAuthorization.reason,
+      details: baseAuthorization,
+    }));
+    const loaded = await providerService.getDocument({ financialDocumentId });
+    const financialDocument = loaded?.data?.record?.financialDocument;
+    if (!loaded?.ok || !financialDocument) return sendEnvelope(res, loaded);
+    const authorization = authorizeFinancialDocumentWrite({ accessContext, action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT, financialDocument });
+    if (!authorization.allowed) return sendEnvelope(res, createAuthorizationFailure({
+      accessContext,
+      operation: "financial.sales-order.invoice.ensure",
+      action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
+      reason: authorization.reason,
+      details: authorization,
+    }));
+    try {
+      const context = getRequestContext(req);
+      const result = await ensureInvoiceForSalesOrder(financialDocumentId, {
+        ...context,
+        actorPassportId: accessContext.actorPassportId,
+        entityPassportId: accessContext.entityPassportId,
+      });
+      const refreshed = await providerService.getDocument({ financialDocumentId });
+      return res.status(result.idempotentReplay ? 200 : 201).json({
+        ok: true,
+        data: {
+          financialDocumentId,
+          order: result.order,
+          invoice: result.invoice,
+          record: refreshed?.data?.record || null,
+          idempotentReplay: result.idempotentReplay === true,
+        },
+        errors: [],
+        warnings: [],
+      });
+    } catch (error) {
+      return res.status(409).json({ ok: false, data: null, errors: [{
+        name: clean(error?.name || "IXISalesOrderInvoiceEnsureError"),
+        message: clean(error?.message || "Linked Invoice could not be ensured."),
+      }], warnings: [] });
+    }
+  }
+);
+
+router.post(
+  "/sales-orders/:financialDocumentId/manual-signature",
+  async (req, res) => {
+    const accessContext = await getAccess(req);
+    const financialDocumentId = clean(req.params.financialDocumentId);
+    const baseAuthorization = authorizeFinancialAction({ accessContext, action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT });
+    if (!baseAuthorization.allowed) return sendEnvelope(res, createAuthorizationFailure({
+      accessContext,
+      operation: "financial.sales-order.manual-signature.complete",
+      action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
+      reason: baseAuthorization.reason,
+      details: baseAuthorization,
+    }));
+    const loaded = await providerService.getDocument({ financialDocumentId });
+    const financialDocument = loaded?.data?.record?.financialDocument;
+    if (!loaded?.ok || !financialDocument) return sendEnvelope(res, loaded);
+    const authorization = authorizeFinancialDocumentWrite({ accessContext, action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT, financialDocument });
+    if (!authorization.allowed) return sendEnvelope(res, createAuthorizationFailure({
+      accessContext,
+      operation: "financial.sales-order.manual-signature.complete",
+      action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
+      reason: authorization.reason,
+      details: authorization,
+    }));
+    try {
+      const context = getRequestContext(req);
+      const result = await completeExternalSignature(financialDocumentId, req.body || {}, {
+        ...context,
+        actorPassportId: accessContext.actorPassportId,
+        entityPassportId: accessContext.entityPassportId,
+      });
+      const refreshed = await providerService.getDocument({ financialDocumentId });
+      return res.status(result.idempotentReplay ? 200 : 201).json({
+        ok: true,
+        data: {
+          financialDocumentId,
+          order: result.order,
+          invoice: result.invoice,
+          record: refreshed?.data?.record || null,
+          idempotentReplay: result.idempotentReplay === true,
+        },
+        errors: [],
+        warnings: [],
+      });
+    } catch (error) {
+      return res.status(409).json({ ok: false, data: null, errors: [{
+        name: clean(error?.name || "IXISalesManualSignatureError"),
+        message: clean(error?.message || "Manual signature could not be recorded."),
+      }], warnings: [] });
     }
   }
 );
