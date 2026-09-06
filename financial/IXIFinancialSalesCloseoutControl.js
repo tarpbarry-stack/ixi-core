@@ -1,6 +1,7 @@
 "use strict";
 
 const providerService = require("./IXIFinancialProviderService");
+const { verifyFinancialAttachmentEvidence } = require("./IXIFinancialAttachmentService");
 
 const clean = value => String(value ?? "").trim();
 const object = value => value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -140,6 +141,20 @@ async function assertInvoiceCollectionPatchAvailable({
     if (saleInvoiceId && saleInvoiceId !== position.invoiceId) {
       throw Object.assign(new Error("SOLD record Invoice lineage does not match the canonical Invoice."), {
         name: "IXIFinancialSoldInvoiceLineageError",
+      });
+    }
+    if (!clean(sale?.sale?.billOfSaleNumber)) {
+      throw Object.assign(new Error("SOLD closeout requires an authoritative Bill of Sale number."), {
+        name: "IXIFinancialBillOfSaleNumberRequiredError",
+      });
+    }
+    const billOfSale = array(merged.attachments).find(attachment =>
+      clean(attachment?.type).toLowerCase() === "bill-of-sale" &&
+      verifyFinancialAttachmentEvidence(attachment, { financialDocumentId: position.invoiceId })
+    );
+    if (!billOfSale) {
+      throw Object.assign(new Error("SOLD closeout requires a server-verified Bill of Sale attachment."), {
+        name: "IXIFinancialBillOfSaleEvidenceRequiredError",
       });
     }
   }
