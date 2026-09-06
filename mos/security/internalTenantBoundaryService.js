@@ -112,8 +112,10 @@ function bindInternalTenantContext(
    * The signed principal is authoritative.
    */
   if (
-    path ===
-      "/aos/environment"
+    [
+      "/aos/environment",
+      "/aos/onboarding/bootstrap"
+    ].includes(path)
   ) {
     req.body = {
       ...safeObject(

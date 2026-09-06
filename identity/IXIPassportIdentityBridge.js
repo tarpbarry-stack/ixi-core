@@ -36,7 +36,9 @@
 
 
 const {
-  ensurePassportForSource
+  ensurePassportForSource,
+  findPassportById,
+  bindPassportSource
 } =
   require(
     "../passport/passportRegistry"
@@ -359,25 +361,47 @@ function ensurePersonPassport({
 
 
   const passportResult =
-    ensurePassportForSource({
-      sourceType:
-        PASSPORT_SOURCE_TYPES
-          .MOS_PERSON,
+    (() => {
+      const objectPassportId =
+        (Array.isArray(person.identities)
+          ? person.identities
+          : [])
+          .map(identity => clean(identity?.passportId))
+          .find(Boolean);
 
-      sourceId:
-        id,
+      if (!objectPassportId) {
+        return ensurePassportForSource({
+          sourceType:
+            PASSPORT_SOURCE_TYPES.MOS_PERSON,
+          sourceId: id,
+          entityId,
+          visibility: "private",
+          status: "active",
+          salesmanName: clean(person.displayName)
+        });
+      }
 
-      visibility:
-        "private",
+      const existing =
+        findPassportById(objectPassportId);
 
-      status:
-        "active",
+      if (!existing) {
+        throw identityError(
+          "IXI_PERSON_OBJECT_PASSPORT_NOT_FOUND",
+          "The Person references a Passport that does not exist.",
+          { objectId: id, passportId: objectPassportId },
+          409
+        );
+      }
 
-      salesmanName:
-        clean(
-          person.displayName
-        )
-    });
+      const passport = bindPassportSource({
+        passportId: objectPassportId,
+        sourceType: PASSPORT_SOURCE_TYPES.MOS_PERSON,
+        sourceId: id,
+        entityId
+      });
+
+      return { ok: true, created: false, passport };
+    })();
 
 
   const passport =

@@ -93,6 +93,14 @@ const {
 } = require("../accounts/aosEnvironmentService");
 
 const {
+  ensureCommercialOnboarding
+} = require("../onboarding/aosCommercialOnboardingService");
+
+const {
+  provisionSharetribeMachine
+} = require("../onboarding/sharetribeMachineProvisioningService");
+
+const {
   listCardTemplates,
   getCardTemplate,
   createCustomerCardTemplate
@@ -241,6 +249,49 @@ router.use(
 
 
 /* ---------- AOS ENVIRONMENT ---------- */
+
+router.post(
+  "/aos/onboarding/bootstrap",
+  async (req, res) => {
+    try {
+      const principalId =
+        req.ixiRequestContext?.principalId ||
+        req.body?.ownerUserId;
+
+      const onboarding = ensureCommercialOnboarding({
+        ownerUserId: principalId,
+        entityDisplayName: req.body?.entityDisplayName,
+        person: req.body?.person || {},
+        metadata: req.body?.metadata || {}
+      });
+
+      const environment = await loadAosEnvironment({
+        ownerUserId: principalId,
+        displayName: onboarding.entity.displayName,
+        metadata: {
+          source: "commercial-onboarding-bootstrap"
+        }
+      });
+
+      environment.entity = {
+        ...environment.entity,
+        passportId: onboarding.passports.entityPassportId,
+        entityPassportId: onboarding.passports.entityPassportId
+      };
+
+      environment.onboarding = onboarding;
+
+      return res.status(200).json({
+        ok: true,
+        productName: "IXI AOS",
+        onboarding,
+        environment
+      });
+    } catch (error) {
+      return sendMosError(res, error);
+    }
+  }
+);
 
 router.post(
   "/aos/environment",
@@ -608,9 +659,16 @@ router.post(
           ""
         ).trim();
 
+      const input = {
+        ...(req.body || {})
+      };
+
+      /* Internal Passport adoption is never accepted from this route. */
+      delete input.trustedPassportId;
+
       const result =
         provisionAosObject({
-          ...(req.body || {}),
+          ...input,
 
           commandId
         });
@@ -627,6 +685,24 @@ router.post(
         res,
         error
       );
+    }
+  }
+);
+
+router.post(
+  "/aos/machines/sharetribe-listing",
+  (req, res) => {
+    try {
+      const context = req.ixiRequestContext || {};
+      const result = provisionSharetribeMachine({
+        entityId: context.entityId,
+        principalId: context.principalId,
+        listing: req.body?.listing || {}
+      });
+
+      return res.status(result.replayed ? 200 : 201).json(result);
+    } catch (error) {
+      return sendMosError(res, error);
     }
   }
 );
