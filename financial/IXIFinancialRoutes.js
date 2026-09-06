@@ -88,6 +88,11 @@ const {
 } = require("./IXIFinancialSalesCloseoutControl");
 
 const {
+  createFinancialAttachmentUpload,
+  completeFinancialAttachmentUpload
+} = require("./IXIFinancialAttachmentService");
+
+const {
   createInvitation: createSalesOrderSigningInvitation,
   packageSnapshot: createSalesOrderPackageSnapshot
 } = require("../sales/IXISalesSigningService");
@@ -1024,6 +1029,78 @@ router.post(
     }
   }
 );
+
+
+/* =========================================================
+   DOCUMENT EVIDENCE UPLOAD
+   ========================================================= */
+
+async function authorizeAttachmentWrite(req, operation) {
+  const accessContext = await getAccess(req);
+  const financialDocumentId = clean(req.params.financialDocumentId);
+  const failure = await authorizeDocumentRead({
+    accessContext,
+    financialDocumentId,
+    action: IXI_FINANCIAL_ACTIONS.VIEW_DOCUMENT,
+    operation
+  });
+  if (failure) return { accessContext, failure };
+  const provider = getFinancialStorageProvider();
+  const existing = await provider.getFinancialDocumentRecord(financialDocumentId);
+  if (!existing) return { accessContext, missing: true };
+  const authorization = authorizeFinancialDocumentWrite({
+    accessContext,
+    action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
+    financialDocument: existing.financialDocument
+  });
+  if (!authorization.allowed) {
+    return {
+      accessContext,
+      failure: createAuthorizationFailure({
+        accessContext,
+        operation,
+        action: IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT,
+        reason: authorization.reason,
+        details: authorization
+      })
+    };
+  }
+  return { accessContext, existing };
+}
+
+router.post("/documents/:financialDocumentId/attachments/init", async (req, res) => {
+  const operation = "financial.attachment.init";
+  try {
+    const authorization = await authorizeAttachmentWrite(req, operation);
+    if (authorization.failure) return sendEnvelope(res, authorization.failure);
+    if (authorization.missing) return res.status(404).json({ ok: false, errors: [{ name: "IXIFinancialNotFoundError", message: "Financial document not found." }] });
+    const upload = await createFinancialAttachmentUpload({
+      ...safeObject(req.body),
+      financialDocumentId: req.params.financialDocumentId,
+      entityPassportId: authorization.accessContext.entityPassportId
+    });
+    return res.status(201).json({ ok: true, contract: "ixi-financial-attachment", operation, data: { upload }, errors: [], warnings: [] });
+  } catch (error) {
+    return res.status(400).json({ ok: false, contract: "ixi-financial-attachment", operation, data: null, errors: [{ name: clean(error?.name || "IXIFinancialAttachmentError"), message: clean(error?.message || "Evidence upload could not be initialized.") }], warnings: [] });
+  }
+});
+
+router.post("/documents/:financialDocumentId/attachments/complete", async (req, res) => {
+  const operation = "financial.attachment.complete";
+  try {
+    const authorization = await authorizeAttachmentWrite(req, operation);
+    if (authorization.failure) return sendEnvelope(res, authorization.failure);
+    if (authorization.missing) return res.status(404).json({ ok: false, errors: [{ name: "IXIFinancialNotFoundError", message: "Financial document not found." }] });
+    const attachment = await completeFinancialAttachmentUpload({
+      ...safeObject(req.body),
+      financialDocumentId: req.params.financialDocumentId,
+      entityPassportId: authorization.accessContext.entityPassportId
+    });
+    return res.status(200).json({ ok: true, contract: "ixi-financial-attachment", operation, data: { attachment }, errors: [], warnings: [] });
+  } catch (error) {
+    return res.status(400).json({ ok: false, contract: "ixi-financial-attachment", operation, data: null, errors: [{ name: clean(error?.name || "IXIFinancialAttachmentError"), message: clean(error?.message || "Evidence upload could not be verified.") }], warnings: [] });
+  }
+});
 
 
 /* =========================================================
