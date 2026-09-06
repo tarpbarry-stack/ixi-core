@@ -71,6 +71,31 @@ test("manual outside-IXI signature attestation is valid without an internally ho
   assert.equal(validation.ok, true, validation.errors.join("\n"));
 });
 
+test("manual attestation still requires customer contact and machine serial", () => {
+  const document = createFinancialDocumentByType({ documentType: "sales-order", input: input() });
+  document.salesOrder.status = "signed-invoice-pending";
+  document.salesOrder.customer = { name: "ABC Contractors", email: "", phone: "" };
+  document.salesOrder.asset.serialNumber = "";
+  document.salesOrder.termsDocument = { documentId: "", version: "", sha256: "", url: "", pageCount: 0 };
+  document.salesOrder.signing = {
+    status: "signed",
+    signatureType: "external-document-attestation",
+    signatureValue: "SIGNED COPY ATTESTED ON FILE",
+    signerName: "Keith Clements",
+    signerDate: "2026-09-06",
+    receivedVia: "email",
+    attestedAt: "2026-09-06T06:37:06.000Z",
+    attestedByPassportId: "pass_actor",
+    signedAt: "2026-09-06T06:37:06.000Z",
+    signedPackageHash: "b".repeat(64),
+  };
+
+  const validation = validateFinancialDocument(document);
+  assert.equal(validation.ok, false);
+  assert.ok(validation.errors.includes("signable sales order requires customer identity and delivery contact."));
+  assert.ok(validation.errors.includes("signable sales order requires serial/VIN."));
+});
+
 test("an unsigned sales order cannot bypass counsel terms requirements", () => {
   const document = createFinancialDocumentByType({ documentType: "sales-order", input: input() });
   document.salesOrder.status = "signed-invoice-pending";
