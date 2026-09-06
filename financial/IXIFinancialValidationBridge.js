@@ -1549,11 +1549,10 @@ function validateFinancialDocument(
     if (Number(totals.total) !== customerTotal) errors.push("sales order customer total is invalid.");
     if (Number(totals.balanceDue) !== balanceDue) errors.push("sales order balance due is invalid.");
     if (deposit > customerTotal) errors.push("sales order deposit cannot exceed customer total.");
-    if (["ready-for-signature", "sent-for-signature", "viewed"].includes(status) ||
-        (["signed-invoice-pending", "signed"].includes(status) && !manualSignatureAttestation)) {
+    if (["ready-for-signature", "sent-for-signature", "viewed", "signed-invoice-pending", "signed"].includes(status)) {
       if (!clean(record?.customer?.name) || !clean(record?.customer?.email || record?.customer?.phone)) errors.push("signable sales order requires customer identity and delivery contact.");
       if (!clean(record?.asset?.serialNumber)) errors.push("signable sales order requires serial/VIN.");
-      if (!clean(terms.documentId) || !/^[a-f0-9]{64}$/i.test(clean(terms.sha256)) || !clean(terms.url) || Number(terms.pageCount) !== 2) errors.push("signable sales order requires the exact two-page terms document identity, hash, and URL.");
+      if (!manualSignatureAttestation && (!clean(terms.documentId) || !/^[a-f0-9]{64}$/i.test(clean(terms.sha256)) || !clean(terms.url) || Number(terms.pageCount) !== 2)) errors.push("signable sales order requires the exact two-page terms document identity, hash, and URL.");
     }
     if (["signed-invoice-pending", "signed"].includes(status) && (!clean(signing.signedAt) || !clean(signing.signedPackageHash))) errors.push("signed sales order requires signature evidence and package hash.");
     if (status === "signed" && !clean(record?.related?.invoiceId)) errors.push("signed sales order requires its generated Invoice lineage.");
