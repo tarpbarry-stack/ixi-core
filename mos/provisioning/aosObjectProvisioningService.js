@@ -2,6 +2,7 @@
 
 const {
   createObject,
+  ensureObjectCapabilities,
   getObject,
   updateObject
 } = require(
@@ -35,6 +36,22 @@ const {
 } = require(
   "./aosObjectPassportService"
 );
+
+const AOS_UNIVERSAL_OPERATING_CAPABILITIES = Object.freeze({
+  canMove: true,
+  canContain: true,
+  canCreate: true,
+  canOpenStack: true,
+  canMoveToBoard: true,
+  canTransact: true,
+  canHaveDocuments: true,
+  canHaveExpenses: true,
+  canHaveWorkOrders: true,
+  editable: true,
+  hasConsole: true,
+  hasRail: true,
+  hasRelationships: true
+});
 
 
 /* =========================================================
@@ -232,6 +249,12 @@ function provisionAosObject(
       );
     }
 
+    object = ensureObjectCapabilities({
+      objectId: object.objectId,
+      requiredCapabilities: AOS_UNIVERSAL_OPERATING_CAPABILITIES,
+      actorId: normalized.actorId
+    });
+
 
     /* -----------------------------------------------------
        2. ENSURE IXI PASSPORT
@@ -296,6 +319,8 @@ function provisionAosObject(
           ...safeObject(
             object.metadata
           ),
+
+          transactEligible: true,
 
           provisioning: {
             contractVersion:
@@ -519,6 +544,7 @@ function provisionAosObject(
    ========================================================= */
 
 module.exports = {
+  AOS_UNIVERSAL_OPERATING_CAPABILITIES,
   mergePassportIdentity,
   getObjectPassportIdentity,
   provisionAosObject
