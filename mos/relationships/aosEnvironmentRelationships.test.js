@@ -70,7 +70,8 @@ test("AOS environment projects technical rail edges without requiring a customer
     behaviorId: EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP,
     definitionId: "definition_customer_rail",
     orderKey: "000100",
-    actorId: "relationship-environment-owner"
+    actorId: "relationship-environment-owner",
+    commandId: "environment-rail-projection"
   });
 
   const refreshed = await loadAosEnvironment({

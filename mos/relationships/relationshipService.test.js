@@ -19,6 +19,7 @@ const { listEvents } = require("../events/eventService");
 const {
   createObjectRelationship,
   endObjectRelationship,
+  updateObjectRelationshipOrder,
   listRelatedObjects,
   listRelationships,
   traverseRelationships
@@ -271,4 +272,45 @@ test("structural rail cycles are rejected while neutral technical cycles remain 
 
   assert.equal(forward.changed, true);
   assert.equal(reverse.changed, true);
+});
+
+test("rail order changes are revision-safe, audited, and preserve edge identity", () => {
+  const edge = listRelationships({
+    behaviorId: EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP,
+    sourceObjectId: midland.objectId,
+    targetObjectId: employees.objectId
+  })[0];
+  const reordered = updateObjectRelationshipOrder({
+    relationshipId: edge.relationshipId,
+    expectedRevision: edge.revision,
+    orderKey: "000050",
+    actorId: "owner-1",
+    commandId: "reorder-technical-edge"
+  });
+
+  assert.equal(reordered.changed, true);
+  assert.equal(reordered.relationship.relationshipId, edge.relationshipId);
+  assert.equal(reordered.relationship.orderKey, "000050");
+  assert.equal(reordered.relationship.revision, edge.revision + 1);
+  assert.throws(
+    () => updateObjectRelationshipOrder({
+      relationshipId: edge.relationshipId,
+      expectedRevision: edge.revision,
+      orderKey: "000025",
+      actorId: "owner-1",
+      commandId: "stale-reorder"
+    }),
+    error => error?.code === "RELATIONSHIP_REVISION_CONFLICT"
+  );
+});
+
+test("technical edges require command and actor evidence", () => {
+  assert.throws(
+    () => createObjectRelationship({
+      behaviorId: EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP,
+      sourceObjectId: joe.objectId,
+      targetObjectId: midland.objectId
+    }),
+    error => error?.code === "TECHNICAL_EDGE_COMMAND_REQUIRED"
+  );
 });

@@ -49,6 +49,11 @@ const CAPABILITIES =
       label: "End object connection"
     },
 
+    "aos.relationship.order": {
+      family: "aos",
+      label: "Reorder object connection"
+    },
+
     "aos.archive": {
       family: "aos",
       label: "Archive object"

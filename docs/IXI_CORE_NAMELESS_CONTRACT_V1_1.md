@@ -84,12 +84,15 @@ Supported behavior IDs:
 
 Environment hydration returns `railProjections`, keyed by rail-owner Object ID. Members are canonical Object references; they are not copies and do not create new Passports.
 
+Rail reorder uses `POST /mos/v1/relationships/:relationshipId/order` with matching `expectedRevision` and `If-Match`, an idempotency key, and a new stable `orderKey`. It updates the existing edge; it never deletes and recreates membership.
+
 ## Authority
 
 Durable edge creation and termination use separate governed actions:
 
 - `aos.relationship.create`
 - `aos.relationship.end`
+- `aos.relationship.order`
 
 They no longer borrow generic `aos.move` semantics. Object capability fields are presentation/technical metadata and never actor authority. Environment hydration must not upgrade capabilities or mutate Objects.
 

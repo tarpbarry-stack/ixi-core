@@ -73,6 +73,7 @@ const {
 const {
   createObjectRelationship,
   endObjectRelationship,
+  updateObjectRelationshipOrder,
   getRelationship,
   listRelatedObjects,
   traverseRelationships
@@ -1844,7 +1845,8 @@ router.post(
         return res.json({ ...command.result, replayed: true });
       }
 
-      const trustedActorId = req.ixiAuthorityPrincipal?.principalId || null;
+      const trustedActorId = req.ixiAuthorityPrincipal?.principalId ||
+        req.ixiRequestContext?.principalId || null;
       const result = createObjectRelationship({
         relationshipType: req.body?.relationshipType,
         relationshipLabel: req.body?.relationshipLabel,
@@ -1936,7 +1938,8 @@ router.post(
         return res.json({ ...command.result, replayed: true });
       }
 
-      const trustedActorId = req.ixiAuthorityPrincipal?.principalId || null;
+      const trustedActorId = req.ixiAuthorityPrincipal?.principalId ||
+        req.ixiRequestContext?.principalId || null;
       const result = endObjectRelationship({
         relationshipId: current.relationshipId,
         expectedRevision: bodyRevision,
@@ -1945,6 +1948,87 @@ router.post(
         reason: req.body?.reason,
         effectiveTo: req.body?.effectiveTo,
         metadata: req.body?.metadata || {}
+      });
+      const response = { ok: true, result };
+      completeCommand({ commandId: activeCommandId, result: response });
+      return res.json({ ...response, replayed: false });
+    } catch (error) {
+      if (activeCommandId && commandStarted) {
+        failCommand({ commandId: activeCommandId, error });
+      }
+      return sendMosError(res, error);
+    }
+  }
+);
+
+router.post(
+  "/relationships/:relationshipId/order",
+  async (req, res) => {
+    let activeCommandId = "";
+    let commandStarted = false;
+
+    try {
+      const current = getRelationship(req.params.relationshipId);
+      const sourceObject = resolveCanonicalObjectIdentity({
+        entityId: current.entityId,
+        objectId: current.sourceObjectId
+      }).object;
+      const targetObject = resolveCanonicalObjectIdentity({
+        entityId: current.entityId,
+        objectId: current.targetObjectId
+      }).object;
+
+      await assertMosObjectAuthority({
+        principal: req.ixiAuthorityPrincipal,
+        object: sourceObject,
+        capability: "aos.relationship.order"
+      });
+      await assertMosObjectAuthority({
+        principal: req.ixiAuthorityPrincipal,
+        object: targetObject,
+        capability: "aos.relationship.order"
+      });
+
+      const bodyRevision = Number(req.body?.expectedRevision);
+      const rawHeaderRevision = String(req.headers["if-match"] || "")
+        .replace(/^W\//i, "")
+        .replace(/^\"|\"$/g, "")
+        .trim();
+      const headerRevision = Number(rawHeaderRevision);
+      if (!Number.isInteger(bodyRevision) || !rawHeaderRevision ||
+          !Number.isInteger(headerRevision) || headerRevision !== bodyRevision) {
+        throw new MosError(
+          "RELATIONSHIP_REVISION_REQUIRED",
+          "Matching expectedRevision and If-Match values are required.",
+          { expectedRevision: req.body?.expectedRevision, ifMatch: req.headers["if-match"] || null },
+          428
+        );
+      }
+
+      const command = beginHttpCommand({
+        req,
+        entityId: current.entityId,
+        commandType: "relationship.order",
+        payload: {
+          relationshipId: current.relationshipId,
+          expectedRevision: bodyRevision,
+          orderKey: req.body?.orderKey || null
+        }
+      });
+      activeCommandId = command.commandId;
+      commandStarted = !command.duplicate;
+
+      if (command.duplicate) {
+        return res.json({ ...command.result, replayed: true });
+      }
+
+      const result = updateObjectRelationshipOrder({
+        relationshipId: current.relationshipId,
+        expectedRevision: bodyRevision,
+        orderKey: req.body?.orderKey,
+        actorId: req.ixiAuthorityPrincipal?.principalId ||
+          req.ixiRequestContext?.principalId || null,
+        commandId: activeCommandId
       });
       const response = { ok: true, result };
       completeCommand({ commandId: activeCommandId, result: response });

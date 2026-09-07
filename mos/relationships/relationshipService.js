@@ -126,6 +126,23 @@ function createRelationshipRecord({
     );
   }
 
+  if (technicalBehavior && !cleanText(commandId)) {
+    throw new MosError(
+      "TECHNICAL_EDGE_COMMAND_REQUIRED",
+      "Technical edge creation requires an idempotent command ID.",
+      { behaviorId: technicalBehavior.behaviorId },
+      428
+    );
+  }
+  if (technicalBehavior && !cleanText(actorId)) {
+    throw new MosError(
+      "TECHNICAL_EDGE_ACTOR_REQUIRED",
+      "Technical edge creation requires authenticated actor evidence.",
+      { behaviorId: technicalBehavior.behaviorId },
+      401
+    );
+  }
+
   return {
     relationshipId: createMosId("relationship"),
     entityId: cleanText(entityId),
@@ -248,6 +265,23 @@ function createObjectRelationship({
       "A technical behavior ID or customer relationship label is required.",
       null,
       400
+    );
+  }
+
+  if (technicalBehavior && !cleanText(commandId)) {
+    throw new MosError(
+      "TECHNICAL_EDGE_COMMAND_REQUIRED",
+      "Technical edge creation requires an idempotent command ID.",
+      { behaviorId: technicalBehavior.behaviorId },
+      428
+    );
+  }
+  if (technicalBehavior && !cleanText(actorId)) {
+    throw new MosError(
+      "TECHNICAL_EDGE_ACTOR_REQUIRED",
+      "Technical edge creation requires authenticated actor evidence.",
+      { behaviorId: technicalBehavior.behaviorId },
+      401
     );
   }
 
@@ -457,6 +491,106 @@ function endObjectRelationship({
   return { changed: true, replayed: false, relationship, event };
 }
 
+function updateObjectRelationshipOrder({
+  relationshipId,
+  expectedRevision,
+  orderKey,
+  actorId,
+  commandId
+}) {
+  const relationshipsBefore = readRelationships();
+  const current = relationshipsBefore[cleanText(relationshipId)];
+  if (!current) getRelationship(relationshipId);
+
+  if (current.status !== "active") {
+    throw new MosError(
+      "RELATIONSHIP_NOT_ACTIVE",
+      "Only an active relationship can be reordered.",
+      { relationshipId: current.relationshipId, status: current.status },
+      409
+    );
+  }
+
+  const behavior = current.behaviorId ? getEdgeBehavior(current.behaviorId) : null;
+  if (behavior?.orderingPolicy !== "explicit") {
+    throw new MosError(
+      "RELATIONSHIP_ORDERING_NOT_SUPPORTED",
+      "This technical edge behavior does not support explicit ordering.",
+      { relationshipId: current.relationshipId, behaviorId: current.behaviorId || null },
+      409
+    );
+  }
+
+  const nextOrderKey = cleanText(orderKey);
+  if (!nextOrderKey) {
+    throw new MosError(
+      "RELATIONSHIP_ORDER_KEY_REQUIRED",
+      "Relationship reordering requires a stable orderKey.",
+      { relationshipId: current.relationshipId },
+      400
+    );
+  }
+  if (!cleanText(actorId) || !cleanText(commandId)) {
+    throw new MosError(
+      "RELATIONSHIP_ORDER_EVIDENCE_REQUIRED",
+      "Relationship reordering requires actor and command evidence.",
+      { relationshipId: current.relationshipId },
+      401
+    );
+  }
+
+  const currentRevision = Number(current.revision || 0);
+  if (!Number.isInteger(Number(expectedRevision)) || Number(expectedRevision) !== currentRevision) {
+    throw new MosError(
+      "RELATIONSHIP_REVISION_CONFLICT",
+      "The relationship changed before this reorder command was applied.",
+      { relationshipId: current.relationshipId, expectedRevision, currentRevision },
+      409
+    );
+  }
+
+  if (cleanText(current.orderKey) === nextOrderKey) {
+    return { changed: false, replayed: true, relationship: current };
+  }
+
+  const timestamp = nowIso();
+  const relationship = {
+    ...current,
+    orderKey: nextOrderKey,
+    revision: currentRevision + 1,
+    updatedBy: cleanText(actorId),
+    commandId: cleanText(commandId),
+    updatedAt: timestamp
+  };
+  writeRelationships({
+    ...relationshipsBefore,
+    [relationship.relationshipId]: relationship
+  });
+
+  let event;
+  try {
+    event = appendEvent({
+      entityId: relationship.entityId,
+      eventType: "relationship.reordered",
+      objectId: relationship.sourceObjectId,
+      actorId,
+      commandId,
+      payload: {
+        relationshipId: relationship.relationshipId,
+        behaviorId: relationship.behaviorId,
+        previousOrderKey: current.orderKey || null,
+        orderKey: nextOrderKey,
+        revision: relationship.revision
+      }
+    });
+  } catch (error) {
+    writeRelationships(relationshipsBefore);
+    throw error;
+  }
+
+  return { changed: true, replayed: false, relationship, event };
+}
+
 function listRelatedObjects({
   objectId,
   entityId = null,
@@ -617,6 +751,7 @@ module.exports = {
   createRelationshipRecord,
   createObjectRelationship,
   endObjectRelationship,
+  updateObjectRelationshipOrder,
   getRelationship,
   listRelationships,
   listRelatedObjects,
