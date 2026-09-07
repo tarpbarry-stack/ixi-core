@@ -23,8 +23,14 @@ const {
 
 const {
   ensurePassportForSource,
+  bindPassportSource,
   readPassportRecords
 } = require("../../passport/passportRegistry");
+
+const {
+  createObject,
+  updateObject
+} = require("../objects/objectService");
 
 test.after(() => {
   fs.rmSync(testRoot, { recursive: true, force: true });
@@ -113,4 +119,79 @@ test("replaying the same listing returns the same Machine and Passport", () => {
   assert.equal(second.replayed, true);
   assert.equal(second.object.objectId, first.object.objectId);
   assert.equal(second.passport.passportId, first.passport.passportId);
+});
+
+test("provisioning adopts an active AOS Object already bound to the listing Passport", () => {
+  const owner = ensureCommercialOnboarding({
+    ownerUserId: "sharetribe-owner-adoption",
+    entityDisplayName: "Adoption Company",
+    person: { displayName: "Adoption Owner" }
+  });
+
+  const legacyPassport = ensurePassportForSource({
+    sourceType: "sharetribe-listing",
+    sourceId: "listing-adoption-001",
+    entityId: owner.entity.entityId,
+    visibility: "private",
+    status: "active"
+  }).passport;
+
+  let existing = createObject({
+    entityId: owner.entity.entityId,
+    objectType: "machine",
+    displayName: "2017 Deere 544K II",
+    fields: { serialNumber: "1DW544KZCHF681737", weight: 0 },
+    source: "sharetribe-listing",
+    actorId: "sharetribe-owner-adoption"
+  });
+
+  bindPassportSource({
+    passportId: legacyPassport.passportId,
+    sourceType: "aos-object",
+    sourceId: existing.objectId,
+    entityId: owner.entity.entityId
+  });
+
+  existing = updateObject({
+    objectId: existing.objectId,
+    identities: [{
+      identityType: "ixi-passport",
+      passportId: legacyPassport.passportId,
+      entityId: owner.entity.entityId,
+      sourceType: "aos-object",
+      sourceId: existing.objectId
+    }],
+    actorId: "sharetribe-owner-adoption"
+  });
+
+  const result = provisionSharetribeMachine({
+    entityId: owner.entity.entityId,
+    principalId: "sharetribe-owner-adoption",
+    listing: {
+      listingId: "listing-adoption-001",
+      displayName: "2017 DEERE 544K II - 4,500 Hrs",
+      value: 41500,
+      fields: {
+        year: "2017",
+        make: "DEERE",
+        model: "544K II",
+        hours: 4500,
+        serialNumber: "1DW544KZCHF681737"
+      }
+    }
+  });
+
+  assert.equal(result.object.objectId, existing.objectId);
+  assert.equal(result.object.value, 41500);
+  assert.equal(result.object.fields.weight, 0);
+  assert.equal(result.object.fields.hours, 4500);
+  assert.equal(result.provisioning.objectCreated, false);
+  assert.equal(result.provisioning.objectAdopted, true);
+  assert.equal(result.passport.passportId, legacyPassport.passportId);
+  assert.equal(
+    (result.passport.sources || []).filter(source =>
+      source.sourceType === "aos-object"
+    ).length,
+    1
+  );
 });

@@ -2,8 +2,13 @@
 
 const {
   findPassportBySource,
-  bindPassportSource
+  bindPassportSource,
+  passportSources
 } = require("../../passport/passportRegistry");
+
+const {
+  getObject
+} = require("../objects/objectService");
 
 const {
   provisionAosObject
@@ -21,6 +26,40 @@ function safeObject(value) {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value
     : {};
+}
+
+function reusableAosObjectId({ passport, entityId }) {
+  if (!passport) return "";
+
+  const candidates = passportSources(passport)
+    .filter(source => source.sourceType === "aos-object")
+    .map(source => {
+      try {
+        return getObject(source.sourceId);
+      } catch (error) {
+        if (error?.code === "OBJECT_NOT_FOUND") return null;
+        throw error;
+      }
+    })
+    .filter(object =>
+      object &&
+      object.status === "active" &&
+      cleanText(object.entityId) === cleanText(entityId)
+    );
+
+  if (candidates.length > 1) {
+    throw new MosError(
+      "IXI_MACHINE_PASSPORT_MULTIPLE_ACTIVE_OBJECTS",
+      "The listing Passport is already linked to multiple active AOS Objects.",
+      {
+        passportId: passport.passportId,
+        objectIds: candidates.map(object => object.objectId)
+      },
+      409
+    );
+  }
+
+  return candidates[0]?.objectId || "";
 }
 
 function provisionSharetribeMachine({
@@ -46,6 +85,11 @@ function provisionSharetribeMachine({
     "sharetribe-listing",
     listingId
   );
+
+  const adoptObjectId = reusableAosObjectId({
+    passport: legacyPassport,
+    entityId: ownerEntityId
+  });
 
   const result = provisionAosObject({
     contractVersion: "ixi-aos-object-provision-v1",
@@ -76,7 +120,7 @@ function provisionSharetribeMachine({
         ownershipInferred: false
       }
     }
-  });
+  }, { adoptObjectId });
 
   const passport = bindPassportSource({
     passportId: result.passport.passportId,
@@ -100,5 +144,6 @@ function provisionSharetribeMachine({
 }
 
 module.exports = {
-  provisionSharetribeMachine
+  provisionSharetribeMachine,
+  reusableAosObjectId
 };

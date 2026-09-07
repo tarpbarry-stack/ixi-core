@@ -114,7 +114,8 @@ function getObjectPassportIdentity(
    ========================================================= */
 
 function provisionAosObject(
-  input = {}
+  input = {},
+  { adoptObjectId = "" } = {}
 ) {
   const {
     normalized,
@@ -167,8 +168,83 @@ function provisionAosObject(
        No customer business meaning is inferred here.
        ----------------------------------------------------- */
 
-    object =
-      createObject({
+    if (adoptObjectId) {
+      const existing = getObject(adoptObjectId);
+
+      if (existing.entityId !== normalized.entityId) {
+        throw new MosError(
+          "AOS_PROVISION_ADOPTION_ENTITY_MISMATCH",
+          "The existing AOS Object belongs to a different Entity.",
+          { objectId: adoptObjectId, entityId: normalized.entityId },
+          409
+        );
+      }
+
+      if (
+        normalized.objectType &&
+        existing.objectType &&
+        normalized.objectType !== existing.objectType
+      ) {
+        throw new MosError(
+          "AOS_PROVISION_ADOPTION_TYPE_MISMATCH",
+          "The existing AOS Object has a different object type.",
+          {
+            objectId: adoptObjectId,
+            expectedObjectType: normalized.objectType,
+            actualObjectType: existing.objectType
+          },
+          409
+        );
+      }
+
+      const identityKeys = new Set();
+      const identities = [
+        ...(Array.isArray(existing.identities) ? existing.identities : []),
+        ...normalized.identities
+      ].filter(identity => {
+        const key = JSON.stringify([
+          identity?.identityType || "",
+          identity?.sourceType || "",
+          identity?.sourceId || "",
+          identity?.passportId || ""
+        ]);
+        if (identityKeys.has(key)) return false;
+        identityKeys.add(key);
+        return true;
+      });
+
+      object = updateObject({
+        objectId: existing.objectId,
+        expectedRevision: existing.revision,
+        commandId,
+        displayName: normalized.displayName,
+        businessIdentifiers: normalized.businessIdentifiers.length
+          ? normalized.businessIdentifiers
+          : existing.businessIdentifiers,
+        value: normalized.value === null ? undefined : normalized.value,
+        currency: normalized.currency,
+        fields: {
+          ...safeObject(existing.fields),
+          ...normalized.fields
+        },
+        identities,
+        media: normalized.media.length ? normalized.media : existing.media,
+        cardTemplateSlug: normalized.cardTemplateSlug || existing.cardTemplateSlug,
+        cardTemplateVersion:
+          normalized.cardTemplateVersion ?? existing.cardTemplateVersion,
+        actorId: normalized.actorId,
+        metadata: {
+          ...normalized.metadata,
+          provisioning: {
+            contractVersion: normalized.contractVersion,
+            commandId,
+            state: "object-adopted"
+          }
+        }
+      });
+    } else {
+      object =
+        createObject({
         entityId:
           normalized.entityId,
 
@@ -237,7 +313,8 @@ function provisionAosObject(
               "object-created"
           }
         }
-      });
+        });
+    }
 
 
     if (!object?.objectId) {
@@ -499,7 +576,10 @@ function provisionAosObject(
           "complete",
 
         objectCreated:
-          true,
+          !adoptObjectId,
+
+        objectAdopted:
+          !!adoptObjectId,
 
         passportCreated:
           passportResult.created ===

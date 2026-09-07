@@ -466,6 +466,85 @@ function deletePassportBySource(
   });
 }
 
+function unbindPassportSource(
+  sourceType = "",
+  sourceId = ""
+) {
+  const normalizedSourceType = String(sourceType || "").trim();
+  const normalizedSourceId = String(sourceId || "").trim();
+
+  if (!normalizedSourceType) throw new Error("Passport sourceType is required");
+  if (!normalizedSourceId) throw new Error("Passport sourceId is required");
+
+  return mutatePassportRecords(records => {
+    const index = records.findIndex(record => passportSources(record).some(source =>
+      source.sourceType === normalizedSourceType &&
+      source.sourceId === normalizedSourceId
+    ));
+
+    if (index < 0) {
+      return {
+        records,
+        result: {
+          ok: true,
+          changed: false,
+          alreadyUnbound: true,
+          passport: null,
+          sourceType: normalizedSourceType,
+          sourceId: normalizedSourceId
+        }
+      };
+    }
+
+    const current = records[index];
+    const remainingSources = passportSources(current).filter(source => !(
+      source.sourceType === normalizedSourceType &&
+      source.sourceId === normalizedSourceId
+    ));
+
+    if (!remainingSources.length) {
+      const error = new Error(
+        "The final source cannot be unbound from a Passport; delete the Passport explicitly instead."
+      );
+      error.code = "PASSPORT_FINAL_SOURCE_UNBIND_FORBIDDEN";
+      error.details = { passportId: current.passportId };
+      throw error;
+    }
+
+    const primaryStillPresent = remainingSources.some(source =>
+      source.sourceType === String(current.sourceType || "").trim() &&
+      source.sourceId === String(current.sourceId || "").trim()
+    );
+    const primary = primaryStillPresent
+      ? {
+          sourceType: String(current.sourceType || "").trim(),
+          sourceId: String(current.sourceId || "").trim()
+        }
+      : remainingSources[0];
+
+    const updated = {
+      ...current,
+      sourceType: primary.sourceType,
+      sourceId: primary.sourceId,
+      sources: remainingSources,
+      updatedAt: nowIso()
+    };
+
+    records[index] = updated;
+    return {
+      records,
+      result: {
+        ok: true,
+        changed: true,
+        alreadyUnbound: false,
+        passport: updated,
+        sourceType: normalizedSourceType,
+        sourceId: normalizedSourceId
+      }
+    };
+  });
+}
+
 function generateUniquePassportId() {
   let attempts = 0;
 
@@ -692,6 +771,7 @@ module.exports = {
   passportIdExists,
   deletePassportById,
   deletePassportBySource,
+  unbindPassportSource,
   generateUniquePassportId,
   createPassportRecord,
   ensurePassportForSource,

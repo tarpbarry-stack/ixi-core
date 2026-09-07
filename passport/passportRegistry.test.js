@@ -12,7 +12,8 @@ process.env.IXI_PASSPORT_DATA_FILE = path.join(testRoot, "passports.json");
 const {
   readPassportRecords,
   writePassportRecords,
-  deletePassportBySource
+  deletePassportBySource,
+  unbindPassportSource
 } = require("./passportRegistry");
 
 test.after(() => {
@@ -77,4 +78,44 @@ test("source deletion recognizes aliases in sources[]", () => {
   const result = deletePassportBySource("sharetribe-user", "user_1");
   assert.equal(result.deleted, true);
   assert.deepEqual(readPassportRecords(), []);
+});
+
+test("source unbinding preserves the Passport and its other identities", () => {
+  writePassportRecords([
+    {
+      passportId: "IXITEST003",
+      sourceType: "sharetribe-listing",
+      sourceId: "listing_1",
+      sources: [
+        { sourceType: "sharetribe-listing", sourceId: "listing_1" },
+        { sourceType: "aos-object", sourceId: "object_old" },
+        { sourceType: "aos-object", sourceId: "object_keep" }
+      ]
+    }
+  ]);
+
+  const result = unbindPassportSource("aos-object", "object_old");
+  assert.equal(result.changed, true);
+  assert.equal(result.passport.passportId, "IXITEST003");
+  assert.deepEqual(result.passport.sources, [
+    { sourceType: "sharetribe-listing", sourceId: "listing_1" },
+    { sourceType: "aos-object", sourceId: "object_keep" }
+  ]);
+});
+
+test("source unbinding refuses to orphan a Passport", () => {
+  writePassportRecords([
+    {
+      passportId: "IXITEST004",
+      sourceType: "aos-object",
+      sourceId: "object_only",
+      sources: [{ sourceType: "aos-object", sourceId: "object_only" }]
+    }
+  ]);
+
+  assert.throws(
+    () => unbindPassportSource("aos-object", "object_only"),
+    error => error?.code === "PASSPORT_FINAL_SOURCE_UNBIND_FORBIDDEN"
+  );
+  assert.equal(readPassportRecords().length, 1);
 });

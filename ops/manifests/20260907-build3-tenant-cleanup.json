@@ -1,0 +1,22 @@
+{
+  "cleanupId": "IXI-BUILD3-TENANT-CLEANUP-20260907",
+  "protectedEntityId": "entity_4d78e9fb-92e4-4cc2-a8cb-1a2f19e097d0",
+  "purgeScopeIds": [
+    "entity_9a930c1f-e8ef-4e54-bbfa-369cad7b512f",
+    "entity_7a9468e2-d19e-4a25-984a-b5c7fd9e2e5d",
+    "entity_643b1926-dedc-4c9a-b3c9-a2171e7e773e",
+    "entity_d44f10ea-b4b3-4b30-bf7e-ac046dfe4cd9",
+    "YOUR_ENTITY_ID",
+    "entity_test_fullstack_001"
+  ],
+  "deletePassportIds": [
+    "IXIEHJKERY"
+  ],
+  "passportReconciliation": {
+    "passportId": "IXIMZFWCE7",
+    "canonicalObjectId": "object_840f647a-ac49-450e-b182-87845b42f2a6",
+    "removeAosObjectSourceIds": [
+      "object_ec3730de-69fb-481c-a6b9-85c42d0c5d48"
+    ]
+  }
+}
