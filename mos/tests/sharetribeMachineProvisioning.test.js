@@ -53,6 +53,8 @@ test("Post Free adopts an existing listing Passport into the canonical Machine i
   const machine = provisionSharetribeMachine({
     entityId: owner.entity.entityId,
     principalId: "sharetribe-owner-machine",
+    commandId: "post-free-listing-001",
+    creationBoundary: "post-free",
     listing: {
       listingId: "listing-001",
       displayName: "2017 Deere 544K II",
@@ -106,6 +108,8 @@ test("replaying the same listing returns the same Machine and Passport", () => {
   const input = {
     entityId: owner.entity.entityId,
     principalId: "sharetribe-owner-replay",
+    commandId: "upload-listing-002",
+    creationBoundary: "upload",
     listing: {
       listingId: "listing-002",
       displayName: "2020 Deere 844K III",
@@ -119,6 +123,17 @@ test("replaying the same listing returns the same Machine and Passport", () => {
   assert.equal(second.replayed, true);
   assert.equal(second.object.objectId, first.object.objectId);
   assert.equal(second.passport.passportId, first.passport.passportId);
+});
+
+test("listing admission requires an explicit governed birth boundary and command", () => {
+  assert.throws(
+    () => provisionSharetribeMachine({
+      entityId: "entity-any",
+      principalId: "principal-any",
+      listing: { listingId: "listing-any", displayName: "Any" }
+    }),
+    error => error?.code === "IXI_MACHINE_PROVISIONING_CONTEXT_REQUIRED"
+  );
 });
 
 test("provisioning adopts an active AOS Object already bound to the listing Passport", () => {
@@ -167,6 +182,8 @@ test("provisioning adopts an active AOS Object already bound to the listing Pass
   const result = provisionSharetribeMachine({
     entityId: owner.entity.entityId,
     principalId: "sharetribe-owner-adoption",
+    commandId: "url-import-listing-adoption-001",
+    creationBoundary: "url-import",
     listing: {
       listingId: "listing-adoption-001",
       displayName: "2017 DEERE 544K II - 4,500 Hrs",
