@@ -41,7 +41,12 @@ function fixture() {
       test: { entityId: "entity_test", displayName: "Test" }
     },
     "objects.json": {
-      canonical: { objectId: "object_canonical", entityId: "entity_live" },
+      canonical: {
+        objectId: "object_canonical",
+        entityId: "entity_live",
+        revision: 2,
+        metadata: { identityEntityId: "entity_test", keep: true }
+      },
       duplicate: { objectId: "object_duplicate", entityId: "entity_live" },
       test: { objectId: "object_test", entityId: "entity_test" }
     },
@@ -52,7 +57,26 @@ function fixture() {
     "events.json": [
       { entityId: "entity_test", objectId: "object_test" },
       { entityId: "entity_live", objectId: "object_duplicate" }
-    ]
+    ],
+    "idempotency.json": {
+      protected_update: {
+        commandId: "protected_update",
+        entityId: "entity_live",
+        status: "completed",
+        result: {
+          object: {
+            objectId: "object_canonical",
+            entityId: "entity_live",
+            metadata: { identityEntityId: "entity_test" }
+          }
+        }
+      },
+      test_update: {
+        commandId: "test_update",
+        entityId: "entity_test",
+        status: "completed"
+      }
+    }
   };
   const statement = database.prepare(`
     INSERT INTO mos_collections
@@ -88,6 +112,12 @@ const manifest = {
   protectedEntityId: "entity_live",
   purgeScopeIds: ["entity_test"],
   deletePassportIds: ["IXITEST001"],
+  objectMetadataRepairs: [{
+    objectId: "object_canonical",
+    requireEntityId: "entity_live",
+    expectedValues: { identityEntityId: "entity_test" },
+    removeKeys: ["identityEntityId"]
+  }],
   passportReconciliation: {
     passportId: "IXILIVE001",
     canonicalObjectId: "object_canonical",
@@ -117,12 +147,21 @@ test("cleanup dry-run is immutable and apply preserves protected canonical data"
     const events = JSON.parse(database.prepare(
       "SELECT payload FROM mos_collections WHERE collection_key = 'events.json'"
     ).get().payload);
+    const idempotency = JSON.parse(database.prepare(
+      "SELECT payload FROM mos_collections WHERE collection_key = 'idempotency.json'"
+    ).get().payload);
     database.close();
     assert.ok(objects.canonical);
+    assert.equal(objects.canonical.entityId, "entity_live");
+    assert.equal(objects.canonical.revision, 3);
+    assert.equal(objects.canonical.metadata.identityEntityId, undefined);
+    assert.equal(objects.canonical.metadata.keep, true);
     assert.equal(objects.duplicate, undefined);
     assert.equal(objects.test, undefined);
     assert.equal(events.length, 1);
     assert.equal(events[0].objectId, "object_duplicate");
+    assert.ok(idempotency.protected_update);
+    assert.equal(idempotency.test_update, undefined);
 
     const passports = JSON.parse(fs.readFileSync(item.passportPath, "utf8"));
     assert.equal(passports.length, 1);

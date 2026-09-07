@@ -12,6 +12,18 @@
   "deletePassportIds": [
     "IXIEHJKERY"
   ],
+  "objectMetadataRepairs": [
+    {
+      "objectId": "object_b0c07fb5-bc94-45a4-af2e-9ef3c2b370f9",
+      "requireEntityId": "entity_4d78e9fb-92e4-4cc2-a8cb-1a2f19e097d0",
+      "expectedValues": {
+        "identityEntityId": "entity_test_fullstack_001"
+      },
+      "removeKeys": [
+        "identityEntityId"
+      ]
+    }
+  ],
   "passportReconciliation": {
     "passportId": "IXIMZFWCE7",
     "canonicalObjectId": "object_840f647a-ac49-450e-b182-87845b42f2a6",

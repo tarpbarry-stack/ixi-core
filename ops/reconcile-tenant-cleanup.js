@@ -36,6 +36,17 @@ function contains(value, targets) {
   return false;
 }
 
+function authoritativeScopeIds(record) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return [];
+  return [
+    record.entityId,
+    record.primaryEntityId,
+    record.ownerEntityId,
+    record.aosEntityId,
+    record?.metadata?.entityId
+  ].map(clean).filter(Boolean);
+}
+
 function transformRecords(payload, predicate) {
   if (Array.isArray(payload)) {
     const removed = payload.filter(predicate);
@@ -51,6 +62,30 @@ function transformRecords(payload, predicate) {
     return { next, removed };
   }
   return { next: payload, removed: [] };
+}
+
+function updateRecord(payload, recordId, updater) {
+  if (Array.isArray(payload)) {
+    let changed = false;
+    const next = payload.map(record => {
+      if (clean(record?.objectId) !== recordId) return record;
+      changed = true;
+      return updater(record);
+    });
+    return { next, changed };
+  }
+  if (payload && typeof payload === "object") {
+    const entry = Object.entries(payload).find(([key, record]) =>
+      key === recordId || clean(record?.objectId) === recordId
+    );
+    if (!entry) return { next: payload, changed: false };
+    const [key, record] = entry;
+    return {
+      next: { ...payload, [key]: updater(record) },
+      changed: true
+    };
+  }
+  return { next: payload, changed: false };
 }
 
 function sourceList(passport) {
@@ -143,6 +178,7 @@ function buildCleanup({ databasePath, passportPath, manifest, apply = false }) {
     integrityBefore: database.pragma("quick_check").map(row => Object.values(row)[0]),
     changedCollections: [],
     removedByCollection: {},
+    updatedByCollection: {},
     passports: null
   };
 
@@ -165,7 +201,9 @@ function buildCleanup({ databasePath, passportPath, manifest, apply = false }) {
       }
       const payload = JSON.parse(row.payload);
       const transformed = transformRecords(payload, (record, key) => {
-        const purgeMatch = contains(record, purgeScopes) || purgeScopes.has(key);
+        const authoritativeScopes = authoritativeScopeIds(record);
+        const purgeMatch = authoritativeScopes.some(scope => purgeScopes.has(scope)) ||
+          purgeScopes.has(key);
         if (purgeMatch && contains(record, new Set([protectedEntityId]))) {
           throw new Error(`Cross-boundary record blocks cleanup: ${row.collection_key}`);
         }
@@ -178,11 +216,51 @@ function buildCleanup({ databasePath, passportPath, manifest, apply = false }) {
         }
         return false;
       });
-      if (!transformed.removed.length) continue;
-      const nextPayload = JSON.stringify(transformed.next);
+      let next = transformed.next;
+      let updatedCount = 0;
+      if (row.collection_key === "objects.json") {
+        for (const repair of manifest.objectMetadataRepairs || []) {
+          const objectId = clean(repair.objectId);
+          const result = updateRecord(next, objectId, record => {
+            if (clean(record?.entityId) !== clean(repair.requireEntityId)) {
+              throw new Error(`Metadata repair Entity mismatch: ${objectId}`);
+            }
+            const metadata = { ...(record.metadata || {}) };
+            for (const [key, expected] of Object.entries(repair.expectedValues || {})) {
+              if (metadata[key] === undefined) continue;
+              if (metadata[key] !== expected) {
+                throw new Error(`Metadata repair value mismatch: ${objectId}.${key}`);
+              }
+            }
+            let changed = false;
+            for (const key of repair.removeKeys || []) {
+              if (metadata[key] === undefined) continue;
+              delete metadata[key];
+              changed = true;
+            }
+            if (!changed) return record;
+            updatedCount += 1;
+            return {
+              ...record,
+              metadata,
+              revision: Number(record.revision || 0) + 1,
+              updatedAt: new Date().toISOString()
+            };
+          });
+          if (!result.changed) {
+            throw new Error(`Metadata repair Object not found: ${objectId}`);
+          }
+          next = result.next;
+        }
+      }
+      if (!transformed.removed.length && !updatedCount) continue;
+      const nextPayload = JSON.stringify(next);
       changes.push({ row, nextPayload, checksum: sha256(nextPayload) });
       report.changedCollections.push(row.collection_key);
-      report.removedByCollection[row.collection_key] = transformed.removed.length;
+      if (transformed.removed.length) {
+        report.removedByCollection[row.collection_key] = transformed.removed.length;
+      }
+      if (updatedCount) report.updatedByCollection[row.collection_key] = updatedCount;
     }
 
     const passportRaw = fs.readFileSync(passportPath, "utf8");
