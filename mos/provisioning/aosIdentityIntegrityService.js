@@ -21,8 +21,7 @@ const {
 } = require("../../passport/passportRegistry");
 
 const {
-  cleanText,
-  normalizeKey
+  cleanText
 } = require("../util/normalize");
 
 const {
@@ -58,8 +57,7 @@ function findSystemIndex(objects, definition) {
     cleanText(object?.objectType) === "system-index" &&
     (
       cleanText(object?.metadata?.adapterId) === definition.adapterId ||
-      cleanText(object?.metadata?.systemIndexKey) === definition.key ||
-      normalizeKey(object?.displayName) === normalizeKey(definition.displayName)
+      cleanText(object?.metadata?.systemIndexKey) === definition.key
     )
   ) || null;
 }
