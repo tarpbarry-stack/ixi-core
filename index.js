@@ -4,7 +4,6 @@ const fs = require("fs");
 const { acquire } = require("./acquisition");
 
 const {
-  ensurePassportForSource,
   findPassportById,
   readPassportRecords,
   deletePassportById,
@@ -204,37 +203,14 @@ app.get("/health", (req, res) => {
 });
 
 app.post("/passport/ensure", (req, res) => {
-  try {
-    const {
-      sourceType,
-      sourceId,
-      visibility,
-      status
-    } = req.body || {};
-
-    if (!sourceType || !sourceId) {
-      return res.status(400).json({
-        ok: false,
-        error: "Missing sourceType or sourceId"
-      });
-    }
-
-    const result = ensurePassportForSource({
-      sourceType,
-      sourceId,
-      visibility: visibility || "private",
-      status: status || "active"
-    });
-
-    return res.json(result);
-} catch (error) {
-  console.error("ACQUISITION FAILED:", error);
-
-  res.status(500).json({
+  return res.status(410).json({
     ok: false,
-    error: error.message
+    error: {
+      code: "GENERIC_PASSPORT_ENSURE_RETIRED",
+      message:
+        "Generic Passport creation is retired. Use an authenticated object creation, upload, import, or onboarding boundary."
+    }
   });
-}
 });
 
 app.get("/passport/:passportId", (req, res) => {
@@ -261,6 +237,15 @@ app.get("/passport/:passportId", (req, res) => {
 });
 
 app.get("/passport", (req, res) => {
+  return res.status(403).json({
+    ok: false,
+    error: {
+      code: "PASSPORT_REGISTRY_ENUMERATION_FORBIDDEN",
+      message: "Passport registry enumeration is not a public operation."
+    }
+  });
+
+  /* istanbul ignore next -- retired compatibility implementation */
   try {
     const records = readPassportRecords();
 
@@ -278,6 +263,15 @@ app.get("/passport", (req, res) => {
 });
 
 app.delete("/passport/:passportId", (req, res) => {
+  return res.status(410).json({
+    ok: false,
+    error: {
+      code: "PASSPORT_DELETE_RETIRED",
+      message: "Permanent Passport deletion is retired from the public API."
+    }
+  });
+
+  /* istanbul ignore next -- retired compatibility implementation */
   try {
     const confirmation =
       String(
@@ -323,6 +317,15 @@ app.delete("/passport/:passportId", (req, res) => {
 app.delete(
   "/passport/by-source/:sourceType/:sourceId",
   (req, res) => {
+    return res.status(410).json({
+      ok: false,
+      error: {
+        code: "PASSPORT_SOURCE_DELETE_RETIRED",
+        message: "Passport source deletion is retired from the public API."
+      }
+    });
+
+    /* istanbul ignore next -- retired compatibility implementation */
     try {
       const confirmation =
         String(

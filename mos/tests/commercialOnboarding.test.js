@@ -230,8 +230,8 @@ test("existing accounts adopt their sole legacy Person instead of creating a dup
 
   assert.equal(result.person.objectId, legacyPerson.objectId);
   assert.equal(result.person.metadata.onboarding.adoptedExistingPerson, true);
-  assert.equal(result.person.capabilities.canContain, true);
-  assert.equal(result.person.capabilities.canCreate, true);
+  assert.equal(result.person.capabilities.canContain, false);
+  assert.equal(result.person.capabilities.canCreate, false);
 
   const replay = ensureCommercialOnboarding({
     ownerUserId: "sharetribe-legacy-owner",

@@ -5,7 +5,6 @@ const {
 const BASE_CAPABILITIES = Object.freeze({
   /* Every canonical Object can be nested and can receive children. */
   canContain: true,
-  canCreate: true,
   canMove: true,
   canHaveQr: true,
   canHaveMedia: true,
@@ -39,7 +38,6 @@ const MOS_OBJECT_TEMPLATES = Object.freeze({
     label: "Person",
     capabilities: capabilities({
       canContain: true,
-      canCreate: true,
       canHaveJobTickets: true
     })
   },
@@ -143,8 +141,7 @@ const MOS_OBJECT_TEMPLATES = Object.freeze({
     objectType: MOS_OBJECT_TYPES.SYSTEM_INDEX,
     label: "System Index",
     capabilities: capabilities({
-      canContain: true,
-      canCreate: true
+      canContain: true
     })
   },
 

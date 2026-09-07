@@ -39,6 +39,16 @@ const CAPABILITIES =
       label: "Move object"
     },
 
+    "aos.relationship.create": {
+      family: "aos",
+      label: "Create object connection"
+    },
+
+    "aos.relationship.end": {
+      family: "aos",
+      label: "End object connection"
+    },
+
     "aos.archive": {
       family: "aos",
       label: "Archive object"

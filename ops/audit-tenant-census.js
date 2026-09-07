@@ -40,19 +40,25 @@ function passportSources(passport) {
     });
 }
 
-function passportIdFromObject(object) {
-  const direct = clean(
-    object?.passportId ||
-    object?.ixiPassportId ||
-    object?.passportIdentity?.passportId ||
-    object?.passport?.passportId
-  );
-  if (direct) return direct;
-  const identity = (Array.isArray(object?.identities) ? object.identities : [])
-    .find(item => ["ixi-passport", "passport"].includes(clean(
+function passportIdsFromObject(object) {
+  const identities = (Array.isArray(object?.identities) ? object.identities : [])
+    .filter(item => ["ixi-passport", "passport"].includes(clean(
       item?.identityType || item?.type || item?.kind
-    ).toLowerCase()));
-  return clean(identity?.passportId || identity?.value || identity?.id);
+    ).toLowerCase()))
+    .map(identity => identity?.passportId || identity?.value || identity?.id);
+
+  return [...new Set([
+    object?.passportId,
+    object?.ixiPassportId,
+    object?.passportIdentity?.passportId,
+    object?.passport?.passportId,
+    object?.metadata?.passportIdentity?.passportId,
+    ...identities
+  ].map(clean).filter(Boolean))];
+}
+
+function passportIdFromObject(object) {
+  return passportIdsFromObject(object)[0] || "";
 }
 
 function addFinding(findings, severity, code, details = {}) {
@@ -147,6 +153,7 @@ function buildTenantCensus({ databasePath, passportPath, protectedEntityId = "",
   const entityById = new Map(entities.map(entity => [clean(entity?.entityId), entity]));
   const objectById = new Map(objects.map(object => [clean(object?.objectId), object]));
   const passportById = new Map();
+  const passportByAnyId = new Map();
   const passportOwners = new Map();
   const sourceOwners = new Map();
 
@@ -161,11 +168,31 @@ function buildTenantCensus({ databasePath, passportPath, protectedEntityId = "",
     }
     passportById.set(passportId, passport);
 
+    for (const identityId of [
+      passportId,
+      ...(Array.isArray(passport?.previousPassportIds)
+        ? passport.previousPassportIds.map(clean).filter(Boolean)
+        : [])
+    ]) {
+      const owners = passportByAnyId.get(identityId) || [];
+      owners.push(passportId);
+      passportByAnyId.set(identityId, owners);
+    }
+
     for (const source of passportSources(passport)) {
       const key = `${source.sourceType}|${source.sourceId}`;
       const owners = sourceOwners.get(key) || [];
       owners.push(passportId);
       sourceOwners.set(key, owners);
+    }
+  }
+
+  for (const [identityId, owners] of passportByAnyId) {
+    if (new Set(owners).size > 1) {
+      addFinding(findings, "critical", "PASSPORT_IDENTITY_CONFLICT", {
+        identityId,
+        passportIds: [...new Set(owners)].sort()
+      });
     }
   }
 
@@ -181,7 +208,8 @@ function buildTenantCensus({ databasePath, passportPath, protectedEntityId = "",
   for (const object of objects) {
     const objectId = clean(object?.objectId);
     const entityId = clean(object?.entityId);
-    const passportId = passportIdFromObject(object);
+    const passportIds = passportIdsFromObject(object);
+    const passportId = passportIds[0] || "";
     const isActive = clean(object?.status) === "active";
     const isNewContract = clean(object?.metadata?.provisioning?.contractVersion) ===
       "ixi-aos-object-provision-v1";
@@ -192,8 +220,15 @@ function buildTenantCensus({ databasePath, passportPath, protectedEntityId = "",
       addFinding(findings, "critical", "OBJECT_ENTITY_NOT_FOUND", { objectId, entityId });
     }
 
+    if (passportIds.length > 1) {
+      addFinding(findings, "critical", "OBJECT_MULTIPLE_PASSPORTS", {
+        objectId,
+        passportIds
+      });
+    }
+
     if (!passportId) {
-      addFinding(findings, isActive && isNewContract ? "critical" : "warning", "OBJECT_PASSPORT_MISSING", {
+      addFinding(findings, isActive ? "critical" : "warning", "OBJECT_PASSPORT_MISSING", {
         objectId,
         entityId: entityId || null,
         status: clean(object?.status) || null,
@@ -203,7 +238,10 @@ function buildTenantCensus({ databasePath, passportPath, protectedEntityId = "",
       const owners = passportOwners.get(passportId) || [];
       owners.push(objectId);
       passportOwners.set(passportId, owners);
-      const passport = passportById.get(passportId);
+      const currentPassportIds = passportByAnyId.get(passportId) || [];
+      const passport = currentPassportIds.length === 1
+        ? passportById.get(currentPassportIds[0])
+        : null;
       if (!passport) {
         addFinding(findings, isActive ? "critical" : "warning", "OBJECT_PASSPORT_NOT_FOUND", {
           objectId, entityId: entityId || null, passportId
@@ -270,6 +308,11 @@ function buildTenantCensus({ databasePath, passportPath, protectedEntityId = "",
         relationshipEntityId,
         sourceEntityId: clean(source.entityId),
         targetEntityId: clean(target.entityId)
+      });
+    }
+    if (!clean(relationship?.behaviorId)) {
+      addFinding(findings, "warning", "LEGACY_RELATIONSHIP_WITHOUT_BEHAVIOR", {
+        relationshipId
       });
     }
   }
@@ -343,6 +386,9 @@ function buildTenantCensus({ databasePath, passportPath, protectedEntityId = "",
       objects: objects.length,
       activeObjects: objects.filter(object => clean(object?.status) === "active").length,
       relationships: relationships.length,
+      technicalBehaviorEdges: relationships.filter(relationship => clean(relationship?.behaviorId)).length,
+      legacyRelationshipsWithoutBehavior: relationships.filter(relationship => !clean(relationship?.behaviorId)).length,
+      legacyDirectContainerLinks: objects.filter(object => clean(object?.directContainerId)).length,
       accounts: accounts.length,
       memberships: memberships.length,
       passports: passportStore.passports.length,
@@ -388,4 +434,10 @@ if (require.main === module) {
   }
 }
 
-module.exports = { buildTenantCensus, parseArguments, passportIdFromObject, passportSources };
+module.exports = {
+  buildTenantCensus,
+  parseArguments,
+  passportIdFromObject,
+  passportIdsFromObject,
+  passportSources
+};

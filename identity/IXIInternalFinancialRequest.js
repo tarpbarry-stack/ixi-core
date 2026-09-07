@@ -28,8 +28,8 @@ const {
 } = require("../mos/constants");
 
 const {
-  ensureEntityPassport,
-  ensurePersonPassport
+  resolveEntityPassport,
+  resolvePersonPassport
 } = require("./IXIPassportIdentityBridge");
 
 const {
@@ -120,8 +120,8 @@ async function bindInternalFinancialContext(req) {
   }
 
   const person = resolveOwnerPerson({ membership, entityId });
-  const entityIdentity = ensureEntityPassport(entityId);
-  const personIdentity = ensurePersonPassport({
+  const entityIdentity = resolveEntityPassport(entityId);
+  const personIdentity = resolvePersonPassport({
     objectId: person.objectId,
     expectedEntityId: entityId
   });

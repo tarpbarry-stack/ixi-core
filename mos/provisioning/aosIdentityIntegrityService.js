@@ -2,13 +2,11 @@
 
 const {
   listObjects,
-  updateObject,
-  ensureObjectCapabilities
+  updateObject
 } = require("../objects/objectService");
 
 const {
-  provisionAosObject,
-  AOS_UNIVERSAL_OPERATING_CAPABILITIES
+  provisionAosObject
 } = require("./aosObjectProvisioningService");
 
 const {
@@ -158,11 +156,7 @@ function ensureCanonicalObjectPassport({ object, actorId }) {
     );
   }
 
-  let current = ensureObjectCapabilities({
-    objectId: object.objectId,
-    requiredCapabilities: AOS_UNIVERSAL_OPERATING_CAPABILITIES,
-    actorId
-  });
+  let current = object;
 
   const currentPassportIdentities = passportIdentities(current);
   const expected = result.identity;

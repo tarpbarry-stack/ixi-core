@@ -142,6 +142,12 @@ const {
 );
 
 const {
+  resolveCanonicalObjectIdentity
+} = require(
+  "../identity/canonicalObjectAdmissionService"
+);
+
+const {
   assertTrustedMosEntity,
   filterDiscoverableMosRecords
 } = require(
@@ -182,6 +188,21 @@ const {
 
 
 const router = express.Router();
+
+function assertLegacyContainmentWriteEnabled() {
+  if (
+    String(process.env.IXI_MOS_LEGACY_CONTAINMENT_WRITES || "")
+      .trim()
+      .toLowerCase() !== "true"
+  ) {
+    throw new MosError(
+      "LEGACY_CONTAINMENT_WRITE_DISABLED",
+      "Exclusive legacy containment writes are disabled; use a governed technical edge.",
+      null,
+      410
+    );
+  }
+}
 
 function beginHttpCommand({
   req,
@@ -775,7 +796,17 @@ router.post(
         provisionAosObject({
           ...input,
 
-          commandId
+          commandId,
+
+          entityId:
+            req.ixiRequestContext?.entityId ||
+            req.ixiAuthorityPrincipal?.entityId ||
+            input.entityId,
+
+          actorId:
+            req.ixiRequestContext?.principalId ||
+            req.ixiAuthorityPrincipal?.principalId ||
+            input.actorId
         });
 
       return res.status(
@@ -1136,19 +1167,90 @@ router.delete(
 
 /* ---------- OBJECTS ---------- */
 
+router.post(
+  "/identity/admit",
+  async (req, res) => {
+    try {
+      const entityId = String(
+        req.ixiRequestContext?.entityId ||
+        req.ixiAuthorityPrincipal?.entityId ||
+        ""
+      ).trim();
+
+      if (!entityId) {
+        throw new MosError(
+          "CANONICAL_ADMISSION_AUTH_REQUIRED",
+          "Canonical identity admission requires authenticated tenant context.",
+          null,
+          401
+        );
+      }
+
+      const admission = resolveCanonicalObjectIdentity({
+        entityId,
+        objectId: req.body?.objectId,
+        passportId: req.body?.passportId,
+        aliases: req.body?.aliases,
+        sourceType: req.body?.sourceType,
+        sourceId: req.body?.sourceId
+      });
+
+      await assertMosObjectAuthority({
+        principal: req.ixiAuthorityPrincipal,
+        object: admission.object,
+        capability: "aos.view"
+      });
+
+      return res.json({
+        ok: true,
+        identity: {
+          objectId: admission.objectId,
+          passportId: admission.passportId,
+          entityId: admission.entityId,
+          aliases: admission.aliases,
+          evidence: admission.evidence
+        },
+        object: admission.object
+      });
+    } catch (error) {
+      return sendMosError(res, error);
+    }
+  }
+);
+
 router.post("/objects", (req, res) => {
   try {
-    const object = createObject(
-      req.body || {}
-    );
+    const commandId = String(
+      req.headers["idempotency-key"] ||
+      req.body?.commandId ||
+      ""
+    ).trim();
+    const input = { ...(req.body || {}) };
+    delete input.trustedPassportId;
+
+    const result = provisionAosObject({
+      ...input,
+      commandId,
+      entityId:
+        req.ixiRequestContext?.entityId ||
+        req.ixiAuthorityPrincipal?.entityId ||
+        input.entityId,
+      actorId:
+        req.ixiRequestContext?.principalId ||
+        req.ixiAuthorityPrincipal?.principalId ||
+        input.actorId
+    });
+    const object = result.object;
 
     rebuildEntityProjections(
       object.entityId
     );
 
-    return res.status(201).json({
+    return res.status(result.replayed ? 200 : 201).json({
       ok: true,
       object,
+      passport: result.passport,
+      replayed: result.replayed === true,
       branch:
         getBranchSummary(
           object.objectId
@@ -1543,6 +1645,8 @@ router.get(
       const related = listRelatedObjects({
         objectId: object.objectId,
         relationshipType: req.query.relationshipType || null,
+        behaviorId: req.query.behaviorId || null,
+        definitionId: req.query.definitionId || null,
         direction: req.query.direction || "both",
         status: req.query.status === "all" ? null : (req.query.status || "active")
       });
@@ -1581,6 +1685,10 @@ router.get(
       const graph = traverseRelationships({
         objectId: object.objectId,
         relationshipTypes: String(req.query.relationshipTypes || "")
+          .split(",")
+          .map(value => value.trim())
+          .filter(Boolean),
+        behaviorIds: String(req.query.behaviorIds || "")
           .split(",")
           .map(value => value.trim())
           .filter(Boolean),
@@ -1687,18 +1795,30 @@ router.post(
     let commandStarted = false;
 
     try {
-      const sourceObject = getObject(req.body?.sourceObjectId);
-      const targetObject = getObject(req.body?.targetObjectId);
+      const sourceCandidate = getObject(req.body?.sourceObjectId);
+      const targetCandidate = getObject(req.body?.targetObjectId);
+      const sourceAdmission = resolveCanonicalObjectIdentity({
+        entityId: sourceCandidate.entityId,
+        objectId: sourceCandidate.objectId,
+        passportId: req.body?.sourcePassportId || ""
+      });
+      const targetAdmission = resolveCanonicalObjectIdentity({
+        entityId: sourceCandidate.entityId,
+        objectId: targetCandidate.objectId,
+        passportId: req.body?.targetPassportId || ""
+      });
+      const sourceObject = sourceAdmission.object;
+      const targetObject = targetAdmission.object;
 
       await assertMosObjectAuthority({
         principal: req.ixiAuthorityPrincipal,
         object: sourceObject,
-        capability: "aos.move"
+        capability: "aos.relationship.create"
       });
       await assertMosObjectAuthority({
         principal: req.ixiAuthorityPrincipal,
         object: targetObject,
-        capability: "aos.move"
+        capability: "aos.relationship.create"
       });
 
       const command = beginHttpCommand({
@@ -1709,6 +1829,9 @@ router.post(
           sourceObjectId: sourceObject.objectId,
           targetObjectId: targetObject.objectId,
           relationshipType: req.body?.relationshipType || req.body?.relationshipLabel,
+          behaviorId: req.body?.behaviorId || null,
+          definitionId: req.body?.definitionId || null,
+          orderKey: req.body?.orderKey || null,
           effectiveFrom: req.body?.effectiveFrom || null,
           effectiveTo: req.body?.effectiveTo || null,
           metadata: req.body?.metadata || {}
@@ -1725,6 +1848,9 @@ router.post(
       const result = createObjectRelationship({
         relationshipType: req.body?.relationshipType,
         relationshipLabel: req.body?.relationshipLabel,
+        behaviorId: req.body?.behaviorId,
+        definitionId: req.body?.definitionId,
+        orderKey: req.body?.orderKey,
         sourceObjectId: sourceObject.objectId,
         targetObjectId: targetObject.objectId,
         actorId: trustedActorId,
@@ -1753,18 +1879,26 @@ router.post(
 
     try {
       const current = getRelationship(req.params.relationshipId);
-      const sourceObject = getObject(current.sourceObjectId);
-      const targetObject = getObject(current.targetObjectId);
+      const sourceCandidate = getObject(current.sourceObjectId);
+      const targetCandidate = getObject(current.targetObjectId);
+      const sourceObject = resolveCanonicalObjectIdentity({
+        entityId: current.entityId,
+        objectId: sourceCandidate.objectId
+      }).object;
+      const targetObject = resolveCanonicalObjectIdentity({
+        entityId: current.entityId,
+        objectId: targetCandidate.objectId
+      }).object;
 
       await assertMosObjectAuthority({
         principal: req.ixiAuthorityPrincipal,
         object: sourceObject,
-        capability: "aos.move"
+        capability: "aos.relationship.end"
       });
       await assertMosObjectAuthority({
         principal: req.ixiAuthorityPrincipal,
         object: targetObject,
-        capability: "aos.move"
+        capability: "aos.relationship.end"
       });
 
       const bodyRevision = Number(req.body?.expectedRevision);
@@ -1913,6 +2047,8 @@ router.post(
   "/containers/:containerId/place",
   async (req, res) => {
     try {
+      assertLegacyContainmentWriteEnabled();
+
       const sourceObject =
         getObject(
           req.body?.objectId
@@ -2005,6 +2141,8 @@ router.post(
   "/objects/:objectId/remove-from-container",
   async (req, res) => {
     try {
+      assertLegacyContainmentWriteEnabled();
+
       const object =
         getObject(
           req.params.objectId

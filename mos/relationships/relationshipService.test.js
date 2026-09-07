@@ -23,6 +23,7 @@ const {
   listRelationships,
   traverseRelationships
 } = require("./relationshipService");
+const { EDGE_BEHAVIOR_IDS } = require("./edgeBehaviorRegistry");
 
 function objectWithPassport({ entityId, name, passportId }) {
   return createObject({
@@ -198,4 +199,76 @@ test("a tenant boundary cannot be crossed by an ordinary relationship command", 
     }),
     error => error.code === "CROSS_ENTITY_RELATIONSHIP_FORBIDDEN"
   );
+});
+
+test("technical behavior—not the customer label—defines durable edge identity", () => {
+  const first = createObjectRelationship({
+    behaviorId: EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP,
+    definitionId: "definition_customer_rail_1",
+    relationshipLabel: "stored near",
+    sourceObjectId: midland.objectId,
+    targetObjectId: employees.objectId,
+    actorId: "owner-1",
+    commandId: "technical-edge-1"
+  });
+  const renamedReplay = createObjectRelationship({
+    behaviorId: EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP,
+    definitionId: "definition_customer_rail_1",
+    relationshipLabel: "customer renamed this",
+    sourceObjectId: midland.objectId,
+    targetObjectId: employees.objectId,
+    actorId: "owner-1",
+    commandId: "technical-edge-2"
+  });
+
+  assert.equal(first.changed, true);
+  assert.equal(first.relationship.behavior.projectsToRail, true);
+  assert.equal(renamedReplay.changed, false);
+  assert.equal(renamedReplay.relationship.relationshipLabel, "stored near");
+});
+
+test("structural rail cycles are rejected while neutral technical cycles remain valid", () => {
+  createObjectRelationship({
+    behaviorId: EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP,
+    sourceObjectId: employees.objectId,
+    targetObjectId: crew007.objectId,
+    actorId: "owner-1",
+    commandId: "rail-cycle-1"
+  });
+  createObjectRelationship({
+    behaviorId: EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP,
+    sourceObjectId: crew007.objectId,
+    targetObjectId: pickup4.objectId,
+    actorId: "owner-1",
+    commandId: "rail-cycle-2"
+  });
+
+  assert.throws(
+    () => createObjectRelationship({
+      behaviorId: EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP,
+      sourceObjectId: pickup4.objectId,
+      targetObjectId: employees.objectId,
+      actorId: "owner-1",
+      commandId: "rail-cycle-blocked"
+    }),
+    error => error?.code === "STRUCTURAL_EDGE_CYCLE"
+  );
+
+  const forward = createObjectRelationship({
+    behaviorId: EDGE_BEHAVIOR_IDS.NEUTRAL_CONNECTION,
+    sourceObjectId: joe.objectId,
+    targetObjectId: employees.objectId,
+    actorId: "owner-1",
+    commandId: "neutral-cycle-1"
+  });
+  const reverse = createObjectRelationship({
+    behaviorId: EDGE_BEHAVIOR_IDS.NEUTRAL_CONNECTION,
+    sourceObjectId: employees.objectId,
+    targetObjectId: joe.objectId,
+    actorId: "owner-1",
+    commandId: "neutral-cycle-2"
+  });
+
+  assert.equal(forward.changed, true);
+  assert.equal(reverse.changed, true);
 });

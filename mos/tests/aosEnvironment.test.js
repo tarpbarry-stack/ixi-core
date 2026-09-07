@@ -155,28 +155,23 @@ assert.strictEqual(
   2
 );
 
-for (const object of second.objects) {
-  assert.strictEqual(
-    object.capabilities.canContain,
-    true
-  );
+const loadedJob = second.objects.find(object => object.objectId === job.objectId);
+const loadedTool = second.objects.find(object => object.objectId === tool.objectId);
 
-  assert.strictEqual(
-    object.capabilities.canCreate,
-    true
-  );
-}
+assert.strictEqual(loadedJob.capabilities.canContain, false);
+assert.strictEqual(loadedJob.capabilities.canCreate, false);
+assert.strictEqual(loadedTool.capabilities.canContain, true);
+assert.strictEqual(loadedTool.capabilities.canCreate, undefined);
 
 assert.ok(
   second.objects.find(
     object => object.objectId === job.objectId
-  ).revision > job.revision
+  ).revision === job.revision
 );
 
-assert.ok(
-  second.projections[
-    job.objectId
-  ]
+assert.strictEqual(
+  second.projections[job.objectId],
+  undefined
 );
 
 assert.strictEqual(

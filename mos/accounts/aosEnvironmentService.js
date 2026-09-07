@@ -3,17 +3,16 @@ const {
 } = require("./aosAccountService");
 
 const {
-  ensureObjectCapabilities,
   listObjects
 } = require("../objects/objectService");
 
 const {
-  AOS_UNIVERSAL_OPERATING_CAPABILITIES
-} = require("../provisioning/aosObjectProvisioningService");
-
-const {
   listRelationships
 } = require("../relationships/relationshipService");
+
+const {
+  EDGE_BEHAVIOR_IDS
+} = require("../relationships/edgeBehaviorRegistry");
 
 const {
   rebuildEntityProjections
@@ -46,6 +45,40 @@ function buildProjectionMap(
     map[projection.containerId] =
       projection;
   });
+
+  return map;
+}
+
+function buildRailProjectionMap(relationships = []) {
+  const map = {};
+
+  relationships
+    .filter(relationship =>
+      relationship?.behaviorId === EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP &&
+      relationship?.status === "active"
+    )
+    .sort((left, right) =>
+      cleanText(left?.orderKey).localeCompare(cleanText(right?.orderKey)) ||
+      cleanText(left?.createdAt).localeCompare(cleanText(right?.createdAt)) ||
+      cleanText(left?.relationshipId).localeCompare(cleanText(right?.relationshipId))
+    )
+    .forEach(relationship => {
+      const railOwnerObjectId = cleanText(relationship.targetObjectId);
+      if (!map[railOwnerObjectId]) {
+        map[railOwnerObjectId] = {
+          railOwnerObjectId,
+          behaviorId: EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP,
+          members: []
+        };
+      }
+      map[railOwnerObjectId].members.push({
+        objectId: relationship.sourceObjectId,
+        relationshipId: relationship.relationshipId,
+        definitionId: relationship.definitionId || null,
+        orderKey: relationship.orderKey || null,
+        customerLabel: relationship.relationshipLabel || null
+      });
+    });
 
   return map;
 }
@@ -141,16 +174,7 @@ async function loadAosEnvironment({
       entityId:
         entity.entityId,
       status: "active"
-    }).map(object =>
-      ensureObjectCapabilities({
-        objectId: object.objectId,
-        requiredCapabilities:
-          AOS_UNIVERSAL_OPERATING_CAPABILITIES,
-        actorId:
-          authorityPrincipal?.principalId ||
-          normalizedUserId
-      })
-    );
+    });
 
   const discoverableObjects =
     authorityPrincipal
@@ -253,6 +277,11 @@ async function loadAosEnvironment({
 
     relationships,
 
+    railProjections:
+      buildRailProjectionMap(
+        relationships
+      ),
+
     rootObjects,
 
     projections:
@@ -265,5 +294,6 @@ async function loadAosEnvironment({
 }
 
 module.exports = {
+  buildRailProjectionMap,
   loadAosEnvironment
 };
