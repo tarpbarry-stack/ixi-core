@@ -54,10 +54,20 @@ const {
 
 
 const {
-  getObject
+  getObject,
+  updateObject
 } =
   require(
     "../mos/objects/objectService"
+  );
+
+
+const {
+  ensurePassportForAosObject,
+  verifyAosObjectPassport
+} =
+  require(
+    "../mos/provisioning/aosObjectPassportService"
   );
 
 
@@ -431,8 +441,93 @@ function ensurePersonPassport({
   }
 
 
+  /*
+   * A Person Passport is not complete until the same identity is bound to
+   * the canonical AOS Object and persisted on the Person record. Earlier
+   * onboarding code created the registry record but returned a stale card,
+   * which is what allowed AOS/Work to render "IXI - PENDING".
+   */
+  const aosPassportResult =
+    ensurePassportForAosObject({
+      objectId: id,
+      entityId,
+      trustedPassportId: actorPassportId
+    });
+
+  if (
+    clean(aosPassportResult?.passport?.passportId) !==
+      actorPassportId
+  ) {
+    throw identityError(
+      "IXI_PERSON_PASSPORT_BINDING_CONFLICT",
+      "The Person Object is bound to a different IXI Passport.",
+      {
+        objectId: id,
+        expectedPassportId: actorPassportId,
+        actualPassportId:
+          clean(aosPassportResult?.passport?.passportId) || null
+      },
+      409
+    );
+  }
+
+  const existingIdentities =
+    Array.isArray(person.identities)
+      ? person.identities
+      : [];
+
+  const expectedIdentity =
+    aosPassportResult.identity;
+
+  const existingPassportIdentities =
+    existingIdentities.filter(
+      identity =>
+        clean(identity?.identityType) ===
+          "ixi-passport"
+    );
+
+  const identityIsCanonical =
+    existingPassportIdentities.length === 1 &&
+    clean(existingPassportIdentities[0]?.passportId) === actorPassportId &&
+    clean(existingPassportIdentities[0]?.entityId) === entityId &&
+    clean(existingPassportIdentities[0]?.sourceType) === "aos-object" &&
+    clean(existingPassportIdentities[0]?.sourceId) === id;
+
+  const persistedPerson =
+    identityIsCanonical &&
+    person?.metadata?.transactEligible === true
+      ? person
+      : updateObject({
+          objectId: id,
+          identities: [
+            ...existingIdentities.filter(
+              identity =>
+                clean(identity?.identityType) !==
+                  "ixi-passport"
+            ),
+            expectedIdentity
+          ],
+          actorId: id,
+          metadata: {
+            ...(person.metadata || {}),
+            transactEligible: true,
+            passportIdentity: {
+              state: "complete",
+              passportId: actorPassportId,
+              verified: true
+            }
+          }
+        });
+
+  verifyAosObjectPassport({
+    objectId: id,
+    passportId: actorPassportId,
+    entityId
+  });
+
+
   return {
-    person,
+    person: persistedPerson,
     passport,
 
     personObjectId:

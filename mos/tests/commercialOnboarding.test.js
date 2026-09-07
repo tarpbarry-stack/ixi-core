@@ -43,7 +43,7 @@ test.after(() => {
   fs.rmSync(testRoot, { recursive: true, force: true });
 });
 
-test("commercial onboarding creates one Entity, one owner Person, two Passports, and an empty TRAN$ACT foundation", () => {
+test("commercial onboarding creates canonical owner and system-index Passports with an empty TRAN$ACT ledger", () => {
   const first = ensureCommercialOnboarding({
     ownerUserId: "sharetribe-user-001",
     entityDisplayName: "Star and Sons",
@@ -84,7 +84,34 @@ test("commercial onboarding creates one Entity, one owner Person, two Passports,
   }).filter(object => object.objectType === "person");
 
   assert.equal(people.length, 1);
-  assert.equal(readPassportRecords().length, 2);
+
+  const activeObjects = listObjects({
+    entityId: first.entity.entityId,
+    status: "active"
+  });
+  const systemIndexes = activeObjects.filter(
+    object => object.objectType === "system-index"
+  );
+
+  assert.equal(systemIndexes.length, 2);
+  assert.deepEqual(
+    systemIndexes.map(object => object.metadata.systemIndexKey).sort(),
+    ["equipment", "for-sale"]
+  );
+  assert.equal(readPassportRecords().length, 4);
+  assert.equal(first.identityIntegrity.ok, true);
+  assert.equal(first.identityIntegrity.activeObjectCount, 3);
+  assert.equal(
+    activeObjects.every(object =>
+      object.metadata.transactEligible === true &&
+      object.identities.some(identity =>
+        identity.identityType === "ixi-passport" &&
+        identity.sourceType === "aos-object" &&
+        identity.sourceId === object.objectId
+      )
+    ),
+    true
+  );
 });
 
 test("replaying onboarding returns the same durable identities without duplicate cards or Passports", () => {
@@ -118,6 +145,57 @@ test("replaying onboarding returns the same durable identities without duplicate
 
   const account = getAosAccountForUser("sharetribe-user-002");
   assert.equal(account.membership.personObjectId, first.person.objectId);
+  assert.equal(
+    listObjects({ entityId: first.entity.entityId, status: "active" }).length,
+    3
+  );
+  assert.equal(
+    listObjects({ entityId: first.entity.entityId, status: "active" })
+      .every(object => object.identities.some(identity =>
+        identity.identityType === "ixi-passport"
+      )),
+    true
+  );
+});
+
+test("onboarding backfills a legacy record Passport once and returns canonical identity", () => {
+  const account = require("../accounts/aosAccountService").ensureAosAccount({
+    ownerUserId: "sharetribe-passport-repair",
+    displayName: "Passport Repair Entity"
+  });
+
+  const legacy = createObject({
+    entityId: account.entity.entityId,
+    objectType: "container",
+    displayName: "Legacy Locations",
+    actorId: "sharetribe-passport-repair"
+  });
+
+  const result = ensureCommercialOnboarding({
+    ownerUserId: "sharetribe-passport-repair",
+    entityDisplayName: "Passport Repair Entity",
+    person: { displayName: "Repair Owner" }
+  });
+
+  const repaired = getObject(legacy.objectId);
+  const passportIdentity = repaired.identities.find(
+    identity => identity.identityType === "ixi-passport"
+  );
+
+  assert.equal(result.identityIntegrity.ok, true);
+  assert.equal(passportIdentity.sourceType, "aos-object");
+  assert.equal(passportIdentity.sourceId, legacy.objectId);
+  assert.equal(passportIdentity.entityId, legacy.entityId);
+  assert.match(passportIdentity.passportId, /^IXI[A-HJ-KM-NP-Z2-9]{7}$/);
+  assert.equal(repaired.metadata.transactEligible, true);
+
+  const revision = repaired.revision;
+  ensureCommercialOnboarding({
+    ownerUserId: "sharetribe-passport-repair",
+    entityDisplayName: "Passport Repair Entity",
+    person: { displayName: "Repair Owner" }
+  });
+  assert.equal(getObject(legacy.objectId).revision, revision);
 });
 
 test("existing accounts adopt their sole legacy Person instead of creating a duplicate", () => {

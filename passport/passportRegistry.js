@@ -398,6 +398,73 @@ function ensurePassportForSource(input = {}) {
   };
 }
 
+function reassignPassportId({
+  currentPassportId = "",
+  requestedPassportId = "",
+  expectedEntityId = ""
+} = {}) {
+  const currentId = normalizePassportId(currentPassportId);
+  const requestedId = normalizePassportId(requestedPassportId);
+  const entityId = clean(expectedEntityId);
+
+  if (!isValidPassportId(currentId) || !isValidPassportId(requestedId)) {
+    const error = new Error("Both the current and requested IXI Passport IDs must be valid.");
+    error.code = "PASSPORT_REASSIGN_ID_INVALID";
+    error.status = 400;
+    throw error;
+  }
+
+  const records = readPassportRecords();
+  const currentIndex = records.findIndex(record => record.passportId === currentId);
+  if (currentIndex < 0) {
+    const error = new Error("The current IXI Passport was not found.");
+    error.code = "PASSPORT_REASSIGN_SOURCE_NOT_FOUND";
+    error.status = 404;
+    throw error;
+  }
+
+  const collision = records.find(record =>
+    record.passportId === requestedId && record.passportId !== currentId
+  );
+  if (collision) {
+    const error = new Error("The requested IXI Passport is already assigned.");
+    error.code = "PASSPORT_REASSIGN_TARGET_CONFLICT";
+    error.status = 409;
+    error.details = { requestedPassportId: requestedId };
+    throw error;
+  }
+
+  const current = records[currentIndex];
+  const currentEntityId = clean(current.entityId);
+  if (entityId && currentEntityId && entityId !== currentEntityId) {
+    const error = new Error("The IXI Passport belongs to a different Entity.");
+    error.code = "PASSPORT_REASSIGN_ENTITY_MISMATCH";
+    error.status = 403;
+    throw error;
+  }
+
+  if (currentId === requestedId) {
+    return { ok: true, changed: false, passport: current };
+  }
+
+  const updated = {
+    ...current,
+    passportId: requestedId,
+    passportUrl: getPassportUrl(requestedId),
+    previousPassportIds: [...new Set([
+      ...(Array.isArray(current.previousPassportIds)
+        ? current.previousPassportIds.map(normalizePassportId).filter(isValidPassportId)
+        : []),
+      currentId
+    ])],
+    updatedAt: nowIso()
+  };
+
+  records[currentIndex] = updated;
+  writePassportRecords(records);
+  return { ok: true, changed: true, passport: updated };
+}
+
 module.exports = {
   readPassportRecords,
   writePassportRecords,
@@ -410,5 +477,6 @@ module.exports = {
   deletePassportBySource,
   generateUniquePassportId,
   createPassportRecord,
-  ensurePassportForSource
+  ensurePassportForSource,
+  reassignPassportId
 };

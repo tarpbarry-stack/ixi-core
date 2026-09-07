@@ -18,6 +18,10 @@ const {
 } = require("../provisioning/aosObjectProvisioningService");
 
 const {
+  enforceEntityPassportIntegrity
+} = require("../provisioning/aosIdentityIntegrityService");
+
+const {
   ensureEntityPassport,
   ensurePersonPassport
 } = require("../../identity/IXIPassportIdentityBridge");
@@ -175,10 +179,10 @@ function ensureOwnerPerson({
 
     return {
       created: false,
-      object: existing,
+      object: personIdentity.person,
       passport: personIdentity.passport,
       identity: {
-        objectId: existing.objectId,
+        objectId: personIdentity.person.objectId,
         passportId: personIdentity.actorPassportId
       }
     };
@@ -233,10 +237,10 @@ function ensureOwnerPerson({
 
   return {
     created: result.replayed !== true,
-    object: result.object,
+    object: personIdentity.person,
     passport: personIdentity.passport,
     identity: {
-      objectId: result.object.objectId,
+      objectId: personIdentity.person.objectId,
       passportId: personIdentity.actorPassportId
     }
   };
@@ -299,12 +303,25 @@ function ensureCommercialOnboarding({
     entityPassportId: entityIdentity.entityPassportId
   });
 
+  /*
+   * Bootstrap is also the authenticated, fail-closed repair boundary for
+   * records created before Passport-at-birth became mandatory. It creates
+   * the two IXI-owned system indexes canonically and refuses to return an
+   * Entity containing any active record whose identity cannot be verified.
+   */
+  const identityIntegrity = enforceEntityPassportIntegrity({
+    entityId: accountResult.entity.entityId,
+    actorId: principalId
+  });
+
+  const canonicalOwnerPerson = getObject(ownerPerson.identity.objectId);
+
   return {
     ok: true,
     contract: CONTRACT,
     account: accountResult.account,
     entity: accountResult.entity,
-    person: ownerPerson.object,
+    person: canonicalOwnerPerson,
     membership,
     passports: {
       entityPassportId: entityIdentity.entityPassportId,
@@ -322,6 +339,11 @@ function ensureCommercialOnboarding({
       defaultCurrency:
         accountResult.account?.settings?.defaultCurrency || "USD",
       recordsCreated: 0
+    },
+    identityIntegrity: {
+      ok: identityIntegrity.ok,
+      activeObjectCount: identityIntegrity.activeObjectCount,
+      systemIndexObjectIds: identityIntegrity.systemIndexObjectIds
     },
     created: {
       ...accountResult.created,

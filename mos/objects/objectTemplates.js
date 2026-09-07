@@ -133,6 +133,20 @@ const MOS_OBJECT_TEMPLATES = Object.freeze({
     })
   },
 
+  /*
+   * IXI-owned dynamic indexes are durable AOS records. Customer taxonomy is
+   * never inferred from this type; it only identifies the system projection
+   * adapter that supplies the index contents.
+   */
+  [MOS_OBJECT_TYPES.SYSTEM_INDEX]: {
+    objectType: MOS_OBJECT_TYPES.SYSTEM_INDEX,
+    label: "System Index",
+    capabilities: capabilities({
+      canContain: true,
+      canCreate: true
+    })
+  },
+
   [MOS_OBJECT_TYPES.GENERIC]: {
     objectType: MOS_OBJECT_TYPES.GENERIC,
     label: "Object",
