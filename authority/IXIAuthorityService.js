@@ -135,7 +135,7 @@ function hasBootstrapCapability(
   if (
     uniqueStrings(
       principal.directDenies
-    ).includes(id)
+    ).some(capability => capability === id || capability === "*")
   ) {
     return false;
   }
@@ -143,7 +143,7 @@ function hasBootstrapCapability(
 
   return uniqueStrings(
     principal.directGrants
-  ).includes(id);
+  ).some(capability => capability === id || capability === "*");
 }
 
 
@@ -293,13 +293,8 @@ async function evaluate({
 
 
   const directDenied =
-    uniqueStrings(
-      principal.directDenies
-    ).includes(
-      clean(
-        capability
-      )
-    );
+    uniqueStrings(principal.directDenies)
+      .some(item => item === clean(capability) || item === "*");
 
 
   if (directDenied) {
@@ -368,13 +363,8 @@ async function evaluate({
 
 
   const directGranted =
-    uniqueStrings(
-      principal.directGrants
-    ).includes(
-      clean(
-        capability
-      )
-    );
+    uniqueStrings(principal.directGrants)
+      .some(item => item === clean(capability) || item === "*");
 
 
   if (directGranted) {

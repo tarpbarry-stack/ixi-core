@@ -28,6 +28,7 @@ const MOS_PATHS = Object.freeze({
   movements: mosDataPath("movements.json"),
   accounts: mosDataPath("accounts.json"),
   memberships: mosDataPath("memberships.json"),
+  workspaceSessions: mosDataPath("workspace-sessions.json"),
   customerObjectTypes: mosDataPath("customer-object-types.json"),
   cardTemplates: mosDataPath("card-templates.json"),
 

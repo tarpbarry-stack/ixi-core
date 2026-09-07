@@ -4,10 +4,7 @@ const fs = require("fs");
 const { acquire } = require("./acquisition");
 
 const {
-  findPassportById,
-  readPassportRecords,
-  deletePassportById,
-  deletePassportBySource
+  findPassportById
 } = require("./passport/passportRegistry");
 
 const {
@@ -244,22 +241,6 @@ app.get("/passport", (req, res) => {
       message: "Passport registry enumeration is not a public operation."
     }
   });
-
-  /* istanbul ignore next -- retired compatibility implementation */
-  try {
-    const records = readPassportRecords();
-
-    return res.json({
-      ok: true,
-      count: records.length,
-      passports: records
-    });
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error.message
-    });
-  }
 });
 
 app.delete("/passport/:passportId", (req, res) => {
@@ -270,48 +251,6 @@ app.delete("/passport/:passportId", (req, res) => {
       message: "Permanent Passport deletion is retired from the public API."
     }
   });
-
-  /* istanbul ignore next -- retired compatibility implementation */
-  try {
-    const confirmation =
-      String(
-        req.body?.confirmation ||
-        req.headers[
-          "x-ixi-delete-confirmation"
-        ] ||
-        ""
-      ).trim();
-
-    if (
-      confirmation !==
-      "PERMANENT_DELETE"
-    ) {
-      return res.status(400).json({
-        ok: false,
-        error:
-          "Missing PERMANENT_DELETE confirmation"
-      });
-    }
-
-    const result =
-      deletePassportById(
-        req.params.passportId
-      );
-
-    return res.json(result);
-  } catch (error) {
-    console.error(
-      "PASSPORT DELETE FAILED:",
-      error
-    );
-
-    return res.status(500).json({
-      ok: false,
-      error:
-        error?.message ||
-        "Passport delete failed"
-    });
-  }
 });
 
 app.delete(
@@ -324,49 +263,6 @@ app.delete(
         message: "Passport source deletion is retired from the public API."
       }
     });
-
-    /* istanbul ignore next -- retired compatibility implementation */
-    try {
-      const confirmation =
-        String(
-          req.body?.confirmation ||
-          req.headers[
-            "x-ixi-delete-confirmation"
-          ] ||
-          ""
-        ).trim();
-
-      if (
-        confirmation !==
-        "PERMANENT_DELETE"
-      ) {
-        return res.status(400).json({
-          ok: false,
-          error:
-            "Missing PERMANENT_DELETE confirmation"
-        });
-      }
-
-      const result =
-        deletePassportBySource(
-          req.params.sourceType,
-          req.params.sourceId
-        );
-
-      return res.json(result);
-    } catch (error) {
-      console.error(
-        "PASSPORT SOURCE DELETE FAILED:",
-        error
-      );
-
-      return res.status(500).json({
-        ok: false,
-        error:
-          error?.message ||
-          "Passport source delete failed"
-      });
-    }
   }
 );
 
@@ -1197,8 +1093,17 @@ app.post("/ixi-machine-state", (req, res) => {
 
 const PORT = 4100;
 
-app.listen(PORT, () => {
-  console.log(
-    `IX Core running on port ${PORT}`
-  );
-});
+function startIxCoreServer(port = PORT) {
+  return app.listen(port, () => {
+    console.log(`IX Core running on port ${port}`);
+  });
+}
+
+if (require.main === module) {
+  startIxCoreServer();
+}
+
+module.exports = {
+  app,
+  startIxCoreServer
+};

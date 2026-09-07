@@ -29,6 +29,16 @@ const CAPABILITIES =
       label: "Create object"
     },
 
+    "aos.import": {
+      family: "aos",
+      label: "Import objects"
+    },
+
+    "aos.provision.recover": {
+      family: "aos",
+      label: "Recover recorded object provisioning"
+    },
+
     "aos.edit": {
       family: "aos",
       label: "Edit object"
@@ -37,6 +47,26 @@ const CAPABILITIES =
     "aos.move": {
       family: "aos",
       label: "Move object"
+    },
+
+    "aos.console.open": {
+      family: "aos",
+      label: "Open object Console"
+    },
+
+    "aos.workspace.session.open": {
+      family: "aos",
+      label: "Open workspace session"
+    },
+
+    "aos.workspace.placement.write": {
+      family: "aos",
+      label: "Change workspace placement"
+    },
+
+    "aos.workspace.shared": {
+      family: "aos",
+      label: "Use shared workspace placement"
     },
 
     "aos.relationship.create": {
