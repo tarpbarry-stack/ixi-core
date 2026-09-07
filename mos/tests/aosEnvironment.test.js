@@ -27,6 +27,19 @@ const {
   "../objects/objectService"
 );
 
+const {
+  readJsonFile,
+  writeJsonFileAtomic
+} = require(
+  "../storage/jsonStore"
+);
+
+const {
+  MOS_PATHS
+} = require(
+  "../storage/mosPaths"
+);
+
 (async () => {
 const first =
   await loadAosEnvironment({
@@ -92,6 +105,27 @@ const tool =
       "sharetribe-owner-2"
   });
 
+/* Simulate a canonical Object written before universal containment. */
+const legacyObjects =
+  readJsonFile(
+    MOS_PATHS.objects,
+    {}
+  );
+
+legacyObjects[job.objectId] = {
+  ...legacyObjects[job.objectId],
+  capabilities: {
+    ...legacyObjects[job.objectId].capabilities,
+    canContain: false,
+    canCreate: false
+  }
+};
+
+writeJsonFileAtomic(
+  MOS_PATHS.objects,
+  legacyObjects
+);
+
 const second =
   await loadAosEnvironment({
     ownerUserId:
@@ -119,6 +153,24 @@ assert.strictEqual(
 assert.strictEqual(
   second.rootObjects.length,
   2
+);
+
+for (const object of second.objects) {
+  assert.strictEqual(
+    object.capabilities.canContain,
+    true
+  );
+
+  assert.strictEqual(
+    object.capabilities.canCreate,
+    true
+  );
+}
+
+assert.ok(
+  second.objects.find(
+    object => object.objectId === job.objectId
+  ).revision > job.revision
 );
 
 assert.ok(

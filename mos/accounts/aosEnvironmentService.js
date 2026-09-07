@@ -3,8 +3,13 @@ const {
 } = require("./aosAccountService");
 
 const {
+  ensureObjectCapabilities,
   listObjects
 } = require("../objects/objectService");
+
+const {
+  AOS_UNIVERSAL_OPERATING_CAPABILITIES
+} = require("../provisioning/aosObjectProvisioningService");
 
 const {
   listRelationships
@@ -136,7 +141,16 @@ async function loadAosEnvironment({
       entityId:
         entity.entityId,
       status: "active"
-    });
+    }).map(object =>
+      ensureObjectCapabilities({
+        objectId: object.objectId,
+        requiredCapabilities:
+          AOS_UNIVERSAL_OPERATING_CAPABILITIES,
+        actorId:
+          authorityPrincipal?.principalId ||
+          normalizedUserId
+      })
+    );
 
   const discoverableObjects =
     authorityPrincipal

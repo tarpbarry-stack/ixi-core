@@ -3,8 +3,9 @@ const {
 } = require("../constants");
 
 const BASE_CAPABILITIES = Object.freeze({
-  canContain: false,
-  canCreate: false,
+  /* Every canonical Object can be nested and can receive children. */
+  canContain: true,
+  canCreate: true,
   canMove: true,
   canHaveQr: true,
   canHaveMedia: true,
