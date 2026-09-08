@@ -42,13 +42,62 @@ function normalizedPassportIds(value = {}) {
 }
 
 function normalizedAliases(value = {}) {
+  const metadata = value?.metadata && typeof value.metadata === "object"
+    ? value.metadata
+    : {};
+  const provisioning = metadata?.provisioning && typeof metadata.provisioning === "object"
+    ? metadata.provisioning
+    : value?.provisioning && typeof value.provisioning === "object"
+      ? value.provisioning
+      : {};
   const identities = Array.isArray(value?.identities)
     ? value.identities
     : [];
+  const aliases = Array.isArray(value?.aliases)
+    ? value.aliases
+    : [];
+  const sourceBindings = [
+    ...(Array.isArray(value?.sourceBindings) ? value.sourceBindings : []),
+    ...(Array.isArray(metadata?.sourceBindings) ? metadata.sourceBindings : []),
+    ...(Array.isArray(provisioning?.sourceBindings) ? provisioning.sourceBindings : []),
+    ...(Array.isArray(value?.historicalSourceBindings)
+      ? value.historicalSourceBindings
+      : []),
+    ...(Array.isArray(metadata?.historicalSourceBindings)
+      ? metadata.historicalSourceBindings
+      : [])
+  ];
 
-  const candidates = identities.map(identity => ({
-    sourceType: cleanText(identity?.sourceType || identity?.type),
-    sourceId: cleanText(identity?.sourceId || identity?.id)
+  const candidates = [
+    ...identities,
+    ...aliases,
+    ...sourceBindings,
+    value?.sourceType || value?.sourceId
+      ? { sourceType: value.sourceType, sourceId: value.sourceId }
+      : null,
+    value?.sourceListingId
+      ? { sourceType: "sharetribe-listing", sourceId: value.sourceListingId }
+      : null,
+    metadata?.sourceListingId
+      ? { sourceType: "sharetribe-listing", sourceId: metadata.sourceListingId }
+      : null,
+    provisioning?.sourceListingId
+      ? { sourceType: "sharetribe-listing", sourceId: provisioning.sourceListingId }
+      : null
+  ].filter(Boolean).map(identity => ({
+    sourceType: cleanText(
+      identity?.sourceType ||
+      identity?.identityType ||
+      identity?.type ||
+      identity?.kind
+    ),
+    sourceId: cleanText(
+      identity?.sourceId ||
+      identity?.identityId ||
+      identity?.externalId ||
+      identity?.value ||
+      identity?.id
+    )
   }));
   const seen = new Set();
 
@@ -358,7 +407,12 @@ function resolveCanonicalObjectIdentity(input = {}) {
     entityId,
     object,
     passport,
-    aliases: passportSources(passport),
+    aliases: normalizedAliases({
+      identities: [
+        ...passportSources(passport),
+        ...normalizedAliases(object)
+      ]
+    }),
     evidence
   };
 }

@@ -63,15 +63,29 @@ function buildProjectionMap(
   return map;
 }
 
-function buildRailProjectionMap(relationships = []) {
+function buildRailProjectionMap(relationships = [], objects = []) {
   const map = {};
+  const objectsById = new Map(
+    objects.map(object => [cleanText(object?.objectId), object])
+  );
+  const projectedMembersByOwner = new Map();
 
   relationships
     .filter(relationship =>
-      relationship?.behaviorId === EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP &&
-      relationship?.status === "active"
+      relationship?.status === "active" && (
+        relationship?.behaviorId === EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP ||
+        (
+          !cleanText(relationship?.behaviorId) &&
+          cleanText(
+            objectsById.get(cleanText(relationship?.sourceObjectId))
+              ?.directContainerId
+          ) === cleanText(relationship?.targetObjectId)
+        )
+      )
     )
     .sort((left, right) =>
+      Number(right?.behaviorId === EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP) -
+        Number(left?.behaviorId === EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP) ||
       cleanText(left?.orderKey).localeCompare(cleanText(right?.orderKey)) ||
       cleanText(left?.createdAt).localeCompare(cleanText(right?.createdAt)) ||
       cleanText(left?.relationshipId).localeCompare(cleanText(right?.relationshipId))
@@ -86,6 +100,11 @@ function buildRailProjectionMap(relationships = []) {
         objectId: relationship.targetObjectId
       });
       const railOwnerObjectId = cleanText(relationship.targetObjectId);
+      const projectedMemberKey = `${railOwnerObjectId}\u0000${sourceIdentity.objectId}`;
+      if (projectedMembersByOwner.has(projectedMemberKey)) return;
+      projectedMembersByOwner.set(projectedMemberKey, relationship.relationshipId);
+      const governed =
+        relationship.behaviorId === EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP;
       if (!map[railOwnerObjectId]) {
         map[railOwnerObjectId] = {
           railOwnerObjectId,
@@ -115,10 +134,17 @@ function buildRailProjectionMap(relationships = []) {
         relationshipId: relationship.relationshipId,
         relationshipRevision: Number(relationship.revision || 0),
         relationshipStatus: relationship.status,
-        behaviorId: relationship.behaviorId,
+        behaviorId: relationship.behaviorId || null,
         definitionId: relationship.definitionId || null,
         orderKey: relationship.orderKey || null,
-        customerLabel: relationship.relationshipLabel || null
+        customerLabel: relationship.relationshipLabel || null,
+        migrationEvidence: governed
+          ? null
+          : {
+              kind: "legacy-direct-container-corroborated.v1",
+              readOnly: true,
+              directContainerId: railOwnerObjectId
+            }
       });
     });
 
@@ -343,7 +369,8 @@ async function loadAosEnvironment({
 
     railProjections:
       buildRailProjectionMap(
-        relationships
+        relationships,
+        discoverableObjects
       ),
 
     rootObjects,

@@ -88,6 +88,85 @@ test("object ID, permanent Passport, and typed alias resolve to one canonical Ob
   assert.equal(result.entityId, "entity-1");
 });
 
+test("released Object identity supplies a listing alias missing from the Passport record", () => {
+  const object = canonicalFixture({
+    passportId: "IXITEST007",
+    listingId: "released-object-listing-007"
+  });
+  const passports = readPassportRecords();
+  passports[0].sourceType = "aos-object";
+  passports[0].sourceId = object.objectId;
+  passports[0].sources = [{
+    sourceType: "aos-object",
+    sourceId: object.objectId
+  }];
+  writePassportRecords(passports);
+
+  const result = resolveCanonicalObjectIdentity({
+    entityId: "entity-1",
+    objectId: object.objectId,
+    passportId: "IXITEST007",
+    aliases: [{
+      sourceType: "sharetribe-listing",
+      sourceId: "released-object-listing-007"
+    }]
+  });
+
+  assert.equal(result.objectId, object.objectId);
+  assert.equal(result.passportId, "IXITEST007");
+  assert.equal(result.aliases.some(alias =>
+    alias.sourceType === "sharetribe-listing" &&
+    alias.sourceId === "released-object-listing-007"
+  ), true);
+});
+
+test("released Object source bindings admit their existing listing alias without provisioning", () => {
+  const object = canonicalFixture({
+    passportId: "IXITEST006",
+    listingId: "passport-source-does-not-match"
+  });
+  const objectsPath = path.join(testRoot, "mos", "objects.json");
+  const objects = JSON.parse(fs.readFileSync(objectsPath, "utf8"));
+  objects[object.objectId].identities = [objects[object.objectId].identities[0]];
+  objects[object.objectId].metadata = {
+    sourceBindings: [{
+      sourceType: "sharetribe-listing",
+      sourceId: "released-listing-006"
+    }]
+  };
+  fs.writeFileSync(objectsPath, JSON.stringify(objects, null, 2));
+  const beforeObjects = Object.keys(objects).length;
+  const beforePassports = readPassportRecords().length;
+
+  const result = resolveCanonicalObjectIdentity({
+    entityId: "entity-1",
+    objectId: object.objectId,
+    passportId: "IXITEST006",
+    aliases: [{
+      sourceType: "sharetribe-listing",
+      sourceId: "released-listing-006"
+    }]
+  });
+
+  assert.equal(result.objectId, object.objectId);
+  assert.equal(result.passportId, "IXITEST006");
+  assert.deepEqual(result.aliases, [{
+    sourceType: "sharetribe-listing",
+    sourceId: "passport-source-does-not-match"
+  }, {
+    sourceType: "aos-object",
+    sourceId: object.objectId
+  }, {
+    sourceType: "sharetribe-listing",
+    sourceId: "released-listing-006"
+  }]);
+  assert.equal(
+    Object.keys(JSON.parse(fs.readFileSync(objectsPath, "utf8"))).length,
+    beforeObjects
+  );
+  assert.equal(readPassportRecords().length, beforePassports);
+});
+
 test("historical Passport IDs resolve to the current permanent Passport", () => {
   const object = canonicalFixture({ passportId: "IXITEST002" });
   const passports = JSON.parse(fs.readFileSync(process.env.IXI_PASSPORT_DATA_FILE, "utf8"));
