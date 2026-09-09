@@ -16,6 +16,8 @@ process.env.IXI_MOS_INTERNAL_AUTH_ENFORCE = "true";
 const express = require("express");
 const { ensureAosAccount } = require("../accounts/aosAccountService");
 const { provisionAosObject } = require("../provisioning/aosObjectProvisioningService");
+const { listObjects } = require("../objects/objectService");
+const { readPassportRecords } = require("../../passport/passportRegistry");
 const { buildCanonicalRequest } = require("../security/internalRequestAuthService");
 const authorityStore = require("../../authority/IXIAuthorityDynamoStore");
 authorityStore.getCurrentPolicyRecord = async () => null;
@@ -88,6 +90,32 @@ test("signed workspace HTTP contract binds membership, ignores forged authority,
     });
     assert.equal(frontendOnboarding.status, 200);
     const frontendEntityId = frontendOnboarding.body.environment.entity.entityId;
+    const contextCensusBefore = {
+      objects: listObjects({ status: null }).length,
+      passports: readPassportRecords().length
+    };
+
+    const frontendContext = await request(baseUrl, {
+      method: "GET",
+      targetPath: "/mos/v1/aos/context",
+      principalId: "frontend-new-owner",
+      entityId: ""
+    });
+    assert.equal(frontendContext.status, 200);
+    assert.equal(frontendContext.body.context.principalId, "frontend-new-owner");
+    assert.equal(frontendContext.body.context.entityId, frontendEntityId);
+    assert.equal(
+      frontendContext.body.context.accountId,
+      frontendOnboarding.body.environment.account.accountId
+    );
+    assert.deepEqual(
+      {
+        objects: listObjects({ status: null }).length,
+        passports: readPassportRecords().length
+      },
+      contextCensusBefore
+    );
+
     const machineCommandId = "sharetribe-listing:frontend-listing-1";
     const frontendMachine = await request(baseUrl, {
       targetPath: "/mos/v1/aos/machines/sharetribe-listing",

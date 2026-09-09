@@ -113,7 +113,8 @@ const {
 } = require("../accounts/aosEnvironmentService");
 
 const {
-  findAccountByOwnerUserId
+  findAccountByOwnerUserId,
+  getAosAccountForUser
 } = require("../accounts/aosAccountService");
 
 const {
@@ -438,6 +439,59 @@ router.use(
 
 
 /* ---------- AOS ENVIRONMENT ---------- */
+
+router.get(
+  "/aos/context",
+  (req, res) => {
+    try {
+      if (!req.ixiRequestContext?.authenticated) {
+        throw new MosError(
+          "AOS_CONTEXT_AUTHENTICATION_REQUIRED",
+          "A governed AOS context requires an authenticated signed principal.",
+          null,
+          401
+        );
+      }
+
+      const principalId =
+        String(req.ixiRequestContext.principalId || "").trim();
+
+      const {
+        account,
+        entity,
+        membership
+      } = getAosAccountForUser(principalId);
+
+      if (
+        !membership ||
+        membership.status !== "active" ||
+        membership.entityId !== entity?.entityId ||
+        membership.accountId !== account?.accountId ||
+        membership.tenantId !== account?.tenantId
+      ) {
+        throw new MosError(
+          "AOS_CONTEXT_MEMBERSHIP_REQUIRED",
+          "The authenticated principal does not have one active governed AOS context.",
+          { principalId },
+          403
+        );
+      }
+
+      return res.status(200).json({
+        ok: true,
+        context: {
+          principalId,
+          entityId: entity.entityId,
+          accountId: account.accountId,
+          tenantId: account.tenantId,
+          membershipId: membership.membershipId
+        }
+      });
+    } catch (error) {
+      return sendMosError(res, error);
+    }
+  }
+);
 
 router.post(
   "/aos/onboarding/bootstrap",

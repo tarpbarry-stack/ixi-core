@@ -113,6 +113,7 @@ function bindInternalTenantContext(
    */
   if (
     [
+      "/aos/context",
       "/aos/environment",
       "/aos/onboarding/bootstrap"
     ].includes(path)

@@ -70,6 +70,70 @@ function canonicalObject(entityId, objectId) {
   return object;
 }
 
+function applyCompleteSurfaceOrders({
+  session,
+  entityId,
+  surfaceOrders,
+  timestamp
+}) {
+  const orders = Array.isArray(surfaceOrders)
+    ? surfaceOrders
+    : [];
+
+  if (orders.length > 32) {
+    sessionError(
+      "WORKSPACE_SURFACE_ORDER_BATCH_INVALID",
+      "A placement command can order at most 32 affected surfaces."
+    );
+  }
+
+  const surfaceIds = orders.map(order =>
+    stableId(order?.surfaceId, "surfaceId")
+  );
+
+  if (new Set(surfaceIds).size !== surfaceIds.length) {
+    sessionError(
+      "WORKSPACE_SURFACE_ORDER_BATCH_DUPLICATE",
+      "A placement command contains duplicate affected surfaces."
+    );
+  }
+
+  orders.forEach((order, orderIndex) => {
+    const surfaceId = surfaceIds[orderIndex];
+    const orderedObjectIds = Array.isArray(order?.orderedObjectIds)
+      ? order.orderedObjectIds.map(id => cleanText(id))
+      : [];
+
+    if (new Set(orderedObjectIds).size !== orderedObjectIds.length) {
+      sessionError(
+        "WORKSPACE_SURFACE_ORDER_DUPLICATE",
+        "Surface order contains duplicate Objects."
+      );
+    }
+
+    orderedObjectIds.forEach(id => canonicalObject(entityId, id));
+
+    const members = Object.values(session.objects)
+      .filter(item => item.currentPlacement.surfaceId === surfaceId)
+      .map(item => item.objectId)
+      .sort();
+
+    if (orderedObjectIds.slice().sort().join("|") !== members.join("|")) {
+      sessionError(
+        "WORKSPACE_SURFACE_ORDER_INCOMPLETE",
+        "Surface order must include its complete canonical membership.",
+        { surfaceId },
+        409
+      );
+    }
+
+    orderedObjectIds.forEach((id, index) => {
+      session.objects[id].currentPlacement.visualOrder = index;
+      session.objects[id].updatedAt = timestamp;
+    });
+  });
+}
+
 function scopeKeyOf({ tenantId, entityId, workspaceId, placementScope, scopeOwnerId }) {
   return [tenantId, entityId, workspaceId, placementScope, scopeOwnerId].map(stableId).join("|");
 }
@@ -353,6 +417,13 @@ function applyWorkspaceSessionCommand({
       }
       entry.updatedAt = timestamp;
     });
+
+    applyCompleteSurfaceOrders({
+      session: next,
+      entityId: current.entityId,
+      surfaceOrders: payload.surfaceOrders,
+      timestamp
+    });
   } else if (type === "objects.recall") {
     const objectIds = Array.isArray(payload.objectIds)
       ? payload.objectIds.map(id => cleanText(id))
@@ -476,23 +547,14 @@ function applyWorkspaceSessionCommand({
       entry.updatedAt = timestamp;
     } else if (type === "surface.reorder") {
       const surfaceId = stableId(payload.surfaceId, "surfaceId");
-      const ordered = Array.isArray(payload.orderedObjectIds)
-        ? payload.orderedObjectIds.map(id => cleanText(id))
-        : [];
-      if (new Set(ordered).size !== ordered.length) {
-        sessionError("WORKSPACE_SURFACE_ORDER_DUPLICATE", "Surface order contains duplicate Objects.");
-      }
-      ordered.forEach(id => canonicalObject(current.entityId, id));
-      const members = Object.values(next.objects)
-        .filter(item => item.currentPlacement.surfaceId === surfaceId)
-        .map(item => item.objectId)
-        .sort();
-      if (ordered.slice().sort().join("|") !== members.join("|")) {
-        sessionError("WORKSPACE_SURFACE_ORDER_INCOMPLETE", "Surface reorder must include its complete canonical membership.", { surfaceId }, 409);
-      }
-      ordered.forEach((id, index) => {
-        next.objects[id].currentPlacement.visualOrder = index;
-        next.objects[id].updatedAt = timestamp;
+      applyCompleteSurfaceOrders({
+        session: next,
+        entityId: current.entityId,
+        surfaceOrders: [{
+          surfaceId,
+          orderedObjectIds: payload.orderedObjectIds
+        }],
+        timestamp
       });
     }
   }
