@@ -35,7 +35,7 @@ Request:
 
 At least one reference is required. When multiple references are supplied, all must converge on the same active Object and permanent Passport inside the authenticated Entity.
 
-Success returns canonical `objectId`, `passportId`, `entityId`, aliases, resolution evidence, and the canonical Object. Resolution is read-only.
+Success returns canonical `objectId`, `passportId`, `entityId`, aliases, resolution evidence, and the canonical Object. The alias set is the deduplicated union of authoritative Passport sources and released Object identity/source-binding shapes. A historical listing alias stored on the Object therefore remains usable even when an older Passport record did not duplicate that source. Browser-supplied aliases are never adopted merely because they were supplied. Resolution is read-only.
 
 Failure classes:
 
@@ -83,6 +83,15 @@ Supported behavior IDs:
 | `aos.neutral-connection.v1` | No automatic rail projection | Cycles allowed; traversal bounded | many-to-many |
 
 Environment hydration returns `railProjections`, keyed by rail-owner Object ID. Members are canonical Object references; they are not copies and do not create new Passports.
+
+During the migration window, environment hydration may also return a passive
+legacy projection only when two independent stored facts agree: an active
+legacy edge points from the member Object to the rail owner, and that same
+active member Object's `directContainerId` names the same owner. The member is
+marked `legacy-direct-container-corroborated.v1` and `readOnly`. This bridge
+does not translate, create, end, reorder, or relabel an edge. An equivalent
+governed `aos.rail-membership.v1` edge takes precedence and deduplicates the
+legacy preview. Uncorroborated legacy evidence remains quarantined.
 
 Rail reorder uses `POST /mos/v1/relationships/:relationshipId/order` with matching `expectedRevision` and `If-Match`, an idempotency key, and a new stable `orderKey`. It updates the existing edge; it never deletes and recreates membership.
 
