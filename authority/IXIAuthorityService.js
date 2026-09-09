@@ -270,7 +270,8 @@ async function evaluate({
   capability,
   targetPassportId,
   entityPassportId = "",
-  locationPassportId = ""
+  locationPassportId = "",
+  resolvedPolicyChain = null
 } = {}) {
   /*
    * Resolve the target + ancestor policy chain
@@ -281,14 +282,15 @@ async function evaluate({
    * accepted.
    */
 
-  const resolvedPolicyChain =
+  const policyChain =
+    resolvedPolicyChain ||
     await resolveAuthorityPolicyChain(
       targetPassportId
     );
 
 
   const policies =
-    resolvedPolicyChain
+    policyChain
       .policies;
 
 
@@ -348,7 +350,7 @@ async function evaluate({
       policies,
 
       ancestorPassportIds:
-        resolvedPolicyChain
+        policyChain
           .graph
           .ancestorPassportIds
     });

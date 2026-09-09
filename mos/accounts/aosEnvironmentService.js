@@ -46,6 +46,10 @@ const {
   decorateRelationshipWithIdentityEvidence
 } = require("../relationships/relationshipIdentityEvidenceService");
 
+const {
+  withAuthorityPolicyReadScope
+} = require("../../authority/IXIAuthorityPolicyResolver");
+
 function buildProjectionMap(
   projections = []
 ) {
@@ -151,7 +155,7 @@ function buildRailProjectionMap(relationships = [], objects = []) {
   return map;
 }
 
-async function loadAosEnvironment({
+async function loadAosEnvironmentWithinAuthorityScope({
   ownerUserId,
   displayName = "IXI Entity",
   metadata = {},
@@ -382,6 +386,12 @@ async function loadAosEnvironment({
 
     bootstrap: created
   };
+}
+
+function loadAosEnvironment(options = {}) {
+  return withAuthorityPolicyReadScope(
+    () => loadAosEnvironmentWithinAuthorityScope(options)
+  );
 }
 
 module.exports = {
