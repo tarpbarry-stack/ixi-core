@@ -80,8 +80,9 @@ const {
 } = require("./IXIFinancialDashboardProjectionEngine");
 
 const {
-  discoverFinancialPassportScope,
-} = require("./IXIFinancialScopeDiscoveryService");
+  resolveFinancialDashboardQuery,
+  normalizeAuthenticatedEstate,
+} = require("./IXIFinancialDashboardRequestContract");
 
 const { getFinancialGLProjection } = require("./IXIFinancialGLService");
 
@@ -620,6 +621,10 @@ function getEnvelopeStatus(envelope, { successStatus = 200 } = {}) {
 
   if (name === "IXIFinancialAuthorizationError") {
     return 403;
+  }
+
+  if (name === "IXIFinancialInternalContextError") {
+    return 500;
   }
 
   if (name === "IXIFinancialNotFoundError" || message.includes("not found")) {
@@ -1800,135 +1805,73 @@ router.post("/scopes/snapshot", async (req, res) => {
  */
 
 router.post("/dashboard", async (req, res) => {
-  const accessContext = normalizeFinancialAccessContext(await getAccess(req));
-
   const context = getRequestContext(req);
+  try {
+    const accessContext = normalizeFinancialAccessContext(await getAccess(req));
+    const authenticatedEstate = normalizeAuthenticatedEstate(
+      req.ixiFinancialEstate,
+    );
+    const effectiveQuery = resolveFinancialDashboardQuery({
+      requestQuery: req.body,
+      accessContext,
+      authenticatedEstate,
+      requireAuthenticatedEstate: Boolean(
+        req.ixiInternalAuth || req.ixiAuthenticatedAccess,
+      ),
+    });
 
-  const requestedQuery = safeObject(req.body);
+    const scopeEnvelope = await authorizedFinancialService.getScopeSnapshot({
+      ...effectiveQuery,
+      ...context,
+      accessContext,
+    });
 
-  const explicitRootPassportId = clean(requestedQuery.rootPassportId);
+    if (!scopeEnvelope?.ok) return sendEnvelope(res, scopeEnvelope);
 
-  const explicitScopePassportIds = Array.isArray(
-    requestedQuery.scopePassportIds,
-  )
-    ? requestedQuery.scopePassportIds.map(clean).filter(Boolean)
-    : [];
+    const projection = createFinancialDashboardProjection({
+      scopeSnapshot: scopeEnvelope.data,
+      query: effectiveQuery,
+      accessContext,
+    });
 
-  let discoveredScope = null;
+    if (authenticatedEstate.scopePassportIds.length) {
+      projection.scopeDiscovery = authenticatedEstate;
+    }
 
-  /*
-   * Default Desktop behavior:
-   *
-   * No browser-supplied scope means resolve the
-   * authenticated company's permanent production
-   * Passport estate server-side.
-   */
-
-  if (!explicitRootPassportId && !explicitScopePassportIds.length) {
-    const financialIdentity = req.ixiFinancialIdentity || {};
-
-    discoveredScope = await discoverFinancialPassportScope({
-      principal: req.ixiAuthorityPrincipal,
-
-      aosEntityId: financialIdentity.aosEntityId,
-
-      entityPassportId: financialIdentity.entityPassportId,
+    return sendEnvelope(res, {
+      ok: true,
+      contract: "ixi-financial-dashboard",
+      contractVersion: "1.0.0",
+      operation: "financial.dashboard.read",
+      requestId: context.requestId,
+      data: projection,
+      errors: [],
+      warnings: scopeEnvelope.warnings || [],
+      metadata: {
+        sourceOperation: scopeEnvelope.operation,
+        sourceRequestId: scopeEnvelope.requestId,
+      },
+    });
+  } catch (error) {
+    return sendEnvelope(res, {
+      ok: false,
+      contract: "ixi-financial-dashboard",
+      contractVersion: "1.0.0",
+      operation: "financial.dashboard.read",
+      requestId: context.requestId,
+      data: null,
+      errors: [
+        {
+          name: clean(error?.name) || "IXIFinancialDashboardError",
+          code: clean(error?.code) || "IXI_FINANCIAL_DASHBOARD_FAILED",
+          message: clean(error?.message) || "Financial dashboard could not be loaded.",
+          details: safeObject(error?.details),
+        },
+      ],
+      warnings: [],
+      metadata: {},
     });
   }
-
-  const effectiveQuery = {
-    ...requestedQuery,
-
-    rootPassportId:
-      explicitRootPassportId || discoveredScope?.rootPassportId || "",
-
-    scopePassportIds: explicitScopePassportIds.length
-      ? explicitScopePassportIds
-      : discoveredScope?.scopePassportIds || [],
-  };
-
-  /*
-   * AUTHORITY → FINANCIAL SCOPE BRIDGE
-   *
-   * When Desktop scope is discovered server-side,
-   * those Passport IDs have already passed:
-   *
-   *   authenticated Entity ownership
-   *   permanent AOS provisioning validation
-   *   Authority aos.discover evaluation
-   *
-   * They therefore become trusted managed
-   * Passport scope for THIS request.
-   *
-   * Browser-supplied Passport IDs do NOT gain
-   * this treatment.
-   */
-
-  const effectiveAccessContext = discoveredScope
-    ? {
-        ...accessContext,
-
-        managedPassportIds: Array.from(
-          new Set([
-            ...(Array.isArray(accessContext?.managedPassportIds)
-              ? accessContext.managedPassportIds
-              : []),
-
-            ...(Array.isArray(discoveredScope?.scopePassportIds)
-              ? discoveredScope.scopePassportIds
-              : []),
-          ]),
-        ),
-      }
-    : accessContext;
-
-  const scopeEnvelope = await authorizedFinancialService.getScopeSnapshot({
-    ...effectiveQuery,
-
-    ...context,
-
-    accessContext: effectiveAccessContext,
-  });
-
-  if (!scopeEnvelope?.ok) {
-    return sendEnvelope(res, scopeEnvelope);
-  }
-
-  const projection = createFinancialDashboardProjection({
-    scopeSnapshot: scopeEnvelope.data,
-
-    query: effectiveQuery,
-
-    accessContext: effectiveAccessContext,
-  });
-
-  if (discoveredScope) {
-    projection.scopeDiscovery = discoveredScope;
-  }
-
-  return sendEnvelope(res, {
-    ok: true,
-
-    contract: "ixi-financial-dashboard",
-
-    contractVersion: "1.0.0",
-
-    operation: "financial.dashboard.read",
-
-    requestId: context.requestId,
-
-    data: projection,
-
-    errors: [],
-
-    warnings: scopeEnvelope.warnings || [],
-
-    metadata: {
-      sourceOperation: scopeEnvelope.operation,
-
-      sourceRequestId: scopeEnvelope.requestId,
-    },
-  });
 });
 
 /* =========================================================
