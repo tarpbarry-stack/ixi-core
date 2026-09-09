@@ -29,7 +29,8 @@ const {
 
 const {
   createObject,
-  updateObject
+  updateObject,
+  softDeleteObject
 } = require("../objects/objectService");
 
 test.after(() => {
@@ -210,5 +211,85 @@ test("provisioning adopts an active AOS Object already bound to the listing Pass
       source.sourceType === "aos-object"
     ).length,
     1
+  );
+});
+
+test("authenticated admission preserves a released Object source while reusing its permanent listing Passport", () => {
+  const owner = ensureCommercialOnboarding({
+    ownerUserId: "sharetribe-owner-released-lineage",
+    entityDisplayName: "Released Lineage Company",
+    person: { displayName: "Released Lineage Owner" }
+  });
+
+  const legacyPassport = ensurePassportForSource({
+    sourceType: "sharetribe-listing",
+    sourceId: "listing-released-lineage-001",
+    entityId: owner.entity.entityId,
+    visibility: "private",
+    status: "active"
+  }).passport;
+
+  let released = createObject({
+    entityId: owner.entity.entityId,
+    objectType: "machine",
+    displayName: "2019 Ripper Other",
+    source: "sharetribe-listing",
+    actorId: "sharetribe-owner-released-lineage"
+  });
+
+  bindPassportSource({
+    passportId: legacyPassport.passportId,
+    sourceType: "aos-object",
+    sourceId: released.objectId,
+    entityId: owner.entity.entityId
+  });
+
+  released = updateObject({
+    objectId: released.objectId,
+    identities: [{
+      identityType: "ixi-passport",
+      passportId: legacyPassport.passportId,
+      entityId: owner.entity.entityId,
+      sourceType: "aos-object",
+      sourceId: released.objectId
+    }],
+    actorId: "sharetribe-owner-released-lineage"
+  });
+
+  softDeleteObject({
+    objectId: released.objectId,
+    actorId: "sharetribe-owner-released-lineage"
+  });
+
+  const result = provisionSharetribeMachine({
+    entityId: owner.entity.entityId,
+    principalId: "sharetribe-owner-released-lineage",
+    commandId: "authenticated-listing:released-lineage-001",
+    creationBoundary: "authenticated-listing-admission.v1",
+    listing: {
+      listingId: "listing-released-lineage-001",
+      displayName: "2019 RIPPER OTHER",
+      value: 15000,
+      fields: {
+        serialNumber: "872GP772GP01",
+        stockNumber: "MGRPPER01"
+      }
+    }
+  });
+
+  assert.notEqual(result.object.objectId, released.objectId);
+  assert.equal(result.object.status, "active");
+  assert.equal(result.object.objectType, "machine");
+  assert.equal(result.object.fields.serialNumber, "872GP772GP01");
+  assert.equal(result.passport.passportId, legacyPassport.passportId);
+  assert.equal(result.provisioning.objectCreated, true);
+  assert.equal(result.provisioning.passportCreated, false);
+
+  const objectSources = (result.passport.sources || []).filter(source =>
+    source.sourceType === "aos-object"
+  );
+  assert.deepEqual(
+    new Set(objectSources.map(source => source.sourceId)),
+    new Set([released.objectId, result.object.objectId])
   );
 });
