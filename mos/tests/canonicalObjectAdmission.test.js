@@ -10,9 +10,10 @@ const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ixi-canonical-admission-
 process.env.IXI_MOS_DATA_ROOT = path.join(testRoot, "mos");
 process.env.IXI_PASSPORT_DATA_FILE = path.join(testRoot, "passports.json");
 
-const { createObject } = require("../objects/objectService");
+const { createObject, softDeleteObject } = require("../objects/objectService");
 const { createEntity } = require("../entities/entityService");
 const {
+  bindPassportSource,
   readPassportRecords,
   writePassportRecords
 } = require("../../passport/passportRegistry");
@@ -216,6 +217,66 @@ test("multiple active Object matches fail closed", () => {
     }),
     error => error?.code === "CANONICAL_IDENTITY_CONFLICT" &&
       error?.details?.activeObjectIds?.includes(second.objectId)
+  );
+});
+
+test("released Object lineage remains evidence while the sole active Object is canonical", () => {
+  const released = canonicalFixture({
+    passportId: "IXITEST008",
+    listingId: "released-lineage-listing-008"
+  });
+  softDeleteObject({ objectId: released.objectId, actorId: "identity-repair" });
+
+  const active = createObject({
+    entityId: "entity-1",
+    objectType: "machine",
+    displayName: "2019 RIPPER OTHER",
+    identities: [{
+      identityType: "ixi-passport",
+      passportId: "IXITEST008",
+      entityId: "entity-1",
+      sourceType: "aos-object",
+      sourceId: "pending"
+    }, {
+      identityType: "external-record",
+      sourceType: "sharetribe-listing",
+      sourceId: "released-lineage-listing-008"
+    }]
+  });
+  const objectsPath = path.join(testRoot, "mos", "objects.json");
+  const objects = JSON.parse(fs.readFileSync(objectsPath, "utf8"));
+  objects[active.objectId].identities[0].sourceId = active.objectId;
+  fs.writeFileSync(objectsPath, JSON.stringify(objects, null, 2));
+  bindPassportSource({
+    passportId: "IXITEST008",
+    sourceType: "aos-object",
+    sourceId: active.objectId,
+    entityId: "entity-1"
+  });
+
+  const result = resolveCanonicalObjectIdentity({
+    entityId: "entity-1",
+    passportId: "IXITEST008",
+    aliases: [{
+      sourceType: "sharetribe-listing",
+      sourceId: "released-lineage-listing-008"
+    }]
+  });
+
+  assert.equal(result.objectId, active.objectId);
+  assert.equal(result.passportId, "IXITEST008");
+  assert.equal(result.object.status, "active");
+  assert.ok(result.evidence.length >= 2);
+
+  assert.throws(
+    () => resolveCanonicalObjectIdentity({
+      entityId: "entity-1",
+      objectId: released.objectId,
+      passportId: "IXITEST008"
+    }),
+    error => error?.code === "CANONICAL_IDENTITY_CONFLICT" &&
+      error?.details?.suppliedObjectId === released.objectId &&
+      error?.details?.activeObjectId === active.objectId
   );
 });
 
