@@ -249,3 +249,52 @@ test("placement commands cannot create Objects or Passports", () => {
   assert.equal(Object.keys(readJsonFile(MOS_PATHS.objects, {})).length, beforeObjects);
   assert.equal(readPassportRecords().length, beforePassports);
 });
+
+test("batch placement commands are atomic, revision-bound, and preserve Return snapshots", () => {
+  let session = openWorkspaceSession({
+    context,
+    workspaceId: "batch-work",
+    commandId: "open-batch"
+  }).session;
+  const initialRevision = session.revision;
+
+  session = command(session, "objects.admit", {
+    objects: [
+      { objectId: first.objectId, surfaceId: "equipment", visualOrder: 0, operatingState: "tucked" },
+      { objectId: second.objectId, surfaceId: "locations", visualOrder: 1, operatingState: "tucked" }
+    ]
+  }, "batch-admit");
+  assert.equal(session.revision, initialRevision + 1);
+
+  session = command(session, "objects.move", {
+    operationId: "batch-board",
+    objects: [
+      { objectId: first.objectId, surfaceId: "board", visualOrder: 0, operatingState: "operating", activeSummonedContext: "equipment" },
+      { objectId: second.objectId, surfaceId: "board", visualOrder: 1, operatingState: "operating", activeSummonedContext: "locations" }
+    ]
+  }, "batch-move");
+  assert.equal(session.objects[first.objectId].returnSnapshot.operationId, "batch-board");
+  assert.equal(session.objects[second.objectId].currentPlacement.surfaceId, "board");
+
+  session = command(session, "objects.undo", {
+    objectIds: [first.objectId, second.objectId],
+    operationId: "batch-board"
+  }, "batch-undo");
+  assert.equal(session.objects[first.objectId].currentPlacement.surfaceId, "equipment");
+  assert.equal(session.objects[second.objectId].currentPlacement.surfaceId, "locations");
+  assert.equal(session.objects[first.objectId].returnSnapshot, null);
+
+  session = command(session, "objects.move", {
+    objects: [
+      { objectId: first.objectId, surfaceId: "pocketLeft", visualOrder: 0, operatingState: "operating" },
+      { objectId: second.objectId, surfaceId: "pocketRight", visualOrder: 0, operatingState: "operating" }
+    ]
+  }, "batch-scatter");
+  session = command(session, "objects.recall", {
+    objectIds: [first.objectId, second.objectId],
+    operationId: "batch-recall"
+  }, "batch-recall");
+  assert.equal(session.objects[first.objectId].currentPlacement.surfaceId, "equipment");
+  assert.equal(session.objects[second.objectId].currentPlacement.surfaceId, "locations");
+  assert.equal(session.objects[second.objectId].returnSnapshot.operationId, "batch-recall");
+});
