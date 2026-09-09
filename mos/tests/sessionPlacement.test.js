@@ -271,10 +271,16 @@ test("batch placement commands are atomic, revision-bound, and preserve Return s
     objects: [
       { objectId: first.objectId, surfaceId: "board", visualOrder: 0, operatingState: "operating", activeSummonedContext: "equipment" },
       { objectId: second.objectId, surfaceId: "board", visualOrder: 1, operatingState: "operating", activeSummonedContext: "locations" }
-    ]
+    ],
+    surfaceOrders: [{
+      surfaceId: "board",
+      orderedObjectIds: [second.objectId, first.objectId]
+    }]
   }, "batch-move");
   assert.equal(session.objects[first.objectId].returnSnapshot.operationId, "batch-board");
   assert.equal(session.objects[second.objectId].currentPlacement.surfaceId, "board");
+  assert.equal(session.objects[second.objectId].currentPlacement.visualOrder, 0);
+  assert.equal(session.objects[first.objectId].currentPlacement.visualOrder, 1);
 
   session = command(session, "objects.undo", {
     objectIds: [first.objectId, second.objectId],
