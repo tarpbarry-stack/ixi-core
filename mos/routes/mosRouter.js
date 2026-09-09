@@ -1451,52 +1451,90 @@ async function objectWithEffectiveAuthority(req, object) {
   };
 }
 
+async function admitAuthorizedCanonicalIdentity(req, input = {}) {
+  const entityId = String(
+    req.ixiRequestContext?.entityId ||
+    req.ixiAuthorityPrincipal?.entityId ||
+    ""
+  ).trim();
+
+  if (!entityId) {
+    throw new MosError(
+      "CANONICAL_ADMISSION_AUTH_REQUIRED",
+      "Canonical identity admission requires authenticated tenant context.",
+      null,
+      401
+    );
+  }
+
+  const admission = resolveCanonicalObjectIdentity({
+    entityId,
+    objectId: input?.objectId,
+    passportId: input?.passportId,
+    aliases: input?.aliases,
+    sourceType: input?.sourceType,
+    sourceId: input?.sourceId
+  });
+
+  await assertMosObjectAuthority({
+    principal: req.ixiAuthorityPrincipal,
+    object: admission.object,
+    capability: "aos.view"
+  });
+
+  return {
+    identity: {
+      objectId: admission.objectId,
+      passportId: admission.passportId,
+      entityId: admission.entityId,
+      aliases: admission.aliases,
+      evidence: admission.evidence
+    },
+    object: await objectWithEffectiveAuthority(req, admission.object)
+  };
+}
+
 router.post(
   "/identity/admit",
   async (req, res) => {
     try {
-      const entityId = String(
-        req.ixiRequestContext?.entityId ||
-        req.ixiAuthorityPrincipal?.entityId ||
-        ""
-      ).trim();
-
-      if (!entityId) {
-        throw new MosError(
-          "CANONICAL_ADMISSION_AUTH_REQUIRED",
-          "Canonical identity admission requires authenticated tenant context.",
-          null,
-          401
-        );
-      }
-
-      const admission = resolveCanonicalObjectIdentity({
-        entityId,
-        objectId: req.body?.objectId,
-        passportId: req.body?.passportId,
-        aliases: req.body?.aliases,
-        sourceType: req.body?.sourceType,
-        sourceId: req.body?.sourceId
-      });
-
-      await assertMosObjectAuthority({
-        principal: req.ixiAuthorityPrincipal,
-        object: admission.object,
-        capability: "aos.view"
-      });
-
-      const authorizedObject = await objectWithEffectiveAuthority(req, admission.object);
+      const admission = await admitAuthorizedCanonicalIdentity(req, req.body);
 
       return res.json({
         ok: true,
-        identity: {
-          objectId: admission.objectId,
-          passportId: admission.passportId,
-          entityId: admission.entityId,
-          aliases: admission.aliases,
-          evidence: admission.evidence
-        },
-        object: authorizedObject
+        ...admission
+      });
+    } catch (error) {
+      return sendMosError(res, error);
+    }
+  }
+);
+
+router.post(
+  "/identity/admit-batch",
+  async (req, res) => {
+    try {
+      const requests = Array.isArray(req.body?.requests)
+        ? req.body.requests
+        : [];
+
+      if (!requests.length || requests.length > 250) {
+        throw new MosError(
+          "CANONICAL_ADMISSION_BATCH_INVALID",
+          "Canonical identity batch admission requires between 1 and 250 requests.",
+          null,
+          400
+        );
+      }
+
+      const admissions = [];
+      for (const request of requests) {
+        admissions.push(await admitAuthorizedCanonicalIdentity(req, request));
+      }
+
+      return res.json({
+        ok: true,
+        admissions
       });
     } catch (error) {
       return sendMosError(res, error);

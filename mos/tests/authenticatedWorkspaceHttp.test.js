@@ -196,6 +196,21 @@ test("signed workspace HTTP contract binds membership, ignores forged authority,
     assert.equal(admission.body.object.actorAuthority.canViewFinancialInformation, true);
     assert.equal(admission.body.object.authorityDecisions["aos.delete"].reason, "principal-direct-grant");
 
+    const batchAdmission = await request(baseUrl, {
+      targetPath: "/mos/v1/identity/admit-batch",
+      body: {
+        requests: [{
+          objectId: object.objectId,
+          passportId: object.identities[0].passportId,
+          actorAuthority: { canDelete: false }
+        }]
+      }
+    });
+    assert.equal(batchAdmission.status, 200);
+    assert.equal(batchAdmission.body.admissions.length, 1);
+    assert.equal(batchAdmission.body.admissions[0].identity.objectId, object.objectId);
+    assert.equal(batchAdmission.body.admissions[0].object.actorAuthority.canDelete, true);
+
     const openBody = {
       commandId: "http-open-session",
       workspaceId: "aos-work",

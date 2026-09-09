@@ -15,6 +15,11 @@ const SCOPE_TYPES = new Set(["personal", "shared"]);
 const OPERATING_STATES = new Set(["preview", "operating", "tucked"]);
 const COMMAND_TYPES = new Set([
   "object.admit",
+  "objects.admit",
+  "objects.move",
+  "objects.recall",
+  "objects.undo",
+  "objects.summon.set",
   "object.move",
   "object.recall",
   "object.snapshot.capture",
@@ -277,11 +282,146 @@ function applyWorkspaceSessionCommand({
   const objectId = cleanText(payload.objectId);
   let changed = true;
 
-  if (type.startsWith("object.") || type === "summon.set") {
+  if (type === "objects.admit") {
+    const objects = Array.isArray(payload.objects) ? payload.objects : [];
+    if (!objects.length || objects.length > 250) {
+      sessionError(
+        "WORKSPACE_BATCH_ADMISSION_INVALID",
+        "objects.admit requires between 1 and 250 canonical Object placements."
+      );
+    }
+
+    const objectIds = objects.map(item => cleanText(item?.objectId));
+    if (new Set(objectIds).size !== objectIds.length) {
+      sessionError(
+        "WORKSPACE_BATCH_ADMISSION_DUPLICATE",
+        "objects.admit contains a duplicate canonical Object."
+      );
+    }
+
+    objects.forEach(item => {
+      const admittedObjectId = cleanText(item?.objectId);
+      canonicalObject(current.entityId, admittedObjectId);
+      if (next.objects[admittedObjectId]) {
+        sessionError(
+          "WORKSPACE_DUPLICATE_ACTIVE_PLACEMENT",
+          "A canonical Object already has an active placement in this workspace scope.",
+          { objectId: admittedObjectId },
+          409
+        );
+      }
+      const placement = placementFromPayload(item);
+      next.objects[admittedObjectId] = {
+        objectId: admittedObjectId,
+        sessionOrigin: { ...placement },
+        currentPlacement: { ...placement },
+        activeSummonedContext: cleanText(item?.activeSummonedContext) || null,
+        returnSnapshot: null,
+        admittedAt: timestamp,
+        updatedAt: timestamp
+      };
+    });
+  } else if (type === "objects.move") {
+    const objects = Array.isArray(payload.objects) ? payload.objects : [];
+    if (!objects.length || objects.length > 250) {
+      sessionError("WORKSPACE_BATCH_MOVE_INVALID", "objects.move requires between 1 and 250 placements.");
+    }
+    const objectIds = objects.map(item => cleanText(item?.objectId));
+    if (new Set(objectIds).size !== objectIds.length) {
+      sessionError("WORKSPACE_BATCH_MOVE_DUPLICATE", "objects.move contains a duplicate canonical Object.");
+    }
+    const operationId = cleanText(payload.operationId)
+      ? stableId(payload.operationId, "operationId")
+      : null;
+    objects.forEach(item => {
+      const movedObjectId = cleanText(item?.objectId);
+      canonicalObject(current.entityId, movedObjectId);
+      const entry = next.objects[movedObjectId];
+      if (!entry) {
+        sessionError("WORKSPACE_OBJECT_NOT_ADMITTED", "Object must be admitted before session operations.", { objectId: movedObjectId }, 409);
+      }
+      if (operationId && entry.returnSnapshot?.operationId !== operationId) {
+        entry.returnSnapshot = {
+          operationId,
+          placement: { ...entry.currentPlacement },
+          capturedAt: timestamp
+        };
+      }
+      entry.currentPlacement = placementFromPayload(item, entry.currentPlacement);
+      if (Object.prototype.hasOwnProperty.call(item, "activeSummonedContext")) {
+        entry.activeSummonedContext = cleanText(item.activeSummonedContext) || null;
+      }
+      entry.updatedAt = timestamp;
+    });
+  } else if (type === "objects.recall") {
+    const objectIds = Array.isArray(payload.objectIds)
+      ? payload.objectIds.map(id => cleanText(id))
+      : [];
+    if (!objectIds.length || objectIds.length > 250 || new Set(objectIds).size !== objectIds.length) {
+      sessionError("WORKSPACE_BATCH_RECALL_INVALID", "objects.recall requires 1 to 250 unique canonical Objects.");
+    }
+    const operationId = stableId(payload.operationId, "operationId");
+    objectIds.forEach(recalledObjectId => {
+      canonicalObject(current.entityId, recalledObjectId);
+      const entry = next.objects[recalledObjectId];
+      if (!entry) {
+        sessionError("WORKSPACE_OBJECT_NOT_ADMITTED", "Object must be admitted before session operations.", { objectId: recalledObjectId }, 409);
+      }
+      entry.returnSnapshot = {
+        operationId,
+        placement: { ...entry.currentPlacement },
+        capturedAt: timestamp
+      };
+      entry.currentPlacement = { ...entry.sessionOrigin };
+      entry.updatedAt = timestamp;
+    });
+  } else if (type === "objects.undo") {
+    const objectIds = Array.isArray(payload.objectIds)
+      ? payload.objectIds.map(id => cleanText(id))
+      : [];
+    if (!objectIds.length || objectIds.length > 250 || new Set(objectIds).size !== objectIds.length) {
+      sessionError("WORKSPACE_BATCH_UNDO_INVALID", "objects.undo requires 1 to 250 unique canonical Objects.");
+    }
+    const operationId = stableId(payload.operationId, "operationId");
+    objectIds.forEach(undoObjectId => {
+      canonicalObject(current.entityId, undoObjectId);
+      const entry = next.objects[undoObjectId];
+      if (!entry || entry.returnSnapshot?.operationId !== operationId) {
+        sessionError("WORKSPACE_RETURN_SNAPSHOT_MISMATCH", "Return snapshot does not match this operation.", { objectId: undoObjectId, operationId }, 409);
+      }
+    });
+    objectIds.forEach(undoObjectId => {
+      const entry = next.objects[undoObjectId];
+      entry.currentPlacement = { ...entry.returnSnapshot.placement };
+      entry.returnSnapshot = null;
+      entry.updatedAt = timestamp;
+    });
+  } else if (type === "objects.summon.set") {
+    const objects = Array.isArray(payload.objects) ? payload.objects : [];
+    if (!objects.length || objects.length > 250) {
+      sessionError("WORKSPACE_BATCH_SUMMON_INVALID", "objects.summon.set requires between 1 and 250 Objects.");
+    }
+    const objectIds = objects.map(item => cleanText(item?.objectId));
+    if (new Set(objectIds).size !== objectIds.length) {
+      sessionError("WORKSPACE_BATCH_SUMMON_DUPLICATE", "objects.summon.set contains a duplicate canonical Object.");
+    }
+    objects.forEach(item => {
+      const summonedObjectId = cleanText(item?.objectId);
+      canonicalObject(current.entityId, summonedObjectId);
+      const entry = next.objects[summonedObjectId];
+      if (!entry) {
+        sessionError("WORKSPACE_OBJECT_NOT_ADMITTED", "Object must be admitted before session operations.", { objectId: summonedObjectId }, 409);
+      }
+      entry.activeSummonedContext = cleanText(item?.activeSummonedContext) || null;
+      entry.updatedAt = timestamp;
+    });
+  } else if (type.startsWith("object.") || type === "summon.set") {
     canonicalObject(current.entityId, objectId);
   }
 
-  if (type === "object.admit") {
+  if (["objects.admit", "objects.move", "objects.recall", "objects.undo", "objects.summon.set"].includes(type)) {
+    // The batch was validated and applied atomically above.
+  } else if (type === "object.admit") {
     if (next.objects[objectId]) {
       sessionError(
         "WORKSPACE_DUPLICATE_ACTIVE_PLACEMENT",
