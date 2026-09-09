@@ -493,6 +493,93 @@ router.get(
   }
 );
 
+router.get(
+  "/aos/work-bootstrap",
+  async (req, res) => {
+    try {
+      if (!req.ixiRequestContext?.authenticated) {
+        throw new MosError(
+          "AOS_WORK_BOOTSTRAP_AUTHENTICATION_REQUIRED",
+          "AOS Work bootstrap requires an authenticated signed principal.",
+          null,
+          401
+        );
+      }
+
+      const principalId =
+        String(req.ixiRequestContext.principalId || "").trim();
+
+      const { account, entity, membership } =
+        getAosAccountForUser(principalId);
+
+      if (
+        !membership ||
+        membership.status !== "active" ||
+        membership.entityId !== entity?.entityId ||
+        membership.accountId !== account?.accountId ||
+        membership.tenantId !== account?.tenantId
+      ) {
+        throw new MosError(
+          "AOS_WORK_BOOTSTRAP_MEMBERSHIP_REQUIRED",
+          "The authenticated principal does not have one active governed AOS context.",
+          { principalId },
+          403
+        );
+      }
+
+      const environment = await loadAosEnvironment({
+        ownerUserId: principalId,
+        strictAuthorization: true,
+        allowProvisioning: false
+      });
+
+      const definitions = listCustomerObjectTypes({
+        entityId: entity.entityId,
+        status: "active"
+      });
+
+      const admissions = environment.objects.map(object => {
+        const admission = resolveCanonicalObjectIdentity({
+          entityId: entity.entityId,
+          objectId: object.objectId
+        });
+
+        if (admission.objectId !== object.objectId) {
+          throw new MosError(
+            "AOS_WORK_BOOTSTRAP_IDENTITY_MISMATCH",
+            "AOS Work bootstrap encountered a noncanonical Object identity.",
+            { objectId: object.objectId, resolvedObjectId: admission.objectId },
+            409
+          );
+        }
+
+        return {
+          ok: true,
+          identity: {
+            objectId: admission.objectId,
+            passportId: admission.passportId,
+            entityId: admission.entityId,
+            aliases: admission.aliases,
+            evidence: admission.evidence
+          },
+          object
+        };
+      });
+
+      return res.status(200).json({
+        ok: true,
+        productName: "IXI AOS",
+        workBootstrapVersion: "ixi.aos-work-bootstrap.v1",
+        environment,
+        definitions,
+        admissions
+      });
+    } catch (error) {
+      return sendMosError(res, error);
+    }
+  }
+);
+
 router.post(
   "/aos/onboarding/bootstrap",
   async (req, res) => {

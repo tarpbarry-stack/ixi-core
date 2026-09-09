@@ -116,6 +116,34 @@ test("signed workspace HTTP contract binds membership, ignores forged authority,
       contextCensusBefore
     );
 
+    const workBootstrap = await request(baseUrl, {
+      method: "GET",
+      targetPath: "/mos/v1/aos/work-bootstrap",
+      principalId: "frontend-new-owner",
+      entityId: ""
+    });
+    assert.equal(workBootstrap.status, 200);
+    assert.equal(
+      workBootstrap.body.workBootstrapVersion,
+      "ixi.aos-work-bootstrap.v1"
+    );
+    assert.equal(workBootstrap.body.environment.entity.entityId, frontendEntityId);
+    assert.equal(
+      workBootstrap.body.admissions.length,
+      workBootstrap.body.environment.objects.length
+    );
+    assert.deepEqual(
+      new Set(workBootstrap.body.admissions.map(item => item.identity.objectId)),
+      new Set(workBootstrap.body.environment.objects.map(item => item.objectId))
+    );
+    assert.deepEqual(
+      {
+        objects: listObjects({ status: null }).length,
+        passports: readPassportRecords().length
+      },
+      contextCensusBefore
+    );
+
     const machineCommandId = "sharetribe-listing:frontend-listing-1";
     const frontendMachine = await request(baseUrl, {
       targetPath: "/mos/v1/aos/machines/sharetribe-listing",
