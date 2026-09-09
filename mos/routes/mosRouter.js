@@ -1527,12 +1527,13 @@ router.post(
         );
       }
 
-      const admissions = await Promise.all(
-        requests.map(async request => ({
+      const admissions = [];
+      for (const request of requests) {
+        admissions.push({
           ok: true,
           ...(await admitAuthorizedCanonicalIdentity(req, request))
-        }))
-      );
+        });
+      }
 
       return res.json({
         ok: true,
