@@ -315,12 +315,31 @@ function resolveCanonicalObjectIdentity(input = {}) {
   }
 
   const activeObjects = candidateObjects.filter(object => object.status === "active");
-  if (activeObjects.length !== 1 || candidateObjects.length !== 1) {
+  const foreignCandidateObjects = candidateObjects.filter(object =>
+    cleanText(object.entityId) !== entityId
+  );
+
+  if (foreignCandidateObjects.length) {
     fail(
-      activeObjects.length > 1 || candidateObjects.length > 1
+      "CANONICAL_ENTITY_MISMATCH",
+      "Identity lineage includes an Object from a different Entity.",
+      {
+        expectedEntityId: entityId,
+        objectIds: candidateObjects.map(object => object.objectId),
+        foreignObjectIds: foreignCandidateObjects.map(object => object.objectId),
+        passportIds: [...matchedPassportIds],
+        evidence
+      },
+      403
+    );
+  }
+
+  if (activeObjects.length !== 1) {
+    fail(
+      activeObjects.length > 1
         ? "CANONICAL_IDENTITY_CONFLICT"
         : "CANONICAL_IDENTITY_REPAIR_REQUIRED",
-      activeObjects.length > 1 || candidateObjects.length > 1
+      activeObjects.length > 1
         ? "Identity references resolve to multiple canonical Objects."
         : "Identity references do not resolve to one active canonical Object.",
       {
@@ -333,6 +352,20 @@ function resolveCanonicalObjectIdentity(input = {}) {
   }
 
   const object = activeObjects[0];
+  if (objectId && object.objectId !== objectId) {
+    fail(
+      "CANONICAL_IDENTITY_CONFLICT",
+      "The supplied Object ID is historical and does not identify the active canonical Object.",
+      {
+        suppliedObjectId: objectId,
+        activeObjectId: object.objectId,
+        objectIds: candidateObjects.map(candidate => candidate.objectId),
+        passportIds: [...matchedPassportIds],
+        evidence
+      }
+    );
+  }
+
   if (cleanText(object.entityId) !== entityId) {
     fail(
       "CANONICAL_ENTITY_MISMATCH",
