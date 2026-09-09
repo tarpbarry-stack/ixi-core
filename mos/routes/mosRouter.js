@@ -1529,7 +1529,10 @@ router.post(
 
       const admissions = [];
       for (const request of requests) {
-        admissions.push(await admitAuthorizedCanonicalIdentity(req, request));
+        admissions.push({
+          ok: true,
+          ...(await admitAuthorizedCanonicalIdentity(req, request))
+        });
       }
 
       return res.json({

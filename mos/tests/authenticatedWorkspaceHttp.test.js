@@ -208,6 +208,7 @@ test("signed workspace HTTP contract binds membership, ignores forged authority,
     });
     assert.equal(batchAdmission.status, 200);
     assert.equal(batchAdmission.body.admissions.length, 1);
+    assert.equal(batchAdmission.body.admissions[0].ok, true);
     assert.equal(batchAdmission.body.admissions[0].identity.objectId, object.objectId);
     assert.equal(batchAdmission.body.admissions[0].object.actorAuthority.canDelete, true);
 
