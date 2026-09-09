@@ -1,5 +1,9 @@
 "use strict";
 
+const {
+  AsyncLocalStorage
+} = require("node:async_hooks");
+
 /*
  * IXI AUTHORITY POLICY RESOLVER
  *
@@ -38,6 +42,10 @@ const {
   );
 
 
+const authorityPolicyReadScope =
+  new AsyncLocalStorage();
+
+
 function clean(
   value
 ) {
@@ -62,11 +70,30 @@ async function loadPolicy(
   }
 
 
-  const record =
-    await store
-      .getCurrentPolicyRecord(
-        id
-      );
+  const scopedRecords =
+    authorityPolicyReadScope.getStore();
+
+  let recordRequest =
+    scopedRecords?.get(id);
+
+  if (!recordRequest) {
+    recordRequest =
+      store.getCurrentPolicyRecord(id);
+
+    scopedRecords?.set(id, recordRequest);
+  }
+
+  let record;
+
+  try {
+    record = await recordRequest;
+  } catch (error) {
+    if (scopedRecords?.get(id) === recordRequest) {
+      scopedRecords.delete(id);
+    }
+
+    throw error;
+  }
 
 
   if (!record?.policy) {
@@ -82,6 +109,24 @@ async function loadPolicy(
         record.policy
       )
   };
+}
+
+
+function withAuthorityPolicyReadScope(callback) {
+  if (typeof callback !== "function") {
+    throw new TypeError(
+      "Authority policy read scope requires a callback."
+    );
+  }
+
+  if (authorityPolicyReadScope.getStore()) {
+    return callback();
+  }
+
+  return authorityPolicyReadScope.run(
+    new Map(),
+    callback
+  );
 }
 
 
@@ -212,5 +257,6 @@ async function resolveAuthorityPolicyChain(
 
 module.exports = {
   loadPolicy,
-  resolveAuthorityPolicyChain
+  resolveAuthorityPolicyChain,
+  withAuthorityPolicyReadScope
 };

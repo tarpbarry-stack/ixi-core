@@ -116,6 +116,12 @@ test("signed workspace HTTP contract binds membership, ignores forged authority,
       contextCensusBefore
     );
 
+    let authorityPolicyReads = 0;
+    authorityStore.getCurrentPolicyRecord = async () => {
+      authorityPolicyReads += 1;
+      return null;
+    };
+
     const workBootstrap = await request(baseUrl, {
       method: "GET",
       targetPath: "/mos/v1/aos/work-bootstrap",
@@ -143,6 +149,12 @@ test("signed workspace HTTP contract binds membership, ignores forged authority,
       },
       contextCensusBefore
     );
+    assert.ok(authorityPolicyReads > 0);
+    assert.ok(
+      authorityPolicyReads <= workBootstrap.body.environment.objects.length,
+      `AOS Work bootstrap must read at most one Authority policy per visible Object; read ${authorityPolicyReads}`
+    );
+    authorityStore.getCurrentPolicyRecord = async () => null;
 
     const machineCommandId = "sharetribe-listing:frontend-listing-1";
     const frontendMachine = await request(baseUrl, {

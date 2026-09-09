@@ -23,6 +23,9 @@ const {
   evaluateMosObjectAuthority,
   buildMosObjectActorAuthority
 } = require("../../authority/IXIAuthorityMosBridge");
+const {
+  withAuthorityPolicyReadScope
+} = require("../../authority/IXIAuthorityPolicyResolver");
 
 test.after(() => fs.rmSync(testRoot, { recursive: true, force: true }));
 
@@ -227,6 +230,30 @@ test("server emits object-specific effective actor authority without persisting 
   const persisted = readJsonFile(MOS_PATHS.objects, {})[provisioned.object.objectId];
   assert.equal(persisted.actorAuthority, undefined);
   updateMembership({ directDenies: [] });
+});
+
+test("one Authority read scope fetches each Passport policy only once", async () => {
+  updateMembership({ directDenies: [], directGrants: ["*"], permissions: ["*"] });
+  const principal = resolveMosMembershipPrincipal({
+    principalId: "owner-1",
+    entityId: bootstrap.entity.entityId
+  }).principal;
+  const requestedPassportIds = [];
+
+  authorityStore.getCurrentPolicyRecord = async passportId => {
+    requestedPassportIds.push(passportId);
+    return null;
+  };
+
+  await withAuthorityPolicyReadScope(async () => {
+    await Promise.all([
+      buildMosObjectActorAuthority({ principal, object: provisioned.object }),
+      buildMosObjectActorAuthority({ principal, object: provisioned.object })
+    ]);
+  });
+
+  assert.equal(requestedPassportIds.length, 1);
+  authorityStore.getCurrentPolicyRecord = async () => null;
 });
 
 test("strict authorization denies missing evidence instead of using compatibility allow", async () => {

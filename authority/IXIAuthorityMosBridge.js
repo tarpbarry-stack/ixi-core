@@ -262,7 +262,10 @@ async function evaluateMosObjectAuthority({
         capabilityName,
 
       targetPassportId:
-        identity.passportId
+        identity.passportId,
+
+      resolvedPolicyChain:
+        policyChain
     });
 
 
@@ -424,17 +427,24 @@ async function filterDiscoverableObjects({
    * Authority state.
    */
 
-  for (
-    const object of sourceObjects
-  ) {
-    const decision =
-      await evaluateMosObjectAuthority({
-        principal,
+  const discoveryDecisions =
+    await Promise.all(
+      sourceObjects.map(async object => ({
         object,
 
-        capability:
-          "aos.discover"
-      });
+        decision:
+          await evaluateMosObjectAuthority({
+            principal,
+            object,
+
+            capability:
+              "aos.discover"
+          })
+      }))
+    );
+
+
+  for (const { object, decision } of discoveryDecisions) {
 
 
     if (
