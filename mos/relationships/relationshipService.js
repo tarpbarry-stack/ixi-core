@@ -5,6 +5,7 @@ const { createMosId } = require("../objects/objectIdEngine");
 const { cleanText, normalizeKey, nowIso } = require("../util/normalize");
 const { MosError } = require("../errors/MosError");
 const { appendEvent } = require("../events/eventService");
+const { getEdgeBehavior } = require("./edgeBehaviorRegistry");
 
 function readRelationships() {
   return readJsonFile(MOS_PATHS.relationships, {});
@@ -96,6 +97,9 @@ function createRelationshipRecord({
   entityId,
   relationshipType,
   relationshipLabel = null,
+  behaviorId = null,
+  definitionId = null,
+  orderKey = null,
   sourceObjectId,
   targetObjectId,
   actorId = null,
@@ -105,9 +109,39 @@ function createRelationshipRecord({
   metadata = {}
 }) {
   const timestamp = nowIso();
-  const normalizedType = normalizeRelationshipType(
-    relationshipLabel || relationshipType
-  );
+  const technicalBehavior = cleanText(behaviorId)
+    ? getEdgeBehavior(behaviorId)
+    : null;
+  const labelValue = cleanText(relationshipLabel || relationshipType);
+  const normalizedType = labelValue
+    ? normalizeRelationshipType(labelValue)
+    : { displayName: null, key: null };
+
+  if (!technicalBehavior && !normalizedType.displayName) {
+    throw new MosError(
+      "RELATIONSHIP_CONTRACT_REQUIRED",
+      "A technical behavior ID or customer relationship label is required.",
+      null,
+      400
+    );
+  }
+
+  if (technicalBehavior && !cleanText(commandId)) {
+    throw new MosError(
+      "TECHNICAL_EDGE_COMMAND_REQUIRED",
+      "Technical edge creation requires an idempotent command ID.",
+      { behaviorId: technicalBehavior.behaviorId },
+      428
+    );
+  }
+  if (technicalBehavior && !cleanText(actorId)) {
+    throw new MosError(
+      "TECHNICAL_EDGE_ACTOR_REQUIRED",
+      "Technical edge creation requires authenticated actor evidence.",
+      { behaviorId: technicalBehavior.behaviorId },
+      401
+    );
+  }
 
   return {
     relationshipId: createMosId("relationship"),
@@ -117,6 +151,12 @@ function createRelationshipRecord({
     relationshipType: normalizedType.displayName,
     relationshipKey: normalizedType.key,
     relationshipLabel: normalizedType.displayName,
+
+    /* Technical behavior is stable. Customer vocabulary is optional data. */
+    behaviorId: technicalBehavior?.behaviorId || null,
+    definitionId: cleanText(definitionId) || null,
+    orderKey: cleanText(orderKey) || null,
+    behavior: technicalBehavior ? { ...technicalBehavior } : null,
 
     sourceObjectId: cleanText(sourceObjectId),
     targetObjectId: cleanText(targetObjectId),
@@ -145,6 +185,8 @@ function listRelationships({
   entityId = null,
   relationshipType = null,
   relationshipKey = null,
+  behaviorId = null,
+  definitionId = null,
   sourceObjectId = null,
   targetObjectId = null,
   objectId = null,
@@ -158,6 +200,8 @@ function listRelationships({
 
   return Object.values(readRelationships()).filter(relationship => {
     if (entityId && relationship.entityId !== entityId) return false;
+    if (behaviorId && relationship.behaviorId !== cleanText(behaviorId)) return false;
+    if (definitionId && relationship.definitionId !== cleanText(definitionId)) return false;
     if (requestedKey && storedRelationshipKey(relationship) !== requestedKey) return false;
     if (sourceObjectId && relationship.sourceObjectId !== sourceObjectId) return false;
     if (targetObjectId && relationship.targetObjectId !== targetObjectId) return false;
@@ -191,6 +235,9 @@ function getRelationship(relationshipId) {
 function createObjectRelationship({
   relationshipType,
   relationshipLabel = null,
+  behaviorId = null,
+  definitionId = null,
+  orderKey = null,
   sourceObjectId,
   targetObjectId,
   actorId = null,
@@ -204,16 +251,50 @@ function createObjectRelationship({
   const targetObject = requireObject(objects, targetObjectId, "Target");
   assertSameEntity(sourceObject, targetObject);
 
-  const normalizedType = normalizeRelationshipType(
-    relationshipLabel || relationshipType
-  );
+  const technicalBehavior = cleanText(behaviorId)
+    ? getEdgeBehavior(behaviorId)
+    : null;
+  const labelValue = cleanText(relationshipLabel || relationshipType);
+  const normalizedType = labelValue
+    ? normalizeRelationshipType(labelValue)
+    : { displayName: null, key: null };
+
+  if (!technicalBehavior && !normalizedType.displayName) {
+    throw new MosError(
+      "RELATIONSHIP_CONTRACT_REQUIRED",
+      "A technical behavior ID or customer relationship label is required.",
+      null,
+      400
+    );
+  }
+
+  if (technicalBehavior && !cleanText(commandId)) {
+    throw new MosError(
+      "TECHNICAL_EDGE_COMMAND_REQUIRED",
+      "Technical edge creation requires an idempotent command ID.",
+      { behaviorId: technicalBehavior.behaviorId },
+      428
+    );
+  }
+  if (technicalBehavior && !cleanText(actorId)) {
+    throw new MosError(
+      "TECHNICAL_EDGE_ACTOR_REQUIRED",
+      "Technical edge creation requires authenticated actor evidence.",
+      { behaviorId: technicalBehavior.behaviorId },
+      401
+    );
+  }
+
   const relationshipsBefore = readRelationships();
   const existing = Object.values(relationshipsBefore).find(relationship =>
     relationship.status === "active" &&
     relationship.entityId === sourceObject.entityId &&
     relationship.sourceObjectId === sourceObject.objectId &&
     relationship.targetObjectId === targetObject.objectId &&
-    storedRelationshipKey(relationship) === normalizedType.key
+    (technicalBehavior
+      ? relationship.behaviorId === technicalBehavior.behaviorId &&
+        cleanText(relationship.definitionId) === cleanText(definitionId)
+      : storedRelationshipKey(relationship) === normalizedType.key)
   );
 
   if (existing) {
@@ -226,9 +307,57 @@ function createObjectRelationship({
     };
   }
 
+  if (technicalBehavior?.cyclePolicy === "acyclic-structural") {
+    if (sourceObject.objectId === targetObject.objectId) {
+      throw new MosError(
+        "STRUCTURAL_EDGE_SELF_REFERENCE",
+        "A structural edge cannot project an Object into itself.",
+        { objectId: sourceObject.objectId, behaviorId: technicalBehavior.behaviorId },
+        409
+      );
+    }
+
+    const outgoing = new Map();
+    Object.values(relationshipsBefore)
+      .filter(relationship =>
+        relationship.status === "active" &&
+        relationship.entityId === sourceObject.entityId &&
+        relationship.behaviorId === technicalBehavior.behaviorId
+      )
+      .forEach(relationship => {
+        const entries = outgoing.get(relationship.sourceObjectId) || [];
+        entries.push(relationship.targetObjectId);
+        outgoing.set(relationship.sourceObjectId, entries);
+      });
+
+    const queue = [targetObject.objectId];
+    const visited = new Set();
+    while (queue.length) {
+      const current = queue.shift();
+      if (current === sourceObject.objectId) {
+        throw new MosError(
+          "STRUCTURAL_EDGE_CYCLE",
+          "The requested structural edge would create a projection cycle.",
+          {
+            sourceObjectId: sourceObject.objectId,
+            targetObjectId: targetObject.objectId,
+            behaviorId: technicalBehavior.behaviorId
+          },
+          409
+        );
+      }
+      if (visited.has(current)) continue;
+      visited.add(current);
+      queue.push(...(outgoing.get(current) || []));
+    }
+  }
+
   const relationship = createRelationshipRecord({
     entityId: sourceObject.entityId,
     relationshipType: normalizedType.displayName,
+    behaviorId: technicalBehavior?.behaviorId || null,
+    definitionId,
+    orderKey,
     sourceObjectId: sourceObject.objectId,
     targetObjectId: targetObject.objectId,
     actorId,
@@ -255,6 +384,9 @@ function createObjectRelationship({
         relationshipId: relationship.relationshipId,
         relationshipType: relationship.relationshipType,
         relationshipKey: relationship.relationshipKey,
+        behaviorId: relationship.behaviorId,
+        definitionId: relationship.definitionId,
+        orderKey: relationship.orderKey,
         sourceObjectId: sourceObject.objectId,
         targetObjectId: targetObject.objectId,
         effectiveFrom: relationship.effectiveFrom,
@@ -342,6 +474,8 @@ function endObjectRelationship({
       payload: {
         relationshipId: relationship.relationshipId,
         relationshipType: relationship.relationshipType,
+        behaviorId: relationship.behaviorId || null,
+        definitionId: relationship.definitionId || null,
         sourceObjectId: relationship.sourceObjectId,
         targetObjectId: relationship.targetObjectId,
         effectiveTo: relationship.effectiveTo,
@@ -357,10 +491,112 @@ function endObjectRelationship({
   return { changed: true, replayed: false, relationship, event };
 }
 
+function updateObjectRelationshipOrder({
+  relationshipId,
+  expectedRevision,
+  orderKey,
+  actorId,
+  commandId
+}) {
+  const relationshipsBefore = readRelationships();
+  const current = relationshipsBefore[cleanText(relationshipId)];
+  if (!current) getRelationship(relationshipId);
+
+  if (current.status !== "active") {
+    throw new MosError(
+      "RELATIONSHIP_NOT_ACTIVE",
+      "Only an active relationship can be reordered.",
+      { relationshipId: current.relationshipId, status: current.status },
+      409
+    );
+  }
+
+  const behavior = current.behaviorId ? getEdgeBehavior(current.behaviorId) : null;
+  if (behavior?.orderingPolicy !== "explicit") {
+    throw new MosError(
+      "RELATIONSHIP_ORDERING_NOT_SUPPORTED",
+      "This technical edge behavior does not support explicit ordering.",
+      { relationshipId: current.relationshipId, behaviorId: current.behaviorId || null },
+      409
+    );
+  }
+
+  const nextOrderKey = cleanText(orderKey);
+  if (!nextOrderKey) {
+    throw new MosError(
+      "RELATIONSHIP_ORDER_KEY_REQUIRED",
+      "Relationship reordering requires a stable orderKey.",
+      { relationshipId: current.relationshipId },
+      400
+    );
+  }
+  if (!cleanText(actorId) || !cleanText(commandId)) {
+    throw new MosError(
+      "RELATIONSHIP_ORDER_EVIDENCE_REQUIRED",
+      "Relationship reordering requires actor and command evidence.",
+      { relationshipId: current.relationshipId },
+      401
+    );
+  }
+
+  const currentRevision = Number(current.revision || 0);
+  if (!Number.isInteger(Number(expectedRevision)) || Number(expectedRevision) !== currentRevision) {
+    throw new MosError(
+      "RELATIONSHIP_REVISION_CONFLICT",
+      "The relationship changed before this reorder command was applied.",
+      { relationshipId: current.relationshipId, expectedRevision, currentRevision },
+      409
+    );
+  }
+
+  if (cleanText(current.orderKey) === nextOrderKey) {
+    return { changed: false, replayed: true, relationship: current };
+  }
+
+  const timestamp = nowIso();
+  const relationship = {
+    ...current,
+    orderKey: nextOrderKey,
+    revision: currentRevision + 1,
+    updatedBy: cleanText(actorId),
+    commandId: cleanText(commandId),
+    updatedAt: timestamp
+  };
+  writeRelationships({
+    ...relationshipsBefore,
+    [relationship.relationshipId]: relationship
+  });
+
+  let event;
+  try {
+    event = appendEvent({
+      entityId: relationship.entityId,
+      eventType: "relationship.reordered",
+      objectId: relationship.sourceObjectId,
+      actorId,
+      commandId,
+      payload: {
+        relationshipId: relationship.relationshipId,
+        behaviorId: relationship.behaviorId,
+        previousOrderKey: current.orderKey || null,
+        orderKey: nextOrderKey,
+        revision: relationship.revision
+      }
+    });
+  } catch (error) {
+    writeRelationships(relationshipsBefore);
+    throw error;
+  }
+
+  return { changed: true, replayed: false, relationship, event };
+}
+
 function listRelatedObjects({
   objectId,
   entityId = null,
   relationshipType = null,
+  behaviorId = null,
+  definitionId = null,
   direction = "both",
   status = "active"
 }) {
@@ -378,6 +614,8 @@ function listRelatedObjects({
   return listRelationships({
     entityId: object.entityId,
     relationshipType,
+    behaviorId,
+    definitionId,
     objectId: object.objectId,
     direction,
     status
@@ -397,6 +635,7 @@ function listRelatedObjects({
 function traverseRelationships({
   objectId,
   relationshipTypes = [],
+  behaviorIds = [],
   direction = "both",
   maxDepth = 4,
   maxObjects = 500,
@@ -411,6 +650,11 @@ function traverseRelationships({
       .map(normalizeKey)
       .filter(Boolean)
   );
+  const allowedBehaviorIds = new Set(
+    (Array.isArray(behaviorIds) ? behaviorIds : [behaviorIds])
+      .map(cleanText)
+      .filter(Boolean)
+  );
   const requestedDirection = cleanText(direction).toLowerCase();
   const resolvedDirection = ["incoming", "outgoing", "both"].includes(requestedDirection)
     ? requestedDirection
@@ -418,7 +662,8 @@ function traverseRelationships({
   const relationships = Object.values(readRelationships()).filter(relationship =>
     relationship.entityId === rootObject.entityId &&
     (!status || relationship.status === status) &&
-    (allowedKeys.size === 0 || allowedKeys.has(storedRelationshipKey(relationship)))
+    (allowedKeys.size === 0 || allowedKeys.has(storedRelationshipKey(relationship))) &&
+    (allowedBehaviorIds.size === 0 || allowedBehaviorIds.has(cleanText(relationship.behaviorId)))
   );
 
   const visited = new Set([rootObject.objectId]);
@@ -506,6 +751,7 @@ module.exports = {
   createRelationshipRecord,
   createObjectRelationship,
   endObjectRelationship,
+  updateObjectRelationshipOrder,
   getRelationship,
   listRelationships,
   listRelatedObjects,

@@ -50,8 +50,8 @@ const {
 
 
 const {
-  ensureEntityPassport,
-  ensurePersonPassport
+  resolveEntityPassport,
+  resolvePersonPassport
 } =
   require(
     "./IXIPassportIdentityBridge"
@@ -214,13 +214,13 @@ async function resolveAuthenticatedFinancialIdentity(
    */
 
   const entityIdentity =
-    ensureEntityPassport(
+    resolveEntityPassport(
       aosEntityId
     );
 
 
   const personIdentity =
-    ensurePersonPassport({
+    resolvePersonPassport({
       objectId:
         personObjectId,
 

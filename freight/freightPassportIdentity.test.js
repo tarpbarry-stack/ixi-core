@@ -20,21 +20,48 @@ const {
   resolveOrProvisionAosObjectForPassport
 } = require("../mos/provisioning/aosObjectIdentityResolver");
 
+const {
+  provisionAosObject
+} = require("../mos/provisioning/aosObjectProvisioningService");
+
 const { createObject } = require("../mos/objects/objectService");
 
 test.after(() => {
   fs.rmSync(testRoot, { recursive: true, force: true });
 });
 
-test("Passport-first Freight provisioning creates one canonical MOS Object and preserves source aliases", () => {
+test("Freight resolves an explicitly provisioned canonical Object without creating identity", () => {
   const passport = ensurePassportForSource({
     sourceType: "sharetribe-listing",
     sourceId: "listing-123",
     visibility: "private"
   }).passport;
 
+  const provisioned = provisionAosObject({
+    contractVersion: "ixi-aos-object-provision-v1",
+    commandId: "explicit-upload:listing-123",
+    entityId: "entity-1",
+    actorId: "actor-1",
+    objectType: "machine",
+    displayName: "2019 CAT 336",
+    source: "authorized-upload",
+    trustedPassportId: passport.passportId,
+    fields: {
+      year: "2019",
+      make: "CAT",
+      model: "336",
+      serialNumber: "ABC123"
+    },
+    identities: [{
+      identityType: "external-record",
+      sourceType: "sharetribe-listing",
+      sourceId: "listing-123"
+    }]
+  });
+
   const input = {
     passportId: passport.passportId,
+    objectId: provisioned.object.objectId,
     entityId: "entity-1",
     actorId: "actor-1",
     source: {
@@ -49,7 +76,7 @@ test("Passport-first Freight provisioning creates one canonical MOS Object and p
       model: "336",
       serialNumber: "ABC123"
     },
-    provisionIfMissing: true
+    provisionIfMissing: false
   };
 
   const first = resolveOrProvisionAosObjectForPassport(input);
@@ -71,7 +98,7 @@ test("Passport-first Freight provisioning creates one canonical MOS Object and p
   );
 });
 
-test("an unresolvable client Object ID cannot masquerade as a MOS Object", () => {
+test("an unresolvable client Object ID cannot masquerade as a canonical Object", () => {
   const passport = ensurePassportForSource({
     sourceType: "sharetribe-listing",
     sourceId: "listing-456",
@@ -89,13 +116,13 @@ test("an unresolvable client Object ID cannot masquerade as a MOS Object", () =>
         sourceId: "listing-456"
       },
       asset: { label: "Machine" },
-      provisionIfMissing: true
+      provisionIfMissing: false
     }),
-    error => error?.code === "PASSPORT_OBJECT_MISMATCH" && error?.status === 409
+    error => error?.code === "CANONICAL_OBJECT_NOT_FOUND" && error?.statusCode === 404
   );
 });
 
-test("Passport-first provisioning fails closed when source ownership is not verified", () => {
+test("Freight resolution fails closed when the typed alias is not recognized", () => {
   const passport = ensurePassportForSource({
     sourceType: "sharetribe-listing",
     sourceId: "listing-789",
@@ -112,9 +139,9 @@ test("Passport-first provisioning fails closed when source ownership is not veri
         sourceId: "different-listing"
       },
       asset: { label: "Machine" },
-      provisionIfMissing: true
+      provisionIfMissing: false
     }),
-    error => error?.code === "PASSPORT_NOT_PROVISIONED" && error?.status === 409
+    error => error?.code === "CANONICAL_ALIAS_NOT_FOUND" && error?.statusCode === 404
   );
 });
 
@@ -137,6 +164,29 @@ test("an unbound MOS Object cannot claim a legacy unowned Passport", () => {
       entityId: "entity-1",
       actorId: "actor-1"
     }),
-    error => error?.code === "PASSPORT_OBJECT_MISMATCH" && error?.status === 409
+    error => error?.code === "CANONICAL_IDENTITY_REPAIR_REQUIRED" && error?.statusCode === 409
+  );
+});
+
+test("Freight cannot turn a verified source flag into Object creation authority", () => {
+  const passport = ensurePassportForSource({
+    sourceType: "sharetribe-listing",
+    sourceId: "listing-no-birth",
+    visibility: "private"
+  }).passport;
+
+  assert.throws(
+    () => resolveOrProvisionAosObjectForPassport({
+      passportId: passport.passportId,
+      entityId: "entity-1",
+      source: {
+        sourceType: "sharetribe-listing",
+        sourceId: "listing-no-birth",
+        verified: true
+      },
+      provisionIfMissing: true
+    }),
+    error => error?.code === "CANONICAL_CREATION_BOUNDARY_REQUIRED" &&
+      error?.statusCode === 409
   );
 });

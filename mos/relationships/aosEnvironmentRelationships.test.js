@@ -9,29 +9,33 @@ const TEST_ROOT = path.join(
 );
 
 process.env.IXI_MOS_DATA_ROOT = TEST_ROOT;
+process.env.IXI_PASSPORT_DATA_FILE = path.join(TEST_ROOT, "passports.json");
 fs.rmSync(TEST_ROOT, { recursive: true, force: true });
 
 const { loadAosEnvironment } = require("../accounts/aosEnvironmentService");
-const { createObject } = require("../objects/objectService");
+const { provisionAosObject } = require("../provisioning/aosObjectProvisioningService");
 const { createObjectRelationship } = require("./relationshipService");
+const { EDGE_BEHAVIOR_IDS } = require("./edgeBehaviorRegistry");
 
 test("AOS environment returns active canonical relationships for recall", async () => {
   const initial = await loadAosEnvironment({
     ownerUserId: "relationship-environment-owner",
     displayName: "Relationship Environment"
   });
-  const person = createObject({
+  const person = provisionAosObject({
+    commandId: "relationship-environment-person",
     entityId: initial.entity.entityId,
     objectType: "person",
     displayName: "Joe",
     actorId: "relationship-environment-owner"
-  });
-  const userNamedContainer = createObject({
+  }).object;
+  const userNamedContainer = provisionAosObject({
+    commandId: "relationship-environment-card",
     entityId: initial.entity.entityId,
     objectType: "container",
     displayName: "Crew 007",
     actorId: "relationship-environment-owner"
-  });
+  }).object;
   const created = createObjectRelationship({
     sourceObjectId: person.objectId,
     targetObjectId: userNamedContainer.objectId,
@@ -50,4 +54,42 @@ test("AOS environment returns active canonical relationships for recall", async 
     created.relationship.relationshipId
   );
   assert.equal(environment.relationships[0].relationshipType, "member of");
+});
+
+test("AOS environment projects technical rail edges without requiring a customer word", async () => {
+  const environment = await loadAosEnvironment({
+    ownerUserId: "relationship-environment-owner",
+    displayName: "Relationship Environment"
+  });
+  const objects = environment.objects.filter(object =>
+    ["Joe", "Crew 007"].includes(object.displayName)
+  );
+  const person = objects.find(object => object.displayName === "Joe");
+  const railOwner = objects.find(object => object.displayName === "Crew 007");
+
+  const created = createObjectRelationship({
+    sourceObjectId: person.objectId,
+    targetObjectId: railOwner.objectId,
+    behaviorId: EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP,
+    definitionId: "definition_customer_rail",
+    orderKey: "000100",
+    actorId: "relationship-environment-owner",
+    commandId: "environment-rail-projection"
+  });
+
+  const refreshed = await loadAosEnvironment({
+    ownerUserId: "relationship-environment-owner",
+    displayName: "Relationship Environment"
+  });
+  const rail = refreshed.railProjections[railOwner.objectId];
+
+  assert.equal(created.relationship.relationshipLabel, null);
+  assert.equal(rail.behaviorId, EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP);
+  assert.deepEqual(rail.members.map(member => member.objectId), [person.objectId]);
+  assert.equal(rail.members[0].passportId, person.identities[0].passportId);
+  assert.equal(rail.railOwnerPassportId, railOwner.identities[0].passportId);
+  assert.equal(rail.members[0].relationshipId, created.relationship.relationshipId);
+  assert.equal(rail.members[0].relationshipRevision, 1);
+  assert.equal(rail.members[0].relationshipStatus, "active");
+  assert.equal(rail.members[0].definitionId, "definition_customer_rail");
 });

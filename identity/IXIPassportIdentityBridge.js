@@ -38,7 +38,9 @@
 const {
   ensurePassportForSource,
   findPassportById,
-  bindPassportSource
+  bindPassportSource,
+  readPassportRecords,
+  passportSources
 } =
   require(
     "../passport/passportRegistry"
@@ -78,6 +80,12 @@ const {
   require(
     "../mos/constants"
   );
+
+const {
+  resolveCanonicalObjectIdentity
+} = require(
+  "../mos/identity/canonicalObjectAdmissionService"
+);
 
 
 const {
@@ -256,6 +264,68 @@ function ensureEntityPassport(
       id,
 
     entityPassportId
+  };
+}
+
+
+function resolveEntityPassport(
+  entityId
+) {
+  const id = clean(entityId);
+  if (!id) {
+    throw identityError(
+      "IXI_ENTITY_ID_REQUIRED",
+      "MOS Entity ID is required.",
+      {},
+      400
+    );
+  }
+
+  const entity = getEntity(id);
+  if (clean(entity.status) !== "active") {
+    throw identityError(
+      "IXI_ENTITY_NOT_ACTIVE",
+      "MOS Entity must be active before its Passport can be used.",
+      { entityId: id, status: clean(entity.status) },
+      409
+    );
+  }
+
+  const matches = readPassportRecords().filter(passport =>
+    passportSources(passport).some(source =>
+      source.sourceType === PASSPORT_SOURCE_TYPES.MOS_ENTITY &&
+      source.sourceId === id
+    )
+  );
+
+  if (matches.length !== 1) {
+    throw identityError(
+      matches.length > 1
+        ? "IXI_ENTITY_PASSPORT_CONFLICT"
+        : "IXI_ENTITY_PASSPORT_REPAIR_REQUIRED",
+      matches.length > 1
+        ? "MOS Entity resolves to multiple Passports."
+        : "MOS Entity has no established Passport.",
+      { entityId: id, passportIds: matches.map(item => item.passportId) },
+      409
+    );
+  }
+
+  const passport = matches[0];
+  if (clean(passport.entityId) && clean(passport.entityId) !== id) {
+    throw identityError(
+      "IXI_ENTITY_PASSPORT_TENANT_MISMATCH",
+      "MOS Entity Passport carries a conflicting tenant identity.",
+      { entityId: id, passportId: passport.passportId, passportEntityId: passport.entityId },
+      409
+    );
+  }
+
+  return {
+    entity,
+    passport,
+    entityId: id,
+    entityPassportId: clean(passport.passportId)
   };
 }
 
@@ -540,11 +610,42 @@ function ensurePersonPassport({
 }
 
 
+function resolvePersonPassport({
+  objectId,
+  expectedEntityId = ""
+} = {}) {
+  const admission = resolveCanonicalObjectIdentity({
+    objectId,
+    entityId: expectedEntityId
+  });
+  const person = admission.object;
+
+  if (clean(person.objectType) !== MOS_OBJECT_TYPES.PERSON) {
+    throw identityError(
+      "IXI_OBJECT_NOT_PERSON",
+      "MOS object is not a Person.",
+      { objectId: admission.objectId, objectType: clean(person.objectType) },
+      409
+    );
+  }
+
+  return {
+    person,
+    passport: admission.passport,
+    personObjectId: admission.objectId,
+    entityId: admission.entityId,
+    actorPassportId: admission.passportId
+  };
+}
+
+
 module.exports = {
   PASSPORT_SOURCE_TYPES,
 
   normalizePassportRecord,
 
   ensureEntityPassport,
-  ensurePersonPassport
+  ensurePersonPassport,
+  resolveEntityPassport,
+  resolvePersonPassport
 };

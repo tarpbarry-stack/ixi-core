@@ -83,7 +83,7 @@ async function create(args = {}) {
       asset:
         args?.asset,
       provisionIfMissing:
-        args?.asset?.source?.verified === true
+        false
     });
 
   const record =

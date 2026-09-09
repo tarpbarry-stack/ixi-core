@@ -4,11 +4,7 @@ const fs = require("fs");
 const { acquire } = require("./acquisition");
 
 const {
-  ensurePassportForSource,
-  findPassportById,
-  readPassportRecords,
-  deletePassportById,
-  deletePassportBySource
+  findPassportById
 } = require("./passport/passportRegistry");
 
 const {
@@ -204,37 +200,14 @@ app.get("/health", (req, res) => {
 });
 
 app.post("/passport/ensure", (req, res) => {
-  try {
-    const {
-      sourceType,
-      sourceId,
-      visibility,
-      status
-    } = req.body || {};
-
-    if (!sourceType || !sourceId) {
-      return res.status(400).json({
-        ok: false,
-        error: "Missing sourceType or sourceId"
-      });
-    }
-
-    const result = ensurePassportForSource({
-      sourceType,
-      sourceId,
-      visibility: visibility || "private",
-      status: status || "active"
-    });
-
-    return res.json(result);
-} catch (error) {
-  console.error("ACQUISITION FAILED:", error);
-
-  res.status(500).json({
+  return res.status(410).json({
     ok: false,
-    error: error.message
+    error: {
+      code: "GENERIC_PASSPORT_ENSURE_RETIRED",
+      message:
+        "Generic Passport creation is retired. Use an authenticated object creation, upload, import, or onboarding boundary."
+    }
   });
-}
 });
 
 app.get("/passport/:passportId", (req, res) => {
@@ -261,109 +234,35 @@ app.get("/passport/:passportId", (req, res) => {
 });
 
 app.get("/passport", (req, res) => {
-  try {
-    const records = readPassportRecords();
-
-    return res.json({
-      ok: true,
-      count: records.length,
-      passports: records
-    });
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error.message
-    });
-  }
+  return res.status(403).json({
+    ok: false,
+    error: {
+      code: "PASSPORT_REGISTRY_ENUMERATION_FORBIDDEN",
+      message: "Passport registry enumeration is not a public operation."
+    }
+  });
 });
 
 app.delete("/passport/:passportId", (req, res) => {
-  try {
-    const confirmation =
-      String(
-        req.body?.confirmation ||
-        req.headers[
-          "x-ixi-delete-confirmation"
-        ] ||
-        ""
-      ).trim();
-
-    if (
-      confirmation !==
-      "PERMANENT_DELETE"
-    ) {
-      return res.status(400).json({
-        ok: false,
-        error:
-          "Missing PERMANENT_DELETE confirmation"
-      });
+  return res.status(410).json({
+    ok: false,
+    error: {
+      code: "PASSPORT_DELETE_RETIRED",
+      message: "Permanent Passport deletion is retired from the public API."
     }
-
-    const result =
-      deletePassportById(
-        req.params.passportId
-      );
-
-    return res.json(result);
-  } catch (error) {
-    console.error(
-      "PASSPORT DELETE FAILED:",
-      error
-    );
-
-    return res.status(500).json({
-      ok: false,
-      error:
-        error?.message ||
-        "Passport delete failed"
-    });
-  }
+  });
 });
 
 app.delete(
   "/passport/by-source/:sourceType/:sourceId",
   (req, res) => {
-    try {
-      const confirmation =
-        String(
-          req.body?.confirmation ||
-          req.headers[
-            "x-ixi-delete-confirmation"
-          ] ||
-          ""
-        ).trim();
-
-      if (
-        confirmation !==
-        "PERMANENT_DELETE"
-      ) {
-        return res.status(400).json({
-          ok: false,
-          error:
-            "Missing PERMANENT_DELETE confirmation"
-        });
+    return res.status(410).json({
+      ok: false,
+      error: {
+        code: "PASSPORT_SOURCE_DELETE_RETIRED",
+        message: "Passport source deletion is retired from the public API."
       }
-
-      const result =
-        deletePassportBySource(
-          req.params.sourceType,
-          req.params.sourceId
-        );
-
-      return res.json(result);
-    } catch (error) {
-      console.error(
-        "PASSPORT SOURCE DELETE FAILED:",
-        error
-      );
-
-      return res.status(500).json({
-        ok: false,
-        error:
-          error?.message ||
-          "Passport source delete failed"
-      });
-    }
+    });
   }
 );
 
@@ -1194,8 +1093,17 @@ app.post("/ixi-machine-state", (req, res) => {
 
 const PORT = 4100;
 
-app.listen(PORT, () => {
-  console.log(
-    `IX Core running on port ${PORT}`
-  );
-});
+function startIxCoreServer(port = PORT) {
+  return app.listen(port, () => {
+    console.log(`IX Core running on port ${port}`);
+  });
+}
+
+if (require.main === module) {
+  startIxCoreServer();
+}
+
+module.exports = {
+  app,
+  startIxCoreServer
+};

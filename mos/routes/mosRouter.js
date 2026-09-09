@@ -73,12 +73,18 @@ const {
 const {
   createObjectRelationship,
   endObjectRelationship,
+  updateObjectRelationshipOrder,
   getRelationship,
   listRelatedObjects,
   traverseRelationships
 } = require(
   "../relationships/relationshipService"
 );
+
+const {
+  buildRelationshipIdentityEvidence,
+  decorateRelationshipWithIdentityEvidence
+} = require("../relationships/relationshipIdentityEvidenceService");
 
 const {
   sendMosError
@@ -107,6 +113,10 @@ const {
 } = require("../accounts/aosEnvironmentService");
 
 const {
+  findAccountByOwnerUserId
+} = require("../accounts/aosAccountService");
+
+const {
   ensureCommercialOnboarding
 } = require("../onboarding/aosCommercialOnboardingService");
 
@@ -130,7 +140,8 @@ const {
 
 const {
   assertMosObjectAuthority,
-  filterDiscoverableObjects
+  filterDiscoverableObjects,
+  buildMosObjectActorAuthority
 } = require(
   "../../authority/IXIAuthorityMosBridge"
 );
@@ -139,6 +150,12 @@ const {
   resolveAosEntityId
 } = require(
   "../../identity/IXIEntityBindingService"
+);
+
+const {
+  resolveCanonicalObjectIdentity
+} = require(
+  "../identity/canonicalObjectAdmissionService"
 );
 
 const {
@@ -162,6 +179,18 @@ const {
 );
 
 const {
+  createMosMembershipAuthorityMiddleware,
+  assertPrincipalCapability
+} = require("../security/mosMembershipAuthorityService");
+
+const {
+  openWorkspaceSession,
+  getWorkspaceSession,
+  applyWorkspaceSessionCommand,
+  endWorkspaceSession
+} = require("../workspaces/sessionPlacementService");
+
+const {
   createCreationIntegrityRouter
 } = require(
   "../../integrity/creationIntegrityRouter"
@@ -183,6 +212,21 @@ const {
 
 const router = express.Router();
 
+function assertLegacyContainmentWriteEnabled() {
+  if (
+    String(process.env.IXI_MOS_LEGACY_CONTAINMENT_WRITES || "")
+      .trim()
+      .toLowerCase() !== "true"
+  ) {
+    throw new MosError(
+      "LEGACY_CONTAINMENT_WRITE_DISABLED",
+      "Exclusive legacy containment writes are disabled; use a governed technical edge.",
+      null,
+      410
+    );
+  }
+}
+
 function beginHttpCommand({
   req,
   entityId,
@@ -202,7 +246,7 @@ function beginHttpCommand({
     bodyCommandId !== idempotencyKey
   ) {
     throw new MosError(
-      "RELATIONSHIP_COMMAND_ID_REQUIRED",
+      "GOVERNED_COMMAND_ID_REQUIRED",
       "A matching commandId and Idempotency-Key are required.",
       null,
       428
@@ -229,8 +273,8 @@ function beginHttpCommand({
       record.payloadHash !== payloadHash
     ) {
       throw new MosError(
-        "RELATIONSHIP_COMMAND_REUSE_CONFLICT",
-        "commandId was already used for a different relationship mutation.",
+        "GOVERNED_COMMAND_REUSE_CONFLICT",
+        "commandId was already used for a different governed mutation.",
         { commandId: bodyCommandId },
         409
       );
@@ -245,8 +289,8 @@ function beginHttpCommand({
     }
 
     throw new MosError(
-      "RELATIONSHIP_COMMAND_NOT_REPLAYABLE",
-      "The prior relationship command did not complete and cannot be replayed.",
+      "GOVERNED_COMMAND_NOT_REPLAYABLE",
+      "The prior governed command did not complete and cannot be replayed.",
       { commandId: bodyCommandId, status: record.status },
       409
     );
@@ -257,6 +301,42 @@ function beginHttpCommand({
     duplicate: false,
     result: null
   };
+}
+
+function requireGovernedCommandId(req, code = "GOVERNED_COMMAND_ID_REQUIRED") {
+  const bodyCommandId = String(req.body?.commandId || "").trim();
+  const idempotencyKey = String(req.headers["idempotency-key"] || "").trim();
+  if (!bodyCommandId || !idempotencyKey || bodyCommandId !== idempotencyKey) {
+    throw new MosError(
+      code,
+      "A matching commandId and Idempotency-Key are required for this governed operation.",
+      null,
+      428
+    );
+  }
+  return bodyCommandId;
+}
+
+function requireGovernedIdempotencyKey(req, code = "GOVERNED_IDEMPOTENCY_KEY_REQUIRED") {
+  const bodyCommandId = String(req.body?.commandId || "").trim();
+  const idempotencyKey = String(req.headers["idempotency-key"] || "").trim();
+  if (!idempotencyKey || (bodyCommandId && bodyCommandId !== idempotencyKey)) {
+    throw new MosError(
+      code,
+      "A stable Idempotency-Key is required and must match commandId when both are supplied.",
+      null,
+      428
+    );
+  }
+  return idempotencyKey;
+}
+
+function governedPrincipal(req, capabilities = []) {
+  const principal = req.ixiAuthorityPrincipal;
+  for (const capability of capabilities) {
+    assertPrincipalCapability(principal, capability);
+  }
+  return principal;
 }
 
 /* ---------- HEALTH ---------- */
@@ -297,6 +377,10 @@ router.use(
 
 router.use(
   createInternalTenantBoundaryMiddleware()
+);
+
+router.use(
+  createMosMembershipAuthorityMiddleware()
 );
 
 
@@ -359,15 +443,37 @@ router.post(
   "/aos/onboarding/bootstrap",
   async (req, res) => {
     try {
-      const principalId =
-        req.ixiRequestContext?.principalId ||
-        req.body?.ownerUserId;
+      if (!req.ixiRequestContext?.authenticated) {
+        throw new MosError(
+          "AOS_ONBOARDING_AUTHENTICATION_REQUIRED",
+          "Governed onboarding requires an authenticated signed principal.",
+          null,
+          401
+        );
+      }
+      const principalId = req.ixiRequestContext.principalId;
+      const suppliedCommandId = String(req.body?.commandId || "").trim();
+      const commandId = suppliedCommandId || `governed-onboarding:${principalId}:v1`;
+      const existingAccount = findAccountByOwnerUserId(principalId);
+      const signedEntityId = String(req.ixiRequestContext.entityId || "").trim();
+      if (signedEntityId && (!existingAccount || existingAccount.primaryEntityId !== signedEntityId)) {
+        throw new MosError(
+          "AOS_ONBOARDING_ENTITY_MISMATCH",
+          "Signed Entity does not match the principal's existing governed account.",
+          { signedEntityId },
+          403
+        );
+      }
 
       const onboarding = ensureCommercialOnboarding({
         ownerUserId: principalId,
         entityDisplayName: req.body?.entityDisplayName,
         person: req.body?.person || {},
-        metadata: req.body?.metadata || {}
+        metadata: {
+          ...(req.body?.metadata || {}),
+          creationBoundary: "governed-onboarding",
+          commandId
+        }
       });
 
       const environment = await loadAosEnvironment({
@@ -481,7 +587,13 @@ router.post(
 
           authorityPrincipal:
             req.ixiAuthorityPrincipal ||
-            null
+            null,
+
+          strictAuthorization:
+            req.ixiRequestContext?.authenticated === true,
+
+          allowProvisioning:
+            false
         });
 
       return res.json({
@@ -498,29 +610,201 @@ router.post(
   }
 );
 
+function workspaceSessionContext(req, { shared = false } = {}) {
+  const principal = req.ixiAuthorityPrincipal;
+  assertPrincipalCapability(principal, "aos.workspace.placement.write");
+  if (shared) assertPrincipalCapability(principal, "aos.workspace.shared");
+  return {
+    principalId: principal.principalId,
+    entityId: principal.entityId,
+    tenantId: principal.tenantId,
+    sharedAuthorized: shared
+  };
+}
+
+function requireMatchingRevision(req) {
+  const expectedRevision = Number(req.body?.expectedRevision);
+  const header = String(req.headers["if-match"] || "")
+    .replace(/^W\//i, "")
+    .replace(/^\"|\"$/g, "")
+    .trim();
+  if (!Number.isInteger(expectedRevision) || !header || Number(header) !== expectedRevision) {
+    throw new MosError(
+      "WORKSPACE_SESSION_REVISION_REQUIRED",
+      "Matching expectedRevision and If-Match values are required.",
+      { expectedRevision: req.body?.expectedRevision, ifMatch: req.headers["if-match"] || null },
+      428
+    );
+  }
+  return expectedRevision;
+}
+
+router.post("/aos/workspace-sessions", (req, res) => {
+  let commandId = "";
+  let started = false;
+  try {
+    const shared = String(req.body?.placementScope || "personal").toLowerCase() === "shared";
+    const context = workspaceSessionContext(req, { shared });
+    assertPrincipalCapability(req.ixiAuthorityPrincipal, "aos.workspace.session.open");
+    const command = beginHttpCommand({
+      req,
+      entityId: context.entityId,
+      commandType: "workspace.session.open",
+      payload: {
+        workspaceId: req.body?.workspaceId,
+        placementScope: req.body?.placementScope || "personal",
+        sharedScopeId: req.body?.sharedScopeId || null
+      }
+    });
+    commandId = command.commandId;
+    started = !command.duplicate;
+    if (command.duplicate) return res.json({ ...command.result, replayed: true });
+    const result = openWorkspaceSession({
+      context,
+      workspaceId: req.body?.workspaceId,
+      placementScope: req.body?.placementScope,
+      sharedScopeId: req.body?.sharedScopeId,
+      ttlMs: req.body?.ttlMs,
+      commandId
+    });
+    const response = { ok: true, result };
+    completeCommand({ commandId, result: response });
+    return res.status(result.created ? 201 : 200).json({ ...response, replayed: false });
+  } catch (error) {
+    if (commandId && started) failCommand({ commandId, error });
+    return sendMosError(res, error);
+  }
+});
+
+router.get("/aos/workspace-sessions/:sessionId", (req, res) => {
+  try {
+    const shared = String(req.query?.placementScope || "personal").toLowerCase() === "shared";
+    const context = workspaceSessionContext(req, { shared });
+    const session = getWorkspaceSession({ sessionId: req.params.sessionId, context });
+    return res.json({ ok: true, session });
+  } catch (error) {
+    return sendMosError(res, error);
+  }
+});
+
+router.post("/aos/workspace-sessions/:sessionId/commands", (req, res) => {
+  let commandId = "";
+  let started = false;
+  try {
+    const shared = String(req.body?.placementScope || "personal").toLowerCase() === "shared";
+    const context = workspaceSessionContext(req, { shared });
+    const expectedRevision = requireMatchingRevision(req);
+    const command = beginHttpCommand({
+      req,
+      entityId: context.entityId,
+      commandType: "workspace.session.command",
+      payload: {
+        sessionId: req.params.sessionId,
+        expectedRevision,
+        commandType: req.body?.commandType,
+        payload: req.body?.payload || {}
+      }
+    });
+    commandId = command.commandId;
+    started = !command.duplicate;
+    if (command.duplicate) return res.json({ ...command.result, replayed: true });
+    const result = applyWorkspaceSessionCommand({
+      context,
+      sessionId: req.params.sessionId,
+      expectedRevision,
+      commandId,
+      commandType: req.body?.commandType,
+      payload: req.body?.payload || {}
+    });
+    const response = { ok: true, result };
+    completeCommand({ commandId, result: response });
+    return res.json({ ...response, replayed: false });
+  } catch (error) {
+    if (commandId && started) failCommand({ commandId, error });
+    return sendMosError(res, error);
+  }
+});
+
+router.post("/aos/workspace-sessions/:sessionId/end", (req, res) => {
+  let commandId = "";
+  let started = false;
+  try {
+    const shared = String(req.body?.placementScope || "personal").toLowerCase() === "shared";
+    const context = workspaceSessionContext(req, { shared });
+    const expectedRevision = requireMatchingRevision(req);
+    const command = beginHttpCommand({
+      req,
+      entityId: context.entityId,
+      commandType: "workspace.session.end",
+      payload: { sessionId: req.params.sessionId, expectedRevision }
+    });
+    commandId = command.commandId;
+    started = !command.duplicate;
+    if (command.duplicate) return res.json({ ...command.result, replayed: true });
+    const result = endWorkspaceSession({
+      context,
+      sessionId: req.params.sessionId,
+      expectedRevision,
+      commandId
+    });
+    const response = { ok: true, result };
+    completeCommand({ commandId, result: response });
+    return res.json({ ...response, replayed: false });
+  } catch (error) {
+    if (commandId && started) failCommand({ commandId, error });
+    return sendMosError(res, error);
+  }
+});
+
 /* ---------- AOS IMPORT JOBS ---------- */
 
 router.post(
   "/imports/jobs",
   (req, res) => {
+    let activeCommandId = "";
+    let commandStarted = false;
     try {
+      const principal = governedPrincipal(req, ["aos.import"]);
+      const command = beginHttpCommand({
+        req,
+        entityId: principal.entityId,
+        commandType: "import.job.create",
+        payload: {
+          sourceFile: req.body?.sourceFile || {},
+          definitionId: req.body?.definitionId || null,
+          definitionKey: req.body?.definitionKey || null,
+          mapping: req.body?.mapping || {},
+          rows: req.body?.rows || [],
+          metadata: req.body?.metadata || {}
+        }
+      });
+      activeCommandId = command.commandId;
+      commandStarted = !command.duplicate;
+      if (command.duplicate) return res.json({ ...command.result, replayed: true });
       const result =
         createImportJob({
-          ...(req.body || {})
+          ...(req.body || {}),
+          entityId: principal.entityId,
+          actorId: principal.principalId,
+          metadata: {
+            ...(req.body?.metadata || {}),
+            creationBoundary: "bulk-import",
+            commandId: activeCommandId
+          }
         });
-
+      const response = {
+        ok: true,
+        duplicate: result.duplicate === true,
+        job: result.job
+      };
+      completeCommand({ commandId: activeCommandId, result: response });
       return res.status(
         result.duplicate
           ? 200
           : 201
-      ).json({
-        ok: true,
-        duplicate:
-          result.duplicate === true,
-        job:
-          result.job
-      });
+      ).json({ ...response, replayed: false });
     } catch (error) {
+      if (activeCommandId && commandStarted) failCommand({ commandId: activeCommandId, error });
       return sendMosError(
         res,
         error
@@ -591,13 +875,13 @@ router.patch(
   "/imports/jobs/:jobId/mapping",
   (req, res) => {
     try {
+      const principal = governedPrincipal(req, ["aos.import"]);
       const job =
         updateImportJobMapping({
           jobId:
             req.params.jobId,
 
-          entityId:
-            req.body?.entityId,
+          entityId: principal.entityId,
 
           definitionId:
             req.body?.definitionId ||
@@ -629,13 +913,13 @@ router.post(
   "/imports/jobs/:jobId/rows",
   (req, res) => {
     try {
+      const principal = governedPrincipal(req, ["aos.import"]);
       const job =
         stageImportRows({
           jobId:
             req.params.jobId,
 
-          entityId:
-            req.body?.entityId,
+          entityId: principal.entityId,
 
           rows:
             req.body?.rows || []
@@ -658,27 +942,35 @@ router.post(
 router.post(
   "/imports/jobs/:jobId/rows/:rowId/execute",
   (req, res) => {
+    let activeCommandId = "";
+    let commandStarted = false;
     try {
+      const principal = governedPrincipal(req, ["aos.import", "aos.create"]);
+      const command = beginHttpCommand({
+        req,
+        entityId: principal.entityId,
+        commandType: "import.row.execute",
+        payload: { jobId: req.params.jobId, rowId: req.params.rowId }
+      });
+      activeCommandId = command.commandId;
+      commandStarted = !command.duplicate;
+      if (command.duplicate) return res.json({ ...command.result, replayed: true });
       const result =
         executeImportRow({
           jobId:
             req.params.jobId,
 
-          entityId:
-            req.body?.entityId,
+          entityId: principal.entityId,
 
           rowId:
             req.params.rowId,
 
-          actorId:
-            req.body?.actorId ||
-            null
+          actorId: principal.principalId
         });
-
-      return res.json(
-        result
-      );
+      completeCommand({ commandId: activeCommandId, result });
+      return res.json({ ...result, replayed: false });
     } catch (error) {
+      if (activeCommandId && commandStarted) failCommand({ commandId: activeCommandId, error });
       return sendMosError(
         res,
         error
@@ -691,28 +983,37 @@ router.post(
 router.post(
   "/imports/jobs/:jobId/execute",
   (req, res) => {
+    let activeCommandId = "";
+    let commandStarted = false;
     try {
+      const principal = governedPrincipal(req, ["aos.import", "aos.create"]);
+      const command = beginHttpCommand({
+        req,
+        entityId: principal.entityId,
+        commandType: "import.batch.execute",
+        payload: { jobId: req.params.jobId, limit: req.body?.limit || 25 }
+      });
+      activeCommandId = command.commandId;
+      commandStarted = !command.duplicate;
+      if (command.duplicate) return res.json({ ...command.result, replayed: true });
       const result =
         executeImportBatch({
           jobId:
             req.params.jobId,
 
-          entityId:
-            req.body?.entityId,
+          entityId: principal.entityId,
 
-          actorId:
-            req.body?.actorId ||
-            null,
+          actorId: principal.principalId,
 
           limit:
             req.body?.limit ||
             25
         });
 
-      return res.json(
-        result
-      );
+      completeCommand({ commandId: activeCommandId, result });
+      return res.json({ ...result, replayed: false });
     } catch (error) {
+      if (activeCommandId && commandStarted) failCommand({ commandId: activeCommandId, error });
       return sendMosError(
         res,
         error
@@ -753,16 +1054,10 @@ router.post(
 
 router.post(
   "/objects/provision",
-  (req, res) => {
+  async (req, res) => {
     try {
-      const commandId =
-        String(
-          req.headers[
-            "idempotency-key"
-          ] ||
-          req.body?.commandId ||
-          ""
-        ).trim();
+      const principal = governedPrincipal(req, ["aos.create"]);
+      const commandId = requireGovernedCommandId(req, "AOS_PROVISION_COMMAND_ID_REQUIRED");
 
       const input = {
         ...(req.body || {})
@@ -775,16 +1070,22 @@ router.post(
         provisionAosObject({
           ...input,
 
-          commandId
+          commandId,
+
+          entityId: principal.entityId,
+          actorId: principal.principalId
         });
+
+      const response = {
+        ...result,
+        object: await objectWithEffectiveAuthority(req, result.object)
+      };
 
       return res.status(
         result.replayed
           ? 200
           : 201
-      ).json(
-        result
-      );
+      ).json(response);
     } catch (error) {
       return sendMosError(
         res,
@@ -796,16 +1097,22 @@ router.post(
 
 router.post(
   "/aos/machines/sharetribe-listing",
-  (req, res) => {
+  async (req, res) => {
     try {
-      const context = req.ixiRequestContext || {};
+      const principal = governedPrincipal(req, ["aos.create"]);
+      const commandId = requireGovernedIdempotencyKey(req, "IXI_MACHINE_COMMAND_ID_REQUIRED");
       const result = provisionSharetribeMachine({
-        entityId: context.entityId,
-        principalId: context.principalId,
+        entityId: principal.entityId,
+        principalId: principal.principalId,
+        commandId,
+        creationBoundary: req.body?.creationBoundary || "authenticated-listing-admission.v1",
         listing: req.body?.listing || {}
       });
 
-      return res.status(result.replayed ? 200 : 201).json(result);
+      return res.status(result.replayed ? 200 : 201).json({
+        ...result,
+        object: await objectWithEffectiveAuthority(req, result.object)
+      });
     } catch (error) {
       return sendMosError(res, error);
     }
@@ -815,24 +1122,22 @@ router.post(
 
 router.post(
   "/objects/provision/:commandId/recover",
-  (req, res) => {
+  async (req, res) => {
     try {
+      const principal = governedPrincipal(req, ["aos.provision.recover"]);
       const result =
         recoverAosObjectProvisioning({
           commandId:
             req.params.commandId,
 
-          entityId:
-            req.body?.entityId,
-
-          actorId:
-            req.body?.actorId ||
-            null
+          entityId: principal.entityId,
+          actorId: principal.principalId
         });
 
-      return res.json(
-        result
-      );
+      return res.json({
+        ...result,
+        object: await objectWithEffectiveAuthority(req, result.object)
+      });
     } catch (error) {
       return sendMosError(
         res,
@@ -1136,19 +1441,94 @@ router.delete(
 
 /* ---------- OBJECTS ---------- */
 
-router.post("/objects", (req, res) => {
+async function objectWithEffectiveAuthority(req, object) {
+  return {
+    ...object,
+    ...(await buildMosObjectActorAuthority({
+      principal: req.ixiAuthorityPrincipal,
+      object
+    }))
+  };
+}
+
+router.post(
+  "/identity/admit",
+  async (req, res) => {
+    try {
+      const entityId = String(
+        req.ixiRequestContext?.entityId ||
+        req.ixiAuthorityPrincipal?.entityId ||
+        ""
+      ).trim();
+
+      if (!entityId) {
+        throw new MosError(
+          "CANONICAL_ADMISSION_AUTH_REQUIRED",
+          "Canonical identity admission requires authenticated tenant context.",
+          null,
+          401
+        );
+      }
+
+      const admission = resolveCanonicalObjectIdentity({
+        entityId,
+        objectId: req.body?.objectId,
+        passportId: req.body?.passportId,
+        aliases: req.body?.aliases,
+        sourceType: req.body?.sourceType,
+        sourceId: req.body?.sourceId
+      });
+
+      await assertMosObjectAuthority({
+        principal: req.ixiAuthorityPrincipal,
+        object: admission.object,
+        capability: "aos.view"
+      });
+
+      const authorizedObject = await objectWithEffectiveAuthority(req, admission.object);
+
+      return res.json({
+        ok: true,
+        identity: {
+          objectId: admission.objectId,
+          passportId: admission.passportId,
+          entityId: admission.entityId,
+          aliases: admission.aliases,
+          evidence: admission.evidence
+        },
+        object: authorizedObject
+      });
+    } catch (error) {
+      return sendMosError(res, error);
+    }
+  }
+);
+
+router.post("/objects", async (req, res) => {
   try {
-    const object = createObject(
-      req.body || {}
-    );
+    const principal = governedPrincipal(req, ["aos.create"]);
+    const commandId = requireGovernedCommandId(req, "AOS_SAVE_COMMAND_ID_REQUIRED");
+    const input = { ...(req.body || {}) };
+    delete input.trustedPassportId;
+
+    const result = provisionAosObject({
+      ...input,
+      commandId,
+      entityId: principal.entityId,
+      actorId: principal.principalId
+    });
+    const object = result.object;
+    const authorizedObject = await objectWithEffectiveAuthority(req, object);
 
     rebuildEntityProjections(
       object.entityId
     );
 
-    return res.status(201).json({
+    return res.status(result.replayed ? 200 : 201).json({
       ok: true,
-      object,
+      object: authorizedObject,
+      passport: result.passport,
+      replayed: result.replayed === true,
       branch:
         getBranchSummary(
           object.objectId
@@ -1178,9 +1558,11 @@ router.get(
           "aos.view"
       });
 
+      const authorizedObject = await objectWithEffectiveAuthority(req, object);
+
       return res.json({
         ok: true,
-        object,
+        object: authorizedObject,
         effectivePath:
           resolveEffectivePath(
             object.objectId
@@ -1511,12 +1893,16 @@ router.get(
           objects
         });
 
+      const authorizedObjects = await Promise.all(
+        discoverableObjects.map(object => objectWithEffectiveAuthority(req, object))
+      );
+
       return res.json({
         ok: true,
         count:
-          discoverableObjects.length,
+          authorizedObjects.length,
         objects:
-          discoverableObjects
+          authorizedObjects
       });
     } catch (error) {
       return sendMosError(
@@ -1528,6 +1914,10 @@ router.get(
 );
 
 /* ---------- NEUTRAL OBJECT RELATIONSHIPS ---------- */
+
+function authoritativeRelationshipEvidence(relationship, supplied = {}) {
+  return buildRelationshipIdentityEvidence(relationship, supplied);
+}
 
 router.get(
   "/objects/:objectId/relationships",
@@ -1543,6 +1933,8 @@ router.get(
       const related = listRelatedObjects({
         objectId: object.objectId,
         relationshipType: req.query.relationshipType || null,
+        behaviorId: req.query.behaviorId || null,
+        definitionId: req.query.definitionId || null,
         direction: req.query.direction || "both",
         status: req.query.status === "all" ? null : (req.query.status || "active")
       });
@@ -1551,13 +1943,20 @@ router.get(
         objects: related.map(item => item.relatedObject).filter(Boolean)
       });
       const visibleIds = new Set(visibleObjects.map(item => item.objectId));
-      const visibleRelationships = related.filter(item =>
+      const visibleRelationships = await Promise.all(related.filter(item =>
         item.relatedObject && visibleIds.has(item.relatedObject.objectId)
-      );
+      ).map(async item => ({
+        ...item,
+        relatedObject: await objectWithEffectiveAuthority(req, item.relatedObject),
+        relationship: decorateRelationshipWithIdentityEvidence(item.relationship),
+        identityEvidence: authoritativeRelationshipEvidence(item.relationship)
+      })));
+
+      const authorizedRootObject = await objectWithEffectiveAuthority(req, object);
 
       return res.json({
         ok: true,
-        object,
+        object: authorizedRootObject,
         count: visibleRelationships.length,
         relationships: visibleRelationships
       });
@@ -1581,6 +1980,10 @@ router.get(
       const graph = traverseRelationships({
         objectId: object.objectId,
         relationshipTypes: String(req.query.relationshipTypes || "")
+          .split(",")
+          .map(value => value.trim())
+          .filter(Boolean),
+        behaviorIds: String(req.query.behaviorIds || "")
           .split(",")
           .map(value => value.trim())
           .filter(Boolean),
@@ -1660,19 +2063,24 @@ router.get(
         });
       }
 
-      const responseObjects = reachableObjects.map(item => ({
-        object: item.object,
+      const responseObjects = await Promise.all(reachableObjects.map(async item => ({
+        object: await objectWithEffectiveAuthority(req, item.object),
         depth: depthByObjectId.get(item.object.objectId)
-      }));
+      })));
+
+      const authorizedRootObject = await objectWithEffectiveAuthority(req, object);
 
       return res.json({
         ok: true,
-        rootObject: object,
+        rootObject: authorizedRootObject,
         maxDepth: graph.maxDepth,
         maxObjects: graph.maxObjects,
         truncated: responseObjects.length >= graph.maxObjects,
         objects: responseObjects,
-        relationships: reachableEdges
+        relationships: reachableEdges.map(relationship => ({
+          relationship: decorateRelationshipWithIdentityEvidence(relationship),
+          identityEvidence: authoritativeRelationshipEvidence(relationship)
+        }))
       });
     } catch (error) {
       return sendMosError(res, error);
@@ -1687,18 +2095,30 @@ router.post(
     let commandStarted = false;
 
     try {
-      const sourceObject = getObject(req.body?.sourceObjectId);
-      const targetObject = getObject(req.body?.targetObjectId);
+      const sourceCandidate = getObject(req.body?.sourceObjectId);
+      const targetCandidate = getObject(req.body?.targetObjectId);
+      const sourceAdmission = resolveCanonicalObjectIdentity({
+        entityId: sourceCandidate.entityId,
+        objectId: sourceCandidate.objectId,
+        passportId: req.body?.sourcePassportId || ""
+      });
+      const targetAdmission = resolveCanonicalObjectIdentity({
+        entityId: sourceCandidate.entityId,
+        objectId: targetCandidate.objectId,
+        passportId: req.body?.targetPassportId || ""
+      });
+      const sourceObject = sourceAdmission.object;
+      const targetObject = targetAdmission.object;
 
       await assertMosObjectAuthority({
         principal: req.ixiAuthorityPrincipal,
         object: sourceObject,
-        capability: "aos.move"
+        capability: "aos.relationship.create"
       });
       await assertMosObjectAuthority({
         principal: req.ixiAuthorityPrincipal,
         object: targetObject,
-        capability: "aos.move"
+        capability: "aos.relationship.create"
       });
 
       const command = beginHttpCommand({
@@ -1709,6 +2129,9 @@ router.post(
           sourceObjectId: sourceObject.objectId,
           targetObjectId: targetObject.objectId,
           relationshipType: req.body?.relationshipType || req.body?.relationshipLabel,
+          behaviorId: req.body?.behaviorId || null,
+          definitionId: req.body?.definitionId || null,
+          orderKey: req.body?.orderKey || null,
           effectiveFrom: req.body?.effectiveFrom || null,
           effectiveTo: req.body?.effectiveTo || null,
           metadata: req.body?.metadata || {}
@@ -1721,10 +2144,14 @@ router.post(
         return res.json({ ...command.result, replayed: true });
       }
 
-      const trustedActorId = req.ixiAuthorityPrincipal?.principalId || null;
-      const result = createObjectRelationship({
+      const trustedActorId = req.ixiAuthorityPrincipal?.principalId ||
+        req.ixiRequestContext?.principalId || null;
+      const relationshipResult = createObjectRelationship({
         relationshipType: req.body?.relationshipType,
         relationshipLabel: req.body?.relationshipLabel,
+        behaviorId: req.body?.behaviorId,
+        definitionId: req.body?.definitionId,
+        orderKey: req.body?.orderKey,
         sourceObjectId: sourceObject.objectId,
         targetObjectId: targetObject.objectId,
         actorId: trustedActorId,
@@ -1733,6 +2160,25 @@ router.post(
         effectiveTo: req.body?.effectiveTo,
         metadata: req.body?.metadata || {}
       });
+      const result = {
+        ...relationshipResult,
+        sourceObject: await objectWithEffectiveAuthority(req, sourceObject),
+        targetObject: await objectWithEffectiveAuthority(req, targetObject),
+        relationship: decorateRelationshipWithIdentityEvidence(
+          relationshipResult.relationship,
+          {
+            sourcePassportId: sourceAdmission.passportId,
+            targetPassportId: targetAdmission.passportId
+          }
+        ),
+        identityEvidence: authoritativeRelationshipEvidence(
+          relationshipResult.relationship,
+          {
+            sourcePassportId: sourceAdmission.passportId,
+            targetPassportId: targetAdmission.passportId
+          }
+        )
+      };
       const response = { ok: true, result };
       completeCommand({ commandId: activeCommandId, result: response });
       return res.status(result.changed ? 201 : 200).json({ ...response, replayed: false });
@@ -1753,18 +2199,30 @@ router.post(
 
     try {
       const current = getRelationship(req.params.relationshipId);
-      const sourceObject = getObject(current.sourceObjectId);
-      const targetObject = getObject(current.targetObjectId);
+      const sourceCandidate = getObject(current.sourceObjectId);
+      const targetCandidate = getObject(current.targetObjectId);
+      const sourceAdmission = resolveCanonicalObjectIdentity({
+        entityId: current.entityId,
+        objectId: sourceCandidate.objectId,
+        passportId: req.body?.sourcePassportId || ""
+      });
+      const targetAdmission = resolveCanonicalObjectIdentity({
+        entityId: current.entityId,
+        objectId: targetCandidate.objectId,
+        passportId: req.body?.targetPassportId || ""
+      });
+      const sourceObject = sourceAdmission.object;
+      const targetObject = targetAdmission.object;
 
       await assertMosObjectAuthority({
         principal: req.ixiAuthorityPrincipal,
         object: sourceObject,
-        capability: "aos.move"
+        capability: "aos.relationship.end"
       });
       await assertMosObjectAuthority({
         principal: req.ixiAuthorityPrincipal,
         object: targetObject,
-        capability: "aos.move"
+        capability: "aos.relationship.end"
       });
 
       const bodyRevision = Number(req.body?.expectedRevision);
@@ -1802,8 +2260,9 @@ router.post(
         return res.json({ ...command.result, replayed: true });
       }
 
-      const trustedActorId = req.ixiAuthorityPrincipal?.principalId || null;
-      const result = endObjectRelationship({
+      const trustedActorId = req.ixiAuthorityPrincipal?.principalId ||
+        req.ixiRequestContext?.principalId || null;
+      const relationshipResult = endObjectRelationship({
         relationshipId: current.relationshipId,
         expectedRevision: bodyRevision,
         actorId: trustedActorId,
@@ -1812,6 +2271,125 @@ router.post(
         effectiveTo: req.body?.effectiveTo,
         metadata: req.body?.metadata || {}
       });
+      const result = {
+        ...relationshipResult,
+        relationship: decorateRelationshipWithIdentityEvidence(
+          relationshipResult.relationship,
+          {
+            sourcePassportId: sourceAdmission.passportId,
+            targetPassportId: targetAdmission.passportId
+          }
+        ),
+        identityEvidence: authoritativeRelationshipEvidence(
+          relationshipResult.relationship,
+          {
+            sourcePassportId: sourceAdmission.passportId,
+            targetPassportId: targetAdmission.passportId
+          }
+        )
+      };
+      const response = { ok: true, result };
+      completeCommand({ commandId: activeCommandId, result: response });
+      return res.json({ ...response, replayed: false });
+    } catch (error) {
+      if (activeCommandId && commandStarted) {
+        failCommand({ commandId: activeCommandId, error });
+      }
+      return sendMosError(res, error);
+    }
+  }
+);
+
+router.post(
+  "/relationships/:relationshipId/order",
+  async (req, res) => {
+    let activeCommandId = "";
+    let commandStarted = false;
+
+    try {
+      const current = getRelationship(req.params.relationshipId);
+      const sourceAdmission = resolveCanonicalObjectIdentity({
+        entityId: current.entityId,
+        objectId: current.sourceObjectId,
+        passportId: req.body?.sourcePassportId || ""
+      });
+      const targetAdmission = resolveCanonicalObjectIdentity({
+        entityId: current.entityId,
+        objectId: current.targetObjectId,
+        passportId: req.body?.targetPassportId || ""
+      });
+      const sourceObject = sourceAdmission.object;
+      const targetObject = targetAdmission.object;
+
+      await assertMosObjectAuthority({
+        principal: req.ixiAuthorityPrincipal,
+        object: sourceObject,
+        capability: "aos.relationship.order"
+      });
+      await assertMosObjectAuthority({
+        principal: req.ixiAuthorityPrincipal,
+        object: targetObject,
+        capability: "aos.relationship.order"
+      });
+
+      const bodyRevision = Number(req.body?.expectedRevision);
+      const rawHeaderRevision = String(req.headers["if-match"] || "")
+        .replace(/^W\//i, "")
+        .replace(/^\"|\"$/g, "")
+        .trim();
+      const headerRevision = Number(rawHeaderRevision);
+      if (!Number.isInteger(bodyRevision) || !rawHeaderRevision ||
+          !Number.isInteger(headerRevision) || headerRevision !== bodyRevision) {
+        throw new MosError(
+          "RELATIONSHIP_REVISION_REQUIRED",
+          "Matching expectedRevision and If-Match values are required.",
+          { expectedRevision: req.body?.expectedRevision, ifMatch: req.headers["if-match"] || null },
+          428
+        );
+      }
+
+      const command = beginHttpCommand({
+        req,
+        entityId: current.entityId,
+        commandType: "relationship.order",
+        payload: {
+          relationshipId: current.relationshipId,
+          expectedRevision: bodyRevision,
+          orderKey: req.body?.orderKey || null
+        }
+      });
+      activeCommandId = command.commandId;
+      commandStarted = !command.duplicate;
+
+      if (command.duplicate) {
+        return res.json({ ...command.result, replayed: true });
+      }
+
+      const relationshipResult = updateObjectRelationshipOrder({
+        relationshipId: current.relationshipId,
+        expectedRevision: bodyRevision,
+        orderKey: req.body?.orderKey,
+        actorId: req.ixiAuthorityPrincipal?.principalId ||
+          req.ixiRequestContext?.principalId || null,
+        commandId: activeCommandId
+      });
+      const result = {
+        ...relationshipResult,
+        relationship: decorateRelationshipWithIdentityEvidence(
+          relationshipResult.relationship,
+          {
+            sourcePassportId: sourceAdmission.passportId,
+            targetPassportId: targetAdmission.passportId
+          }
+        ),
+        identityEvidence: authoritativeRelationshipEvidence(
+          relationshipResult.relationship,
+          {
+            sourcePassportId: sourceAdmission.passportId,
+            targetPassportId: targetAdmission.passportId
+          }
+        )
+      };
       const response = { ok: true, result };
       completeCommand({ commandId: activeCommandId, result: response });
       return res.json({ ...response, replayed: false });
@@ -1913,6 +2491,8 @@ router.post(
   "/containers/:containerId/place",
   async (req, res) => {
     try {
+      assertLegacyContainmentWriteEnabled();
+
       const sourceObject =
         getObject(
           req.body?.objectId
@@ -2005,6 +2585,8 @@ router.post(
   "/objects/:objectId/remove-from-container",
   async (req, res) => {
     try {
+      assertLegacyContainmentWriteEnabled();
+
       const object =
         getObject(
           req.params.objectId

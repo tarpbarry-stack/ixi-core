@@ -359,43 +359,11 @@ function passportIdExists(passportId = "") {
 }
 
 function deletePassportById(passportId = "") {
-  const normalized = normalizePassportId(passportId);
-  return mutatePassportRecords(records => {
-
-    const deleted =
-      records.find(
-        record =>
-          record.passportId === normalized
-      ) || null;
-
-    if (!deleted) {
-      return {
-        records,
-        result: {
-          ok: true,
-          deleted: false,
-          alreadyDeleted: true,
-          passport: null
-        }
-      };
-    }
-
-    const remaining =
-      records.filter(
-        record =>
-          record.passportId !== normalized
-      );
-
-    return {
-      records: remaining,
-      result: {
-        ok: true,
-        deleted: true,
-        alreadyDeleted: false,
-        passport: deleted
-      }
-    };
-  });
+  const error = new Error("Permanent Passport identity cannot be deleted.");
+  error.code = "PASSPORT_PERMANENT_IDENTITY_DELETE_FORBIDDEN";
+  error.status = 410;
+  error.details = { passportId: normalizePassportId(passportId) };
+  throw error;
 }
 
 function deletePassportBySource(
@@ -420,50 +388,14 @@ function deletePassportBySource(
     );
   }
 
-  return mutatePassportRecords(records => {
-
-    const deleted =
-      records.find(
-        record => passportSources(record).some(source =>
-          source.sourceType === normalizedSourceType &&
-          source.sourceId === normalizedSourceId
-        )
-      ) || null;
-
-    if (!deleted) {
-      return {
-        records,
-        result: {
-          ok: true,
-          deleted: false,
-          alreadyDeleted: true,
-          passport: null,
-          sourceType: normalizedSourceType,
-          sourceId: normalizedSourceId
-        }
-      };
-    }
-
-    const remaining =
-      records.filter(
-        record => !passportSources(record).some(source =>
-          source.sourceType === normalizedSourceType &&
-          source.sourceId === normalizedSourceId
-        )
-      );
-
-    return {
-      records: remaining,
-      result: {
-        ok: true,
-        deleted: true,
-        alreadyDeleted: false,
-        passport: deleted,
-        sourceType: normalizedSourceType,
-        sourceId: normalizedSourceId
-      }
-    };
-  });
+  const error = new Error("Permanent Passport identity cannot be deleted by source alias.");
+  error.code = "PASSPORT_PERMANENT_IDENTITY_DELETE_FORBIDDEN";
+  error.status = 410;
+  error.details = {
+    sourceType: normalizedSourceType,
+    sourceId: normalizedSourceId
+  };
+  throw error;
 }
 
 function unbindPassportSource(

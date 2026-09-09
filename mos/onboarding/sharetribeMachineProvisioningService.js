@@ -65,18 +65,29 @@ function reusableAosObjectId({ passport, entityId }) {
 function provisionSharetribeMachine({
   entityId,
   principalId,
+  commandId,
+  creationBoundary,
   listing = {}
 } = {}) {
   const ownerEntityId = cleanText(entityId);
   const actorId = cleanText(principalId);
   const listingId = cleanText(listing.listingId);
   const displayName = cleanText(listing.displayName);
+  const governedCommandId = cleanText(commandId);
+  const boundary = cleanText(creationBoundary).toLowerCase();
+  const governedBoundaries = new Set([
+    "post-free",
+    "upload",
+    "url-import",
+    "authenticated-listing-admission.v1"
+  ]);
 
-  if (!ownerEntityId || !actorId || !listingId || !displayName) {
+  if (!ownerEntityId || !actorId || !governedCommandId ||
+      !governedBoundaries.has(boundary) || !listingId || !displayName) {
     throw new MosError(
       "IXI_MACHINE_PROVISIONING_CONTEXT_REQUIRED",
-      "Entity, authenticated principal, listing ID, and machine name are required.",
-      null,
+      "Entity, authenticated principal, idempotency command, governed creation boundary, listing ID, and machine name are required.",
+      { allowedCreationBoundaries: [...governedBoundaries] },
       400
     );
   }
@@ -93,7 +104,7 @@ function provisionSharetribeMachine({
 
   const result = provisionAosObject({
     contractVersion: "ixi-aos-object-provision-v1",
-    commandId: `sharetribe-listing:${listingId}`,
+    commandId: governedCommandId,
     entityId: ownerEntityId,
     objectType: "machine",
     displayName,
@@ -111,6 +122,7 @@ function provisionSharetribeMachine({
     }],
     metadata: {
       channel: cleanText(listing.channel) || "private",
+      creationBoundary: boundary,
       sourceListingId: listingId,
       sourceListingState: cleanText(listing.state) || null,
       authority: {

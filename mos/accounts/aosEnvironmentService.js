@@ -1,19 +1,19 @@
 const {
-  ensureAosAccount
+  ensureAosAccount,
+  getAosAccountForUser
 } = require("./aosAccountService");
 
 const {
-  ensureObjectCapabilities,
   listObjects
 } = require("../objects/objectService");
 
 const {
-  AOS_UNIVERSAL_OPERATING_CAPABILITIES
-} = require("../provisioning/aosObjectProvisioningService");
-
-const {
   listRelationships
 } = require("../relationships/relationshipService");
+
+const {
+  EDGE_BEHAVIOR_IDS
+} = require("../relationships/edgeBehaviorRegistry");
 
 const {
   rebuildEntityProjections
@@ -28,10 +28,23 @@ const {
 } = require("../errors/MosError");
 
 const {
-  filterDiscoverableObjects
+  filterDiscoverableObjects,
+  buildMosObjectActorAuthority
 } = require(
   "../../authority/IXIAuthorityMosBridge"
 );
+
+const {
+  principalFromMosMembership
+} = require("../security/mosMembershipAuthorityService");
+
+const {
+  resolveCanonicalObjectIdentity
+} = require("../identity/canonicalObjectAdmissionService");
+
+const {
+  decorateRelationshipWithIdentityEvidence
+} = require("../relationships/relationshipIdentityEvidenceService");
 
 function buildProjectionMap(
   projections = []
@@ -50,13 +63,103 @@ function buildProjectionMap(
   return map;
 }
 
+function buildRailProjectionMap(relationships = [], objects = []) {
+  const map = {};
+  const objectsById = new Map(
+    objects.map(object => [cleanText(object?.objectId), object])
+  );
+  const projectedMembersByOwner = new Map();
+
+  relationships
+    .filter(relationship =>
+      relationship?.status === "active" && (
+        relationship?.behaviorId === EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP ||
+        (
+          !cleanText(relationship?.behaviorId) &&
+          cleanText(
+            objectsById.get(cleanText(relationship?.sourceObjectId))
+              ?.directContainerId
+          ) === cleanText(relationship?.targetObjectId)
+        )
+      )
+    )
+    .sort((left, right) =>
+      Number(right?.behaviorId === EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP) -
+        Number(left?.behaviorId === EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP) ||
+      cleanText(left?.orderKey).localeCompare(cleanText(right?.orderKey)) ||
+      cleanText(left?.createdAt).localeCompare(cleanText(right?.createdAt)) ||
+      cleanText(left?.relationshipId).localeCompare(cleanText(right?.relationshipId))
+    )
+    .forEach(relationship => {
+      const sourceIdentity = resolveCanonicalObjectIdentity({
+        entityId: relationship.entityId,
+        objectId: relationship.sourceObjectId
+      });
+      const targetIdentity = resolveCanonicalObjectIdentity({
+        entityId: relationship.entityId,
+        objectId: relationship.targetObjectId
+      });
+      const railOwnerObjectId = cleanText(relationship.targetObjectId);
+      const projectedMemberKey = `${railOwnerObjectId}\u0000${sourceIdentity.objectId}`;
+      if (projectedMembersByOwner.has(projectedMemberKey)) return;
+      projectedMembersByOwner.set(projectedMemberKey, relationship.relationshipId);
+      const governed =
+        relationship.behaviorId === EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP;
+      if (!map[railOwnerObjectId]) {
+        map[railOwnerObjectId] = {
+          railOwnerObjectId,
+          railOwnerPassportId: targetIdentity.passportId,
+          railOwnerIdentity: {
+            objectId: targetIdentity.objectId,
+            passportId: targetIdentity.passportId,
+            entityId: targetIdentity.entityId
+          },
+          behaviorId: EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP,
+          members: []
+        };
+      }
+      map[railOwnerObjectId].members.push({
+        objectId: sourceIdentity.objectId,
+        passportId: sourceIdentity.passportId,
+        sourceIdentity: {
+          objectId: sourceIdentity.objectId,
+          passportId: sourceIdentity.passportId,
+          entityId: sourceIdentity.entityId
+        },
+        targetIdentity: {
+          objectId: targetIdentity.objectId,
+          passportId: targetIdentity.passportId,
+          entityId: targetIdentity.entityId
+        },
+        relationshipId: relationship.relationshipId,
+        relationshipRevision: Number(relationship.revision || 0),
+        relationshipStatus: relationship.status,
+        behaviorId: relationship.behaviorId || null,
+        definitionId: relationship.definitionId || null,
+        orderKey: relationship.orderKey || null,
+        customerLabel: relationship.relationshipLabel || null,
+        migrationEvidence: governed
+          ? null
+          : {
+              kind: "legacy-direct-container-corroborated.v1",
+              readOnly: true,
+              directContainerId: railOwnerObjectId
+            }
+      });
+    });
+
+  return map;
+}
+
 async function loadAosEnvironment({
   ownerUserId,
   displayName = "IXI Entity",
   metadata = {},
 
   trustedEntity = null,
-  authorityPrincipal = null
+  authorityPrincipal = null,
+  strictAuthorization = false,
+  allowProvisioning = true
 }) {
   const normalizedUserId =
     cleanText(ownerUserId);
@@ -117,16 +220,16 @@ async function loadAosEnvironment({
     };
   } else {
     bootstrap =
-      ensureAosAccount({
-        ownerUserId:
-          normalizedUserId,
-
-        displayName:
-          cleanText(displayName) ||
-          "IXI Entity",
-
-        metadata
-      });
+      allowProvisioning
+        ? ensureAosAccount({
+            ownerUserId: normalizedUserId,
+            displayName: cleanText(displayName) || "IXI Entity",
+            metadata
+          })
+        : {
+            ...getAosAccountForUser(normalizedUserId),
+            created: { account: false, entity: false, membership: false }
+          };
   }
 
   const {
@@ -136,31 +239,42 @@ async function loadAosEnvironment({
     created
   } = bootstrap;
 
+  const effectiveAuthorityPrincipal =
+    authorityPrincipal ||
+    principalFromMosMembership(membership, {
+      strictAuthorization
+    });
+
   const objects =
     listObjects({
       entityId:
         entity.entityId,
       status: "active"
-    }).map(object =>
-      ensureObjectCapabilities({
-        objectId: object.objectId,
-        requiredCapabilities:
-          AOS_UNIVERSAL_OPERATING_CAPABILITIES,
-        actorId:
-          authorityPrincipal?.principalId ||
-          normalizedUserId
-      })
-    );
+    });
 
   const discoverableObjects =
-    authorityPrincipal
+    effectiveAuthorityPrincipal
       ? await filterDiscoverableObjects({
           principal:
-            authorityPrincipal,
+            effectiveAuthorityPrincipal,
 
           objects
         })
       : objects;
+
+  const authorizedObjects = await Promise.all(
+    discoverableObjects.map(async object => ({
+      ...object,
+      ...(await buildMosObjectActorAuthority({
+        principal: effectiveAuthorityPrincipal,
+        object
+      }))
+    }))
+  );
+
+  const authorizedObjectById = new Map(
+    authorizedObjects.map(object => [object.objectId, object])
+  );
 
   const visibleObjectIds =
     new Set(
@@ -178,7 +292,7 @@ async function loadAosEnvironment({
     }).filter(relationship =>
       visibleObjectIds.has(relationship.sourceObjectId) &&
       visibleObjectIds.has(relationship.targetObjectId)
-    );
+    ).map(relationship => decorateRelationshipWithIdentityEvidence(relationship));
 
   const rootObjects =
     discoverableObjects.filter(
@@ -187,7 +301,7 @@ async function loadAosEnvironment({
         !visibleObjectIds.has(
           object.directContainerId
         )
-    );
+    ).map(object => authorizedObjectById.get(object.objectId));
 
   const projections =
     rebuildEntityProjections(
@@ -249,9 +363,15 @@ async function loadAosEnvironment({
     entity,
 
     objects:
-      discoverableObjects,
+      authorizedObjects,
 
     relationships,
+
+    railProjections:
+      buildRailProjectionMap(
+        relationships,
+        discoverableObjects
+      ),
 
     rootObjects,
 
@@ -265,5 +385,6 @@ async function loadAosEnvironment({
 }
 
 module.exports = {
+  buildRailProjectionMap,
   loadAosEnvironment
 };

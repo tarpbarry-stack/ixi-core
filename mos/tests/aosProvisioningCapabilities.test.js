@@ -11,15 +11,12 @@ process.env.IXI_MOS_DATA_ROOT = path.join(testRoot, "mos");
 process.env.IXI_PASSPORT_DATA_FILE = path.join(testRoot, "passports.json");
 
 const { createEntity } = require("../entities/entityService");
-const {
-  AOS_UNIVERSAL_OPERATING_CAPABILITIES,
-  provisionAosObject
-} = require("../provisioning/aosObjectProvisioningService");
+const { provisionAosObject } = require("../provisioning/aosObjectProvisioningService");
 const { getObject } = require("../objects/objectService");
 
 test.after(() => fs.rmSync(testRoot, { recursive: true, force: true }));
 
-test("every provisioned AOS object is Passport-backed and receives universal operating capabilities", () => {
+test("provisioning creates permanent identity without manufacturing action authority", () => {
   const entity = createEntity({ displayName: "Universal Object Company", actorId: "owner-1" });
   const result = provisionAosObject({
     commandId: "provision-universal-object-001",
@@ -34,14 +31,9 @@ test("every provisioned AOS object is Passport-backed and receives universal ope
   assert.equal(result.ok, true);
   assert.equal(result.transact.eligible, true);
   assert.ok(result.passport.passportId);
-  assert.deepEqual(
-    Object.fromEntries(Object.keys(AOS_UNIVERSAL_OPERATING_CAPABILITIES).map(key => [key, result.object.capabilities[key]])),
-    AOS_UNIVERSAL_OPERATING_CAPABILITIES
-  );
-
   const persisted = getObject(result.object.objectId);
   assert.equal(persisted.metadata.transactEligible, true);
-  assert.equal(persisted.capabilities.canTransact, true);
+  assert.equal(persisted.capabilities.canTransact, undefined);
   assert.equal(persisted.capabilities.canContain, true);
-  assert.equal(persisted.capabilities.canCreate, true);
+  assert.equal(persisted.capabilities.canCreate, undefined);
 });

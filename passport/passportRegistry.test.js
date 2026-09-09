@@ -12,6 +12,7 @@ process.env.IXI_PASSPORT_DATA_FILE = path.join(testRoot, "passports.json");
 const {
   readPassportRecords,
   writePassportRecords,
+  deletePassportById,
   deletePassportBySource,
   unbindPassportSource
 } = require("./passportRegistry");
@@ -62,7 +63,7 @@ test("atomic writes preserve the existing registry mode", () => {
   assert.equal(fs.existsSync(`${process.env.IXI_PASSPORT_DATA_FILE}.lock`), false);
 });
 
-test("source deletion recognizes aliases in sources[]", () => {
+test("permanent Passport deletion by ID or source is prohibited", () => {
   writePassportRecords([
     {
       passportId: "IXITEST002",
@@ -75,9 +76,15 @@ test("source deletion recognizes aliases in sources[]", () => {
     }
   ]);
 
-  const result = deletePassportBySource("sharetribe-user", "user_1");
-  assert.equal(result.deleted, true);
-  assert.deepEqual(readPassportRecords(), []);
+  assert.throws(
+    () => deletePassportById("IXITEST002"),
+    error => error?.code === "PASSPORT_PERMANENT_IDENTITY_DELETE_FORBIDDEN"
+  );
+  assert.throws(
+    () => deletePassportBySource("sharetribe-user", "user_1"),
+    error => error?.code === "PASSPORT_PERMANENT_IDENTITY_DELETE_FORBIDDEN"
+  );
+  assert.equal(readPassportRecords().length, 1);
 });
 
 test("source unbinding preserves the Passport and its other identities", () => {

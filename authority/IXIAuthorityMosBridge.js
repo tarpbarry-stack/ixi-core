@@ -129,6 +129,14 @@ async function evaluateMosObjectAuthority({
 
 
   if (!identity.passportId) {
+    if (principal.strictAuthorization === true) {
+      return {
+        enforced: true,
+        allowed: false,
+        reason: "strict-object-passport-required",
+        objectId: clean(identity.object?.objectId)
+      };
+    }
     return {
       enforced:
         false,
@@ -160,12 +168,6 @@ async function evaluateMosObjectAuthority({
    * - the principal carries a direct deny
    */
 
-  const policyChain =
-    await resolveAuthorityPolicyChain(
-      identity.passportId
-    );
-
-
   const capabilityName =
     clean(
       capability
@@ -188,17 +190,49 @@ async function evaluateMosObjectAuthority({
       : [];
 
 
-  const hasAuthorityEvidence =
-    policyChain.policies.length > 0 ||
-    directGrants.includes(
-      capabilityName
-    ) ||
-    directDenies.includes(
-      capabilityName
+  if (directDenies.some(item => item === capabilityName || item === "*")) {
+    return {
+      enforced: true,
+      allowed: false,
+      decision: "deny",
+      reason: "principal-direct-deny",
+      capability: capabilityName,
+      objectId: clean(identity.object?.objectId),
+      passportId: identity.passportId
+    };
+  }
+
+
+  /*
+   * Legacy in-process callers receive the bootstrap owner wildcard while
+   * strict gateway requests always evaluate authoritative Object policies.
+   */
+  if (principal.strictAuthorization !== true && directGrants.includes("*")) {
+    return {
+      enforced: false,
+      allowed: true,
+      decision: "allow",
+      reason: "compatibility-owner-wildcard",
+      capability: capabilityName,
+      objectId: clean(identity.object?.objectId),
+      passportId: identity.passportId
+    };
+  }
+
+
+  const policyChain =
+    await resolveAuthorityPolicyChain(
+      identity.passportId
     );
 
 
-  if (!hasAuthorityEvidence) {
+  const hasAuthorityEvidence =
+    policyChain.policies.length > 0 ||
+    directGrants.some(item => item === capabilityName || item === "*") ||
+    directDenies.some(item => item === capabilityName || item === "*");
+
+
+  if (!hasAuthorityEvidence && principal.strictAuthorization !== true) {
     return {
       enforced:
         false,
@@ -245,6 +279,40 @@ async function evaluateMosObjectAuthority({
 
     passportId:
       identity.passportId
+  };
+}
+
+const ACTOR_AUTHORITY_CAPABILITIES = Object.freeze({
+  canCreateChild: "aos.create",
+  canCreateObject: "aos.create",
+  canRelate: "aos.relationship.create",
+  canEndRelationship: "aos.relationship.end",
+  canOrderRelationship: "aos.relationship.order",
+  canEdit: "aos.edit",
+  canTransact: "transact.open",
+  canOpenConsole: "aos.console.open",
+  canHide: "aos.archive",
+  canArchive: "aos.archive",
+  canDelete: "aos.delete",
+  canViewFinancial: "transact.financial-reporting.view",
+  canViewFinancialInformation: "transact.financial-reporting.view"
+});
+
+async function buildMosObjectActorAuthority({ principal, object } = {}) {
+  const decisions = {};
+  const actorAuthority = {};
+
+  for (const capability of new Set(Object.values(ACTOR_AUTHORITY_CAPABILITIES))) {
+    const decision = await evaluateMosObjectAuthority({ principal, object, capability });
+    decisions[capability] = decision;
+  }
+  for (const [key, capability] of Object.entries(ACTOR_AUTHORITY_CAPABILITIES)) {
+    actorAuthority[key] = decisions[capability].allowed === true;
+  }
+
+  return {
+    actorAuthority: Object.freeze(actorAuthority),
+    authorityDecisions: Object.freeze(decisions)
   };
 }
 
@@ -464,5 +532,7 @@ module.exports = {
   evaluateMosObjectAuthority,
   assertMosObjectAuthority,
 
-  filterDiscoverableObjects
+  filterDiscoverableObjects,
+  buildMosObjectActorAuthority,
+  ACTOR_AUTHORITY_CAPABILITIES
 };
