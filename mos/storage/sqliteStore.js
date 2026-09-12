@@ -229,8 +229,11 @@ class MosSqliteStore {
     `).get(key) || null;
   }
 
-  health() {
-    const integrity = this.database.prepare("PRAGMA quick_check;").get();
+  health({ deep = false } = {}) {
+    const reachable = this.database.prepare("SELECT 1 AS ok;").get();
+    const integrity = deep
+      ? this.database.prepare("PRAGMA quick_check;").get()?.quick_check || "unknown"
+      : "not-checked";
     const collections = this.database.prepare(
       "SELECT COUNT(*) AS count FROM mos_collections"
     ).get();
@@ -242,7 +245,7 @@ class MosSqliteStore {
     ).get();
 
     return {
-      ok: integrity?.quick_check === "ok",
+      ok: Number(reachable?.ok) === 1 && (!deep || integrity === "ok"),
       provider: "sqlite",
       databasePath: this.databasePath,
       journalMode: "wal",
@@ -250,7 +253,8 @@ class MosSqliteStore {
       collections: Number(collections?.count || 0),
       historyVersions: Number(history?.count || 0),
       migrations: Number(migrations?.count || 0),
-      integrity: integrity?.quick_check || "unknown"
+      integrity,
+      integrityChecked: deep
     };
   }
 

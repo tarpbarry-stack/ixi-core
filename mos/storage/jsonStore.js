@@ -37,8 +37,8 @@ function updateJsonFile(filePath, fallback, updater) {
     : jsonFileStore.updateJsonFile(filePath, fallback, updater);
 }
 
-function describeMosStorage() {
-  if (configuredProvider() === "sqlite") return sqlite().health();
+function describeMosStorage(options = {}) {
+  if (configuredProvider() === "sqlite") return sqlite().health(options);
   return {
     ok: true,
     provider: "json",

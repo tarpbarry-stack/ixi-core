@@ -63,6 +63,32 @@ test("atomic writes preserve the existing registry mode", () => {
   assert.equal(fs.existsSync(`${process.env.IXI_PASSPORT_DATA_FILE}.lock`), false);
 });
 
+test("an active registry lock fails fast without blocking the service", () => {
+  const lockFile = `${process.env.IXI_PASSPORT_DATA_FILE}.lock`;
+  fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid }), "utf8");
+  const startedAt = Date.now();
+
+  assert.throws(
+    () => writePassportRecords([{ passportId: "IXILOCKED01" }]),
+    error => error?.code === "PASSPORT_REGISTRY_BUSY" &&
+      error?.status === 503 && error?.retryable === true
+  );
+  assert.ok(Date.now() - startedAt < 250);
+  fs.unlinkSync(lockFile);
+});
+
+test("a stale registry lock is recovered without weakening atomic writes", () => {
+  const lockFile = `${process.env.IXI_PASSPORT_DATA_FILE}.lock`;
+  fs.writeFileSync(lockFile, JSON.stringify({ pid: 999999 }), "utf8");
+  const staleAt = new Date(Date.now() - 60000);
+  fs.utimesSync(lockFile, staleAt, staleAt);
+
+  writePassportRecords([{ passportId: "IXISTALE01" }]);
+
+  assert.deepEqual(readPassportRecords(), [{ passportId: "IXISTALE01" }]);
+  assert.equal(fs.existsSync(lockFile), false);
+});
+
 test("permanent Passport deletion by ID or source is prohibited", () => {
   writePassportRecords([
     {

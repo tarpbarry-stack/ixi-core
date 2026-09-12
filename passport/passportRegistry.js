@@ -11,7 +11,6 @@ const {
 } = require("./passportSnEngine");
 
 const DEFAULT_PASSPORT_DATA_FILE = path.join(__dirname, "passports.json");
-const PASSPORT_LOCK_TIMEOUT_MS = 5000;
 const PASSPORT_STALE_LOCK_MS = 30000;
 
 function getPassportDataFile() {
@@ -96,16 +95,10 @@ function passportSources(record = {}) {
     });
 }
 
-function sleepSync(milliseconds) {
-  const wait = new Int32Array(new SharedArrayBuffer(4));
-  Atomics.wait(wait, 0, 0, milliseconds);
-}
-
 function acquirePassportRegistryLock() {
   const passportDataFile = getPassportDataFile();
   fs.mkdirSync(path.dirname(passportDataFile), { recursive: true });
   const lockFile = `${passportDataFile}.lock`;
-  const deadline = Date.now() + PASSPORT_LOCK_TIMEOUT_MS;
 
   while (true) {
     try {
@@ -140,14 +133,13 @@ function acquirePassportRegistryLock() {
         );
       }
 
-      if (Date.now() >= deadline) {
-        throw registryError(
-          "PASSPORT_REGISTRY_LOCK_TIMEOUT",
-          `IXI Passport registry remained locked: ${lockFile}`
-        );
-      }
-
-      sleepSync(25);
+      const busy = registryError(
+        "PASSPORT_REGISTRY_BUSY",
+        `IXI Passport registry is busy: ${lockFile}`
+      );
+      busy.status = 503;
+      busy.retryable = true;
+      throw busy;
     }
   }
 }

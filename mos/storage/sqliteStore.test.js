@@ -146,3 +146,20 @@ test("SQLite backup is integrity-checked and recoverable", () => {
   assert.deepEqual(recovered.read(files.collectionPath, {}), { recoverable: true });
   recovered.close();
 });
+
+test("routine storage health is lightweight and deep integrity is explicit", () => {
+  const files = fixture();
+  const store = new MosSqliteStore(files);
+  store.write(files.collectionPath, { healthy: true });
+
+  const routine = store.health();
+  assert.equal(routine.ok, true);
+  assert.equal(routine.integrity, "not-checked");
+  assert.equal(routine.integrityChecked, false);
+
+  const deep = store.health({ deep: true });
+  assert.equal(deep.ok, true);
+  assert.equal(deep.integrity, "ok");
+  assert.equal(deep.integrityChecked, true);
+  store.close();
+});

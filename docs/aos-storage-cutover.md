@@ -48,7 +48,9 @@ module in production.
 
 6. Preserve the reported `backupPath`. Do not delete or edit the legacy JSON.
 7. Set `IXI_MOS_STORAGE_PROVIDER=sqlite` in the durable PM2 environment.
-8. Start IX Core with its updated environment and request `/health`.
+8. Start IX Core with its updated environment, request `/live`, and then
+   request `/ready`. Run deep SQLite integrity verification as a separate
+   controlled release gate.
 9. Require all of the following before ending maintenance:
 
    - HTTP 200
@@ -73,7 +75,8 @@ its retained history, or execute a separately reviewed reverse export.
 - Set `IXI_MOS_BACKUP_S3_BUCKET` to a versioned, encrypted bucket and schedule
   `npm run mos:storage:backup`; the command verifies both source and backup,
   records a SHA-256 checksum, and uploads the verified copy to S3.
-- Alert on `/health` returning 503, checksum failure or integrity failure.
+- Alert on `/live` or `/ready` returning 503. Alert separately on a checksum
+  or deep-integrity failure from the controlled backup/release gate.
 - Treat `MOS_STORAGE_CONFLICT` as HTTP 409 and retry from a fresh canonical
   read; never overwrite it.
 - Never run two storage providers against the same live Entity.

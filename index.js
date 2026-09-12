@@ -178,6 +178,19 @@ app.get("/", (req, res) => {
   });
 });
 
+/*
+ * Liveness must never touch durable storage. Process supervisors and load
+ * balancers need an immediate answer even while a deeper readiness check is
+ * unavailable.
+ */
+app.get("/live", (req, res) => {
+  res.json({
+    ok: true,
+    service: "ix-core",
+    state: "live"
+  });
+});
+
 app.get("/health", (req, res) => {
   try {
     const mosStorage = describeMosStorage();
@@ -190,6 +203,29 @@ app.get("/health", (req, res) => {
     res.status(503).json({
       ok: false,
       service: "ix-core",
+      mosStorage: {
+        ok: false,
+        code: error?.code || "MOS_STORAGE_UNAVAILABLE",
+        error: error?.message || String(error)
+      }
+    });
+  }
+});
+
+app.get("/ready", (req, res) => {
+  try {
+    const mosStorage = describeMosStorage();
+    res.status(mosStorage.ok ? 200 : 503).json({
+      ok: mosStorage.ok,
+      service: "ix-core",
+      state: mosStorage.ok ? "ready" : "not-ready",
+      mosStorage
+    });
+  } catch (error) {
+    res.status(503).json({
+      ok: false,
+      service: "ix-core",
+      state: "not-ready",
       mosStorage: {
         ok: false,
         code: error?.code || "MOS_STORAGE_UNAVAILABLE",

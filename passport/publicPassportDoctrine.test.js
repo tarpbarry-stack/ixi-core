@@ -9,6 +9,8 @@ const test = require("node:test");
 const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ixi-passport-doctrine-"));
 process.env.IXI_PASSPORT_DATA_FILE = path.join(testRoot, "passports.json");
 process.env.IXI_MOS_DATA_ROOT = path.join(testRoot, "mos");
+process.env.IXI_MOS_STORAGE_PROVIDER = "sqlite";
+process.env.IXI_MOS_SQLITE_PATH = path.join(testRoot, "mos", "ixi-aos.sqlite");
 
 const { writePassportRecords, readPassportRecords } = require("./passportRegistry");
 const { app } = require("../index");
@@ -46,6 +48,32 @@ test("generic Passport birth and permanent deletion endpoints return doctrine er
     assert.equal(bySource.status, 410);
     assert.equal((await bySource.json()).error.code, "PASSPORT_SOURCE_DELETE_RETIRED");
     assert.equal(readPassportRecords().length, 1);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test("liveness is storage-free and readiness avoids synchronous integrity scans", async () => {
+  const server = await new Promise(resolve => {
+    const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+  });
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const live = await fetch(`${baseUrl}/live`);
+    assert.equal(live.status, 200);
+    assert.deepEqual(await live.json(), {
+      ok: true,
+      service: "ix-core",
+      state: "live"
+    });
+
+    const ready = await fetch(`${baseUrl}/ready`);
+    assert.equal(ready.status, 200);
+    const readiness = await ready.json();
+    assert.equal(readiness.ok, true);
+    assert.equal(readiness.state, "ready");
+    assert.equal(readiness.mosStorage.integrity, "not-checked");
+    assert.equal(readiness.mosStorage.integrityChecked, false);
   } finally {
     await new Promise(resolve => server.close(resolve));
   }
