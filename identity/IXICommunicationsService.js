@@ -59,6 +59,21 @@ const SES_CONFIGURATION_SET =
   "my-first-configuration-set";
 
 
+const PASSPORT_SES_FROM_EMAIL =
+  process.env.IXI_PASSPORT_SES_FROM_EMAIL ||
+  SES_FROM_EMAIL;
+
+
+const PASSPORT_SES_FROM_NAME =
+  process.env.IXI_PASSPORT_SES_FROM_NAME ||
+  "IXI Machine Passport";
+
+
+const PASSPORT_SES_REPLY_TO =
+  process.env.IXI_PASSPORT_SES_REPLY_TO ||
+  SES_REPLY_TO;
+
+
 const AOS_ACCESS_SETUP_URL =
   process.env.IXI_AOS_ACCESS_SETUP_URL ||
   "https://preview.ironxchange.com/aos/access/setup";
@@ -402,7 +417,10 @@ async function sendTransactionalEmail({
   subject,
   text,
   html,
-  messageTags = []
+  messageTags = [],
+  fromEmail = SES_FROM_EMAIL,
+  fromName = SES_FROM_NAME,
+  replyTo = SES_REPLY_TO
 } = {}) {
   const recipient =
     normalizeEmail(
@@ -424,7 +442,7 @@ async function sendTransactionalEmail({
 
   const commandInput = {
     FromEmailAddress:
-      `${SES_FROM_NAME} <${SES_FROM_EMAIL}>`,
+      `${clean(fromName)} <${normalizeEmail(fromEmail)}>`,
 
     Destination: {
       ToAddresses: [
@@ -433,7 +451,7 @@ async function sendTransactionalEmail({
     },
 
     ReplyToAddresses: [
-      SES_REPLY_TO
+      normalizeEmail(replyTo)
     ],
 
     Content: {
@@ -526,6 +544,62 @@ async function sendTransactionalEmail({
 }
 
 
+async function sendPassportEmail({
+  to,
+  subject,
+  text,
+  html,
+  passportId,
+  listingId,
+  principalId
+} = {}) {
+  const safeTag = value =>
+    clean(value)
+      .replace(/[^A-Za-z0-9_-]/g, "_")
+      .slice(0, 200) ||
+    "unknown";
+
+  return sendTransactionalEmail({
+    to,
+    subject,
+    text,
+    html,
+    fromEmail:
+      PASSPORT_SES_FROM_EMAIL,
+    fromName:
+      PASSPORT_SES_FROM_NAME,
+    replyTo:
+      PASSPORT_SES_REPLY_TO,
+    messageTags: [
+      {
+        Name:
+          "ixi-message-type",
+        Value:
+          "machine-passport"
+      },
+      {
+        Name:
+          "ixi-passport",
+        Value:
+          safeTag(passportId)
+      },
+      {
+        Name:
+          "ixi-listing",
+        Value:
+          safeTag(listingId)
+      },
+      {
+        Name:
+          "ixi-principal",
+        Value:
+          safeTag(principalId)
+      }
+    ]
+  });
+}
+
+
 async function sendEmployeeInvitation({
   email,
   temporaryPassword,
@@ -611,11 +685,15 @@ async function sendEmployeeInvitation({
 module.exports = {
   SES_FROM_EMAIL,
   SES_CONFIGURATION_SET,
+  PASSPORT_SES_FROM_EMAIL,
+  PASSPORT_SES_FROM_NAME,
+  PASSPORT_SES_REPLY_TO,
   AOS_ACCESS_SETUP_URL,
 
   buildEmployeeAccessUrl,
   buildEmployeeInvitationEmail,
 
   sendTransactionalEmail,
+  sendPassportEmail,
   sendEmployeeInvitation
 };
