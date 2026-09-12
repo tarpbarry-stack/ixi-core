@@ -1,0 +1,46 @@
+name: Passport Email Contract Tests
+
+on:
+  pull_request:
+    paths:
+      - 'communications/**'
+      - 'identity/IXICommunicationsService.js'
+      - 'passport/**'
+      - 'index.js'
+      - 'package.json'
+      - '.github/workflows/passport-email-contract-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'communications/**'
+      - 'identity/IXICommunicationsService.js'
+      - 'passport/**'
+      - 'index.js'
+      - 'package.json'
+      - '.github/workflows/passport-email-contract-tests.yml'
+
+jobs:
+  passport-email-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Syntax check
+        run: |
+          node --check communications/passportEmailStore.js
+          node --check communications/passportEmailRoutes.js
+          node --check communications/passportEmailRoutes.test.js
+          node --check identity/IXICommunicationsService.js
+          node --check index.js
+
+      - name: Verify Passport email contract
+        run: node --test communications/passportEmailRoutes.test.js
