@@ -54,6 +54,8 @@
  */
 
 const crypto = require("crypto");
+const { expenseCreatesPayable, isPayableSource } = require("./IXIFinancialExpensePaymentPolicy");
+const { findPaymentReplay } = require("./IXIFinancialPaymentReplay");
 
 const {
   createFinancialDocumentByType,
@@ -159,18 +161,17 @@ async function assertPayablesSettlementAvailable({
     (type === "credit" && sourceType === "invoice")
   )
     return { checked: false };
-  const approval = clean(bill?.billRecord?.approval?.status).toLowerCase();
+  const expensePayable = expenseCreatesPayable(bill);
+  const approval = expensePayable ? "approved" : clean(bill?.billRecord?.approval?.status).toLowerCase();
   const recognized = ["billed", "incurred", "partially-paid", "paid"].includes(
     clean(bill.financialState).toLowerCase(),
   );
   if (
     !sourceResult?.ok ||
-    !["bill", "supplier-invoice"].includes(
-      clean(bill.documentType).toLowerCase(),
-    )
+    !isPayableSource(bill)
   )
     throw Object.assign(
-      new Error("A/P settlement source must be a canonical Bill."),
+      new Error("Select an unpaid Bill or Expense. An expense already paid with company money must not be paid twice."),
       { name: "IXIFinancialSettlementSourceError" },
     );
   if (approval !== "approved" || !recognized)
@@ -178,7 +179,7 @@ async function assertPayablesSettlementAvailable({
       new Error("A/P settlement requires an approved, recognized Bill."),
       { name: "IXIFinancialSettlementStateError" },
     );
-  const billEntity = clean(bill?.billRecord?.context?.entityPassportId);
+  const billEntity = clean(sourceResult?.data?.record?.server?.entityPassportId || bill?.billRecord?.context?.entityPassportId || bill?.expenseRecord?.context?.entityPassportId || safeArray(bill.references).find(ref => clean(ref.role) === "entity")?.passportId);
   if (!billEntity || billEntity !== clean(entityPassportId))
     throw Object.assign(
       new Error("A/P settlement Bill is outside the authenticated Entity."),
@@ -192,6 +193,11 @@ async function assertPayablesSettlementAvailable({
       new Error("A/P settlement balance could not be verified."),
       { name: "IXIFinancialSettlementReadError" },
     );
+  const activeControls = safeArray(listed?.data?.documents).map(financialDocumentFromRecord)
+    .filter(item => item.documentType === "payables-control" && clean(item.sourceFinancialDocumentId || item.payablesControl?.payable?.billId) === sourceId && !["void", "reversed"].includes(clean(item.financialState)));
+  if (type === "payment" && activeControls.some(item => item.payablesControl?.control?.hold || item.payablesControl?.dispute?.open)) {
+    throw Object.assign(new Error("This payment is on hold or disputed. Resolve it in A/P before marking it paid."), { name: "IXIFinancialPaymentHoldError" });
+  }
   const existing = safeArray(listed?.data?.documents)
     .map(financialDocumentFromRecord)
     .filter(
@@ -571,16 +577,14 @@ async function assertPayablesControlSource({
     bill = financialDocumentFromRecord(sourceResult?.data?.record);
   if (
     !sourceResult?.ok ||
-    !["bill", "supplier-invoice"].includes(
-      clean(bill.documentType).toLowerCase(),
-    )
+    !isPayableSource(bill)
   )
     throw Object.assign(
       new Error("A/P control source must be a canonical Bill."),
       { name: "IXIFinancialSettlementSourceError" },
     );
   if (
-    clean(bill?.billRecord?.context?.entityPassportId) !==
+    clean(sourceResult?.data?.record?.server?.entityPassportId || bill?.billRecord?.context?.entityPassportId || bill?.expenseRecord?.context?.entityPassportId || safeArray(bill.references).find(ref => clean(ref.role) === "entity")?.passportId) !==
     clean(entityPassportId)
   )
     throw Object.assign(
@@ -1481,6 +1485,8 @@ async function executeCreateFinancialDocumentCommand(input = {}, options = {}) {
   }
 
   try {
+    const replay = await findPaymentReplay(command, { getIdempotency: financialStore.getIdempotencyRecord, getDocument: providerService.getDocument });
+    if (replay) return replay;
     await assertPayablesSettlementAvailable({
       financialDocument: validation.normalized,
       entityPassportId: command.entityPassportId,

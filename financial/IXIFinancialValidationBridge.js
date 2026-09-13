@@ -246,6 +246,7 @@ const BILL_RECOGNIZED_STATES = new Set([
 ]);
 
 const EXPENSE_PAYMENT_METHODS = new Set([
+  "unpaid",
   "company-card",
   "company-cash",
   "my-money",
@@ -809,12 +810,6 @@ function validateFinancialDocument(document = {}) {
   if (documentType === "payment") {
     if (!normalizedLines.some((line) => Number(line?.amount) > 0))
       errors.push("payment amount must be greater than zero.");
-    if (
-      clean(source.paymentDirection).toLowerCase() === "outflow" &&
-      clean(source.sourceFinancialDocumentId) &&
-      !clean(source.transactionReference)
-    )
-      errors.push("linked outgoing payment transactionReference is required.");
     if (source?.metadata?.customerDeposit === true) {
       if (
         clean(source.paymentDirection).toLowerCase() !== "inflow" ||

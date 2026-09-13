@@ -53,6 +53,7 @@ const financialStore = require("./IXIFinancialDynamoStore");
 const financialCommandRoutes = require("./IXIFinancialCommandRoutes");
 
 const { assertFinancialPeriodOpen, assertPayablesSettlementAvailable } = require("./IXIFinancialCommandEngine");
+const { isPayableSource } = require("./IXIFinancialExpensePaymentPolicy");
 
 const authorizedFinancialService = require("./IXIFinancialAuthorizedService");
 
@@ -105,6 +106,7 @@ function safeObject(value) {
 
 function getBillPatchAction(existing = {}, merged = {}) {
   const type = clean(merged.documentType).toLowerCase();
+  if (type === "payment") return IXI_FINANCIAL_ACTIONS.RECORD_PAYMENT;
   if (type === "payables-control") return IXI_FINANCIAL_ACTIONS.MANAGE_PAYABLES;
   if (type === "collection") return IXI_FINANCIAL_ACTIONS.MANAGE_COLLECTIONS;
   if (type === "settlement") {
@@ -1502,11 +1504,33 @@ router.patch("/documents/:financialDocumentId", async (req, res) => {
     );
   }
 
+  if (/^ixi-payment-(edit|void|details):/.test(clean(req.body?.idempotencyKey))) {
+    const replay = await financialStore.getIdempotencyRecord(req.body.idempotencyKey);
+    if (replay) {
+      if (clean(replay.financialDocumentId) !== clean(req.params.financialDocumentId)) return res.status(409).json({ ok: false, errors: [{ message: "This correction belongs to another payment. Reopen the original record." }] });
+      return res.json({ ok: true, data: { record: existing, updated: false, idempotentReplay: true }, errors: [], warnings: [] });
+    }
+  }
   if (clean(mergedDocument.documentType).toLowerCase() === "credit") {
     try {
       if (clean(existing?.financialDocument?.sourceFinancialDocumentId) !== clean(mergedDocument.sourceFinancialDocumentId)) throw new Error("A saved credit must remain linked to its original Bill.");
       await assertPayablesSettlementAvailable({ financialDocument: mergedDocument, entityPassportId: accessContext.entityPassportId, excludeFinancialDocumentId: req.params.financialDocumentId });
       await assertFinancialPeriodOpen({ financialDocument: existing.financialDocument, entityPassportId: accessContext.entityPassportId });
+      await assertFinancialPeriodOpen({ financialDocument: mergedDocument, entityPassportId: accessContext.entityPassportId });
+    } catch (error) { return res.status(409).json({ ok: false, errors: [{ name: error.name, message: error.message, details: error.details || {} }] }); }
+  }
+  if (clean(existing?.financialDocument?.documentType).toLowerCase() === "payment") {
+    try {
+      const prior = existing.financialDocument;
+      for (const key of ["documentType", "sourceFinancialDocumentId", "paymentDirection", "currency"]) {
+        if (clean(prior[key]) !== clean(mergedDocument[key])) throw new Error("A saved payment must remain linked to its original charge, currency and direction.");
+      }
+      if (!clean(prior.sourceFinancialDocumentId) || prior.paymentDirection !== "outflow") throw new Error("Use the originating collection or Treasury workflow to correct this payment.");
+      const payable = await provider.getFinancialDocumentRecord(prior.sourceFinancialDocumentId);
+      if (!isPayableSource(payable?.financialDocument || {})) throw new Error("Use the originating settlement or collection workflow to correct this payment.");
+      if (!["paid", "posted", "void", "reversed"].includes(clean(mergedDocument.financialState))) throw new Error("Choose a valid payment status.");
+      if (!["void", "reversed"].includes(clean(mergedDocument.financialState))) await assertPayablesSettlementAvailable({ financialDocument: mergedDocument, entityPassportId: accessContext.entityPassportId, excludeFinancialDocumentId: req.params.financialDocumentId });
+      await assertFinancialPeriodOpen({ financialDocument: prior, entityPassportId: accessContext.entityPassportId });
       await assertFinancialPeriodOpen({ financialDocument: mergedDocument, entityPassportId: accessContext.entityPassportId });
     } catch (error) { return res.status(409).json({ ok: false, errors: [{ name: error.name, message: error.message, details: error.details || {} }] }); }
   }
@@ -1545,10 +1569,10 @@ router.patch("/documents/:financialDocumentId", async (req, res) => {
    * period-reopen workflow instead of silently rewriting settled economics.
    */
   if (clean(mergedDocument.documentType).toLowerCase() === "settlement" ||
-      (["bill", "supplier-invoice"].includes(clean(mergedDocument.documentType).toLowerCase()) &&
-       JSON.stringify([existing?.financialDocument?.totals, existing?.financialDocument?.occurredAt]) !== JSON.stringify([mergedDocument.totals, mergedDocument.occurredAt]))) {
+      (["bill", "supplier-invoice", "expense"].includes(clean(mergedDocument.documentType).toLowerCase()) &&
+       JSON.stringify([existing?.financialDocument?.totals, existing?.financialDocument?.occurredAt, existing?.financialDocument?.paymentMethod]) !== JSON.stringify([mergedDocument.totals, mergedDocument.occurredAt, mergedDocument.paymentMethod]))) {
     try {
-      if (["bill", "supplier-invoice"].includes(clean(mergedDocument.documentType).toLowerCase())) await assertFinancialPeriodOpen({ financialDocument: existing.financialDocument, entityPassportId: accessContext.entityPassportId });
+      if (["bill", "supplier-invoice", "expense"].includes(clean(mergedDocument.documentType).toLowerCase())) await assertFinancialPeriodOpen({ financialDocument: existing.financialDocument, entityPassportId: accessContext.entityPassportId });
       await assertFinancialPeriodOpen({
         financialDocument: mergedDocument,
         entityPassportId: accessContext.entityPassportId,
