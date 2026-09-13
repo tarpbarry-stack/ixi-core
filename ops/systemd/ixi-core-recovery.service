@@ -1,0 +1,15 @@
+[Unit]
+Description=Verified private IX-Core recovery snapshot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/var/www/ix-core
+EnvironmentFile=/etc/ixi-recovery.env
+ExecStart=/usr/bin/flock -n /var/lock/ixi-core-production.lock /usr/bin/node /var/www/ix-core/ops/backup-to-s3.js
+TimeoutStartSec=600
+UMask=0077
+PrivateTmp=true
+NoNewPrivileges=true

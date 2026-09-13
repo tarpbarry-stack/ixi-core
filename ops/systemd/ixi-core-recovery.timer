@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly verified IX-Core recovery snapshot
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=60
+Unit=ixi-core-recovery.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,24 @@
+name: Complete IX-Core contract tests
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  runtime-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      - run: node --test integrity/creationIntegrityService.test.js integrity/creationIntegrityRunner.test.js
+      - name: Validate complete source manifest
+        run: |
+          node ops/runtime-release.js create "$PWD" "$GITHUB_SHA" > /tmp/ixi-release.json
+          node ops/runtime-release.js verify "$PWD" /tmp/ixi-release.json

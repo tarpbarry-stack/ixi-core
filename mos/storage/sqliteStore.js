@@ -8,13 +8,14 @@ const Database = require("better-sqlite3");
 const stores = new Map();
 
 /*
- * Short-lived operational state must remain durable, but it is not part of
- * the business audit trail. Request replay entries are security nonces with a
- * ten-minute retention window; archiving every nonce would create permanent
- * audit noise and unbounded write amplification.
+ * Operational replay state remains durable in the current collection. Business
+ * facts have their own events and documents; copying the entire command-result
+ * map into history for every command produces quadratic storage growth.
+ * This does not expire command IDs/results or delete existing history.
  */
 const NON_AUDITED_COLLECTION_KEYS = new Set([
-  "internal-auth-replay.json"
+  "internal-auth-replay.json",
+  "idempotency.json"
 ]);
 
 function clone(value) {

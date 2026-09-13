@@ -97,6 +97,28 @@ test("SQLite storage rejects a stale concurrent writer", () => {
   second.close();
 });
 
+test("durable command replay survives restart without whole-map history amplification", () => {
+  const files = fixture();
+  const replayPath = path.join(files.dataRoot, "idempotency.json");
+  const store = new MosSqliteStore(files);
+  for (let n = 0; n < 100; n += 1) {
+    const records = store.read(replayPath, {});
+    records[`command-${n}`] = { commandId: `command-${n}`, status: "completed", result: { objectId: `object_${n}` } };
+    store.write(replayPath, records);
+  }
+  assert.equal(store.database.prepare(
+    "SELECT COUNT(*) AS count FROM mos_collection_history WHERE collection_key = ?"
+  ).get("idempotency.json").count, 0);
+  store.close();
+  const restarted = new MosSqliteStore(files);
+  const records = restarted.read(replayPath, {});
+  assert.equal(Object.keys(records).length, 100);
+  assert.deepEqual(records["command-0"].result, { objectId: "object_0" });
+  assert.deepEqual(records["command-99"].result, { objectId: "object_99" });
+  restarted.close();
+  fs.rmSync(files.dataRoot, { recursive: true, force: true });
+});
+
 test("SQLite storage detects payload tampering", () => {
   const files = fixture();
   const store = new MosSqliteStore(files);
