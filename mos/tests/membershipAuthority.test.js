@@ -256,6 +256,67 @@ test("one Authority read scope fetches each Passport policy only once", async ()
   authorityStore.getCurrentPolicyRecord = async () => null;
 });
 
+test("all capabilities reuse one authoritative graph within a request", async () => {
+  const principal = resolveMosMembershipPrincipal({
+    principalId: "owner-1", entityId: bootstrap.entity.entityId
+  }).principal;
+  let passportReads = 0;
+  const originalRead = fs.readFileSync;
+  fs.readFileSync = function(file, ...args) {
+    if (String(file) === process.env.IXI_PASSPORT_DATA_FILE) passportReads += 1;
+    return originalRead.call(this, file, ...args);
+  };
+  try {
+    await withAuthorityPolicyReadScope(() => evaluateMosObjectAuthority({
+      principal, object: provisioned.object, capability: "aos.edit"
+    }));
+    const oneGraphReads = passportReads;
+    assert.ok(oneGraphReads > 0);
+    passportReads = 0;
+    await withAuthorityPolicyReadScope(() => Promise.all([
+      buildMosObjectActorAuthority({ principal, object: provisioned.object }),
+      buildMosObjectActorAuthority({ principal, object: provisioned.object })
+    ]));
+    assert.ok(passportReads <= 2 * oneGraphReads,
+      `two concurrent capability envelopes must stay within two individual identity/graph reads; ${passportReads} > ${2 * oneGraphReads}`);
+  } finally {
+    fs.readFileSync = originalRead;
+  }
+});
+
+test("a later request sees changed policy and a failed scoped read can retry", async () => {
+  const principal = resolveMosMembershipPrincipal({
+    principalId: "owner-1", entityId: bootstrap.entity.entityId
+  }).principal;
+  const passportId = provisioned.object.identities.find(identity => identity.identityType === "ixi-passport").passportId;
+  const check = () => evaluateMosObjectAuthority({ principal, object: provisioned.object, capability: "aos.delete" });
+  let deny = false, failNext = false;
+  authorityStore.getCurrentPolicyRecord = async id => {
+    if (failNext) { failNext = false; throw new Error("controlled policy read failure"); }
+    return deny && id === passportId ? {
+      revision: 2,
+      policy: {
+        policyId: "policy-next-request",
+        target: { passportId, objectId: provisioned.object.objectId },
+        rules: [{ ruleId: "deny-delete", effect: "deny", subject: { type: "all-authenticated" },
+          capabilities: ["aos.delete"], scope: { type: "target", passportId } }]
+      }
+    } : null;
+  };
+  try {
+    assert.equal((await withAuthorityPolicyReadScope(check)).allowed, true);
+    deny = true;
+    assert.equal((await withAuthorityPolicyReadScope(check)).allowed, false);
+    failNext = true;
+    await withAuthorityPolicyReadScope(async () => {
+      await assert.rejects(check(), /controlled policy read failure/);
+      assert.equal((await check()).allowed, false);
+    });
+  } finally {
+    authorityStore.getCurrentPolicyRecord = async () => null;
+  }
+});
+
 test("strict authorization denies missing evidence instead of using compatibility allow", async () => {
   updateMembership({ permissions: [], directGrants: [], directDenies: [] });
   const principal = resolveMosMembershipPrincipal({
