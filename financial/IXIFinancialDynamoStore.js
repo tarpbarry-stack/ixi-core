@@ -434,50 +434,20 @@ async function getIdempotencyRecord(
 }
 
 
-async function getPassportDocumentIds(
-  passportId
-) {
-  const id =
-    clean(
-      passportId
-    );
-
-  if (!id) {
-    return [];
-  }
-
-  const result =
-    await client.send(
-      new QueryCommand({
-        TableName:
-          TABLE_NAME,
-
-        KeyConditionExpression:
-          "PK = :pk AND begins_with(SK, :prefix)",
-
-        ExpressionAttributeValues: {
-          ":pk":
-            passportPk(id),
-
-          ":prefix":
-            "DOC#"
-        },
-
-        ConsistentRead:
-          true
-      })
-    );
-
-  return safeArray(
-    result.Items
-  )
-    .map(
-      item =>
-        clean(
-          item.financialDocumentId
-        )
-    )
-    .filter(Boolean);
+async function getPassportDocumentIds(passportId) {
+  const id = clean(passportId);
+  if (!id) return [];
+  const ids = [];
+  let cursor;
+  do {
+    const result = await client.send(new QueryCommand({ TableName: TABLE_NAME,
+      KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
+      ExpressionAttributeValues: { ":pk": passportPk(id), ":prefix": "DOC#" },
+      ConsistentRead: true, ...(cursor ? { ExclusiveStartKey: cursor } : {}) }));
+    ids.push(...safeArray(result.Items).map(item => clean(item.financialDocumentId)).filter(Boolean));
+    cursor = result.LastEvaluatedKey;
+  } while (cursor);
+  return [...new Set(ids)];
 }
 
 
@@ -577,6 +547,20 @@ async function getDocumentPassportIds(
 }
 
 
+async function buildPayableBalanceTransactionItems(record, previousRecord) {
+  return require("./IXIFinancialPayableBalanceControl").payableBalanceTransactionItems({
+    record, previousRecord, tableName: TABLE_NAME, getRecord: getCurrentDocumentRecord,
+    getGuard: async Key => (await client.send(new GetCommand({ TableName: TABLE_NAME, Key, ConsistentRead: true }))).Item || null,
+    listRecords: async entityId => {
+      const ids = await getPassportDocumentIds(entityId);
+      const records = [];
+      // Keep legacy counter adoption bounded in concurrency.
+      for (let i = 0; i < ids.length; i += 20) records.push(...await Promise.all(ids.slice(i, i + 20).map(getCurrentDocumentRecord)));
+      return records.filter(Boolean);
+    }
+  });
+}
+
 async function createDocumentRecord({
   record,
   passportIds = [],
@@ -666,6 +650,7 @@ async function createDocumentRecord({
   };
 
   const transactItems = [
+    ...await buildPayableBalanceTransactionItems(source),
     {
       Put: {
         TableName:
@@ -1022,6 +1007,7 @@ async function replaceDocumentRecord({
   };
 
   const transactItems = [
+    ...await buildPayableBalanceTransactionItems(source, previousRecord),
     {
       Put: {
         TableName:

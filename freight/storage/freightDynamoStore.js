@@ -302,12 +302,15 @@ async function replaceOrder({
   return record;
 }
 
+const { freightAlertItems } = require("../services/freightRecipients");
+
 async function transactAmendOrder({
   record,
   expectedRevision,
   eventItem,
   commandId,
-  fingerprint
+  fingerprint,
+  operation = "freight.amend"
 }) {
   const resolvedCommandId = clean(commandId);
   if (!resolvedCommandId) {
@@ -324,7 +327,7 @@ async function transactAmendOrder({
   const commandItem = {
     ...commandKey,
     recordType: "freight-command",
-    operation: "freight.amend",
+    operation,
     commandId: resolvedCommandId,
     fingerprint: clean(fingerprint),
     entityId: item.entityId,
@@ -337,14 +340,13 @@ async function transactAmendOrder({
     await client.send(
       new TransactWriteCommand({
         TransactItems: [
+          ...freightAlertItems(record, eventItem).map(Item => ({ Put: { TableName: TABLE_NAME, Item, ConditionExpression: "attribute_not_exists(pk) AND attribute_not_exists(sk)" } })),
           {
             Put: {
               TableName: TABLE_NAME,
               Item: item,
-              ConditionExpression: "attribute_exists(pk) AND attribute_exists(sk) AND revision = :expectedRevision",
-              ExpressionAttributeValues: {
-                ":expectedRevision": Number(expectedRevision)
-              }
+              ConditionExpression: Number(expectedRevision) === 0 ? "attribute_not_exists(pk) AND attribute_not_exists(sk)" : "attribute_exists(pk) AND attribute_exists(sk) AND revision = :expectedRevision",
+              ...(Number(expectedRevision) === 0 ? {} : { ExpressionAttributeValues: { ":expectedRevision": Number(expectedRevision) } })
             }
           },
           {
@@ -428,50 +430,21 @@ async function getOrder({
   );
 }
 
-async function listOrdersForAsset({
-  passportId,
-  limit = 100
-}) {
-  const result =
-    await client.send(
-      new QueryCommand({
-        TableName:
-          TABLE_NAME,
-
-        IndexName:
-          "gsi1",
-
-        KeyConditionExpression:
-          "gsi1pk = :pk",
-
-        ExpressionAttributeValues: {
-          ":pk":
-            assetIndexPk(
-              passportId
-            )
-        },
-
-        ScanIndexForward:
-          false,
-
-        Limit:
-          Math.min(
-            250,
-            Math.max(
-              1,
-              Number(limit) ||
-              100
-            )
-          )
-      })
-    );
-
-  return (
-    result.Items || []
-  ).map(
-    item =>
-      item.record
-  );
+async function listOrdersForAsset({ passportId, entityId, limit = 100 }) {
+  if (!clean(entityId)) throw new FreightError("FREIGHT_ENTITY_REQUIRED", "Entity scope is required to read Freight.", {}, 403);
+  const orders = [];
+  let cursor;
+  do {
+    const result = await client.send(new QueryCommand({
+      TableName: TABLE_NAME, IndexName: "gsi1", KeyConditionExpression: "gsi1pk = :pk",
+      ExpressionAttributeValues: { ":pk": assetIndexPk(passportId) },
+      ScanIndexForward: false, Limit: Math.min(250, Math.max(1, Number(limit) || 100)),
+      ...(cursor ? { ExclusiveStartKey: cursor } : {})
+    }));
+    orders.push(...(result.Items || []).filter(item => clean(item.entityId) === clean(entityId)).map(item => item.record));
+    cursor = result.LastEvaluatedKey;
+  } while (cursor);
+  return orders;
 }
 
 async function listOrdersByStatus({
@@ -560,3 +533,12 @@ module.exports = {
 
   describeFreightStore
 };
+
+async function listFreightAlerts({ entityId, actorId }) {
+  const result = await client.send(new QueryCommand({ TableName: TABLE_NAME,
+    KeyConditionExpression: "pk = :pk AND begins_with(sk, :prefix)",
+    ExpressionAttributeValues: { ":pk": `ENTITY#${clean(entityId)}#RECIPIENT#${clean(actorId)}`, ":prefix": "FREIGHT_ALERT#" },
+    ScanIndexForward: false, Limit: 100, ConsistentRead: true }));
+  return result.Items || [];
+}
+module.exports.listFreightAlerts = listFreightAlerts;

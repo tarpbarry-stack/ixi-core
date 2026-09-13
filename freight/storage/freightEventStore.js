@@ -111,46 +111,19 @@ async function appendFreightEvent({
   return event;
 }
 
-async function listFreightEvents({
-  freightOrderId,
-  limit = 200
-}) {
-  const result =
-    await client.send(
-      new QueryCommand({
-        TableName:
-          TABLE_NAME,
-
-        KeyConditionExpression:
-          "pk = :pk AND begins_with(sk, :prefix)",
-
-        ExpressionAttributeValues: {
-          ":pk":
-            `FREIGHT#${clean(freightOrderId)}`,
-
-          ":prefix":
-            "EVENT#"
-        },
-
-        ScanIndexForward:
-          true,
-
-        Limit:
-          Math.min(
-            500,
-            Math.max(
-              1,
-              Number(limit) || 200
-            )
-          )
-      })
-    );
-
-  return (
-    result.Items || []
-  ).map(
-    item => item.event
-  );
+async function listFreightEvents({ freightOrderId, limit = 200 }) {
+  const events = [];
+  let cursor;
+  do {
+    const result = await client.send(new QueryCommand({ TableName: TABLE_NAME,
+      KeyConditionExpression: "pk = :pk AND begins_with(sk, :prefix)",
+      ExpressionAttributeValues: { ":pk": `FREIGHT#${clean(freightOrderId)}`, ":prefix": "EVENT#" },
+      ScanIndexForward: true, Limit: Math.min(500, Math.max(1, Number(limit) || 200)),
+      ConsistentRead: true, ...(cursor ? { ExclusiveStartKey: cursor } : {}) }));
+    events.push(...(result.Items || []).map(item => item.event));
+    cursor = result.LastEvaluatedKey;
+  } while (cursor);
+  return events;
 }
 
 module.exports = {
