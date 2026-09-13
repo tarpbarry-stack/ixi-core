@@ -70,7 +70,8 @@ def create(app_root, mos_database, output_dir, online=False):
         raise ValueError("Recovery output must be outside the runtime")
     output.mkdir(parents=True, exist_ok=False, mode=0o700)
     passport_file = app / "passport/passports.json"
-    passport_before = digest(passport_file)
+    passport_bytes = passport_file.read_bytes()
+    passport_before = hashlib.sha256(passport_bytes).hexdigest()
     database = output / "aos.sqlite"
     source = sqlite3.connect(f"file:{Path(mos_database).resolve()}?mode=ro", uri=True)
     target = sqlite3.connect(database)
@@ -80,7 +81,9 @@ def create(app_root, mos_database, output_dir, online=False):
         target.close()
         source.close()
     os.chmod(database, 0o600)
-    passports = json.loads(passport_file.read_text())
+    if digest(passport_file) != passport_before:
+        raise ValueError("Passport registry changed during capture; retry the recovery set")
+    passports = json.loads(passport_bytes)
     proof = census(database, passports)
     archive_file = output / "runtime.tar.gz"
     with tarfile.open(archive_file, "w:gz") as archive:
@@ -88,13 +91,22 @@ def create(app_root, mos_database, output_dir, online=False):
             relative = Path(member.name)
             if any(part in {"node_modules", ".git", "backups"} for part in relative.parts):
                 return None
+            if relative == Path("runtime/passport/passports.json"):
+                return None
             # Socket and device state is neither application code nor business data.
             if member.isdev() or member.isfifo():
                 return None
             return member
         archive.add(app, arcname="runtime", filter=include)
+        # Archive the registry paired with the SQLite snapshot. Packaging may
+        # take a minute; normal later writes must not invalidate that snapshot.
+        import io
+        member = tarfile.TarInfo("runtime/passport/passports.json")
+        member.size = len(passport_bytes)
+        member.mode = 0o600
+        archive.addfile(member, io.BytesIO(passport_bytes))
     os.chmod(archive_file, 0o600)
-    if digest(passport_file) != passport_before:
+    if not online and digest(passport_file) != passport_before:
         raise ValueError("Passport registry changed during capture; retry the recovery set")
     manifest = {
         "schema": "ixi.recovery.v1", "createdAt": datetime.now(timezone.utc).isoformat(),
