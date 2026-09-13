@@ -71,7 +71,7 @@ test("manual outside-IXI signature attestation is valid without an internally ho
   assert.equal(validation.ok, true, validation.errors.join("\n"));
 });
 
-test("manual attestation still requires customer contact and machine serial", () => {
+test("external signatures accept existing machine identity without online contact or serial fields", () => {
   const document = createFinancialDocumentByType({ documentType: "sales-order", input: input() });
   document.salesOrder.status = "signed-invoice-pending";
   document.salesOrder.customer = { name: "ABC Contractors", email: "", phone: "" };
@@ -90,10 +90,34 @@ test("manual attestation still requires customer contact and machine serial", ()
     signedPackageHash: "b".repeat(64),
   };
 
-  const validation = validateFinancialDocument(document);
-  assert.equal(validation.ok, false);
-  assert.ok(validation.errors.includes("signable sales order requires customer identity and delivery contact."));
-  assert.ok(validation.errors.includes("signable sales order requires serial/VIN."));
+  for (const receivedVia of ["paper", "email", "other"]) {
+    document.salesOrder.signing.receivedVia = receivedVia;
+    const validation = validateFinancialDocument(document);
+    assert.equal(validation.ok, true, validation.errors.join("\n"));
+  }
+
+  for (const status of ["ready-for-signature", "sent-for-signature", "viewed"]) {
+    const online = structuredClone(document);
+    online.salesOrder.status = status;
+    const validation = validateFinancialDocument(online);
+    assert.equal(validation.ok, false);
+    assert.ok(validation.errors.includes("signable sales order requires customer identity and delivery contact."));
+    assert.ok(validation.errors.includes("signable sales order requires serial/VIN."));
+    assert.ok(validation.errors.some(error => error.includes("two-page terms")));
+  }
+
+  for (const remove of [
+    record => { record.customer.name = ""; },
+    record => { record.context.primaryPassportId = ""; },
+    record => { record.context.entityPassportId = ""; },
+    record => { record.context.actorPassportId = ""; },
+    record => { record.signing.attestedByPassportId = ""; },
+    record => { record.signing.signedPackageHash = ""; },
+  ]) {
+    const incomplete = structuredClone(document);
+    remove(incomplete.salesOrder);
+    assert.equal(validateFinancialDocument(incomplete).ok, false);
+  }
 });
 
 test("an unsigned sales order cannot bypass counsel terms requirements", () => {
