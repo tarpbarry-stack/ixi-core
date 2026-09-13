@@ -4,7 +4,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 
-const protectedPaths = /^(?:data\/|\.env(?:\.|$)|passport\/passports\.json$|ixi-machine-state\.json$|acquisition\/(?:capture\/artifacts|audit|identity\/Queue)\/)/;
+const protectedPaths = /^(?:data\/|\.env(?:\.|$)|passport\/passports\.json$|ixi-machine-state\.json$|acquisition\/(?:capture\/artifacts|audit|identity\/Queue)\/.*\.json$)/;
 function safeRelative(value) {
   if (typeof value !== "string" || !value || path.isAbsolute(value) ||
       value.split(/[\\/]/).some(part => part === ".." || part === "")) {

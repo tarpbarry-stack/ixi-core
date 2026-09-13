@@ -15,6 +15,9 @@ def safe(root, relative):
     if parts.parts[0] == "data" or str(parts).startswith(".env") or str(parts) in {
         "passport/passports.json", "ixi-machine-state.json"}:
         raise ValueError("Release cannot overwrite business data")
+    if parts.suffix == ".json" and str(parts).startswith((
+        "acquisition/capture/artifacts/", "acquisition/audit/", "acquisition/identity/Queue/")):
+        raise ValueError("Release cannot overwrite acquisition runtime data")
     result = root / parts
     if root not in result.resolve().parents:
         raise ValueError("Release path escapes runtime")

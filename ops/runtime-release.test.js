@@ -25,8 +25,9 @@ test("release verification detects missing files and storage drift while preserv
 });
 test("release manifests cannot install paths outside the runtime or overwrite business data", () => {
   for (const value of ["../outside.js", "/tmp/outside.js", "data/mos/objects.json",
-    ".env", "passport/passports.json", "ixi-machine-state.json"]) {
+    ".env", "passport/passports.json", "ixi-machine-state.json", "acquisition/audit/identity-audit-events.json"]) {
     assert.throws(() => safeRelative(value));
   }
   assert.equal(safeRelative("passport/passportRegistry.js"), "passport/passportRegistry.js");
+  assert.equal(safeRelative("acquisition/audit/identityAuditLog.js"), "acquisition/audit/identityAuditLog.js");
 });
