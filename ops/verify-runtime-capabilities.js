@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 "use strict";
 const crypto = require("node:crypto");
-const { DynamoDBClient, TransactWriteItemsCommand } = require("@aws-sdk/client-dynamodb");
+const { DynamoDBClient, TransactWriteItemsCommand, DescribeContinuousBackupsCommand } = require("@aws-sdk/client-dynamodb");
 
-async function verifyAtomicTreasuryAccess() {
-  const client = new DynamoDBClient({ region: process.env.AWS_REGION || "us-east-2", maxAttempts: 1 });
+async function verifyAtomicTreasuryAccess(client) {
   try {
     await client.send(new TransactWriteItemsCommand({
       ClientRequestToken: crypto.randomUUID(),
@@ -23,12 +22,28 @@ async function verifyAtomicTreasuryAccess() {
     if (error.name !== "TransactionCanceledException" ||
         error.CancellationReasons?.[0]?.Code !== "ConditionalCheckFailed") throw error;
     return { ok: true, atomicTreasuryAuthorized: true, writePerformed: false };
+  }
+}
+async function verifyRuntimeCapabilities(client = new DynamoDBClient({
+  region: process.env.AWS_REGION || "us-east-2", maxAttempts: 1
+})) {
+  try {
+    const recovery = [];
+    for (const table of ["ixi-financial-v1", "IXIFreight", "IXITickets"]) {
+      const response = await client.send(new DescribeContinuousBackupsCommand({ TableName: table }));
+      const state = response.ContinuousBackupsDescription?.PointInTimeRecoveryDescription;
+      if (state?.PointInTimeRecoveryStatus !== "ENABLED" || state.RecoveryPeriodInDays !== 35) {
+        throw new Error("Required 35-day point-in-time recovery is not enabled: " + table);
+      }
+      recovery.push({ table, status: state.PointInTimeRecoveryStatus, days: state.RecoveryPeriodInDays });
+    }
+    return { ...(await verifyAtomicTreasuryAccess(client)), recovery };
   } finally {
     client.destroy();
   }
 }
 if (require.main === module) {
-  verifyAtomicTreasuryAccess().then(result => console.log(JSON.stringify(result)))
+  verifyRuntimeCapabilities().then(result => console.log(JSON.stringify(result)))
     .catch(error => { console.error(error.name + ": " + error.message); process.exitCode = 1; });
 }
-module.exports = { verifyAtomicTreasuryAccess };
+module.exports = { verifyAtomicTreasuryAccess, verifyRuntimeCapabilities };

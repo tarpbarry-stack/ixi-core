@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
-# Run through the authenticated deployment workflow, never through a read-only audit connector.
+# One-time AWS administrator setup. Normal deployments only verify this setup.
 set -Eeuo pipefail
-: "${AWS_REGION:?AWS_REGION is required}"
-: "${IXI_EXPECTED_ACCOUNT_ID:?Expected AWS account is required}"
-: "${IXI_RECOVERY_BUCKET:?Private backup bucket is required}"
-: "${IXI_RUNTIME_ROLE:?Existing runtime role is required}"
+export AWS_REGION="${AWS_REGION:-us-east-2}"
+IXI_EXPECTED_ACCOUNT_ID=459212966383
+IXI_RECOVERY_BUCKET=ixi-core-recovery-459212966383-us-east-2
+IXI_RUNTIME_ROLE=EC2-SSM-Role
+test "$AWS_REGION" = us-east-2
 actual_account="$(aws sts get-caller-identity --query Account --output text)"
 test "$actual_account" = "$IXI_EXPECTED_ACCOUNT_ID"
 work="$(mktemp -d)"
-trap 'rm "$work"/*.json; rmdir "$work"' EXIT
+cleanup() {
+  local file
+  for file in "$work"/*.json; do
+    if [[ -f "$file" ]]; then rm "$file"; fi
+  done
+  rmdir "$work"
+}
+trap cleanup EXIT
 
 if ! aws s3api head-bucket --bucket "$IXI_RECOVERY_BUCKET" --expected-bucket-owner "$actual_account" 2>/dev/null; then
   aws s3api create-bucket --bucket "$IXI_RECOVERY_BUCKET" --region "$AWS_REGION" \
@@ -29,14 +37,17 @@ JSON
 aws s3api put-bucket-lifecycle-configuration --bucket "$IXI_RECOVERY_BUCKET" --expected-bucket-owner "$actual_account" \
   --lifecycle-configuration "file://$work/lifecycle.json"
 
-jq -n --arg bucket "$IXI_RECOVERY_BUCKET" '{
+jq -n --arg bucket "$IXI_RECOVERY_BUCKET" --arg account "$actual_account" --arg region "$AWS_REGION" '{
   Version:"2012-10-17",Statement:[
     {Sid:"VerifyPrivateRecoveryBucket",Effect:"Allow",
      Action:["s3:GetBucketPublicAccessBlock","s3:GetBucketVersioning"],
      Resource:("arn:aws:s3:::"+$bucket)},
     {Sid:"WriteAndVerifyRecoveryVersions",Effect:"Allow",
      Action:["s3:PutObject","s3:GetObject","s3:GetObjectVersion"],
-     Resource:("arn:aws:s3:::"+$bucket+"/recovery/*")}
+     Resource:("arn:aws:s3:::"+$bucket+"/recovery/*")},
+    {Sid:"VerifyBusinessTableRecovery",Effect:"Allow",
+     Action:"dynamodb:DescribeContinuousBackups",
+     Resource:(["ixi-financial-v1","IXIFreight","IXITickets"] | map("arn:aws:dynamodb:"+$region+":"+$account+":table/"+.))}
   ]}' > "$work/recovery-policy.json"
 aws iam put-role-policy --role-name "$IXI_RUNTIME_ROLE" --policy-name IXI-Verified-Recovery \
   --policy-document "file://$work/recovery-policy.json"
