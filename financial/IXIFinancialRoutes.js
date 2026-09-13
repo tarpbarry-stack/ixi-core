@@ -66,6 +66,7 @@ const {
 const {
   createFinancialAttachmentUpload,
   completeFinancialAttachmentUpload,
+  createFinancialAttachmentDownload,
 } = require("./IXIFinancialAttachmentService");
 
 const {
@@ -1232,6 +1233,26 @@ async function authorizeAttachmentWrite(req, operation) {
   }
   return { accessContext, existing };
 }
+
+router.get("/documents/:financialDocumentId/attachments/:attachmentId/download", async (req, res) => {
+  const operation = "financial.attachment.download";
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  try {
+    const accessContext = await getAccess(req);
+    const financialDocumentId = clean(req.params.financialDocumentId);
+    const failure = await authorizeDocumentRead({ accessContext, financialDocumentId,
+      action: IXI_FINANCIAL_ACTIONS.VIEW_DOCUMENT, operation });
+    if (failure) return sendEnvelope(res, failure);
+    const record = await getFinancialStorageProvider().getFinancialDocumentRecord(financialDocumentId);
+    if (!record) return res.status(404).json({ ok: false, operation, errors: [{ code: "IXI_FINANCIAL_DOCUMENT_NOT_FOUND", message: "Transaction is unavailable." }] });
+    const download = await createFinancialAttachmentDownload({ financialDocument: record.financialDocument, attachmentId: clean(req.params.attachmentId) });
+    return res.status(200).json({ ok: true, operation, data: download, errors: [], warnings: [] });
+  } catch (error) {
+    const status = [404, 409].includes(error.status) ? error.status : 502;
+    return res.status(status).json({ ok: false, operation, errors: [{ code: clean(error.code) || "IXI_FINANCIAL_EVIDENCE_DOWNLOAD_FAILED", message: status === 502 ? "Evidence could not be retrieved. Please retry." : error.message }], warnings: [] });
+  }
+});
 
 router.post(
   "/documents/:financialDocumentId/attachments/init",
