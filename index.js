@@ -115,6 +115,7 @@ const {
 const app = express();
 
 app.use(cors());
+app.use("/financial/delivery/email", express.json({ limit: "12mb" }));
 app.use(express.json({
   limit: "1mb"
 }));

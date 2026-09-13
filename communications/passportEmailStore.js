@@ -167,6 +167,7 @@ function claimPassportEmailDelivery({
   listingId,
   principalId,
   recipients,
+  allowPendingRetry = true,
   now = Date.now()
 } = {}) {
   const key = clean(idempotencyKey);
@@ -204,7 +205,7 @@ function claimPassportEmailDelivery({
 
       if (
         existing.status === "pending" &&
-        now - Number(existing.updated_at_ms || 0) < PENDING_STALE_MS
+        (!allowPendingRetry || now - Number(existing.updated_at_ms || 0) < PENDING_STALE_MS)
       ) {
         throw emailError(
           "IXI_PASSPORT_EMAIL_IN_PROGRESS",
@@ -299,6 +300,10 @@ function closePassportEmailStore() {
   databasePath = "";
 }
 
+function getPassportEmailDelivery(idempotencyKey) {
+  return openDatabase().prepare("SELECT * FROM passport_email_deliveries WHERE idempotency_key = ?").get(clean(idempotencyKey)) || null;
+}
+
 module.exports = {
   DEFAULT_WINDOW_MS,
   DEFAULT_LIMIT,
@@ -307,5 +312,6 @@ module.exports = {
   claimPassportEmailDelivery,
   completePassportEmailDelivery,
   failPassportEmailDelivery,
+  getPassportEmailDelivery,
   closePassportEmailStore
 };

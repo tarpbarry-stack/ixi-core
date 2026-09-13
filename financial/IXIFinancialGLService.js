@@ -26,7 +26,8 @@ function clean(value) {
 async function getFinancialGLProjection({
   entityPassportId = "",
   period = "",
-  currency = "USD"
+  currency = "USD",
+  includeDocuments = false
 } = {}) {
 
   const resolvedEntityPassportId =
@@ -65,6 +66,7 @@ async function getFinancialGLProjection({
 
 
   return {
+    ...(includeDocuments ? { documents: records.map(record => record.financialDocument || record.record?.financialDocument).filter(Boolean) } : {}),
     entityPassportId:
       resolvedEntityPassportId,
 

@@ -418,6 +418,7 @@ async function sendTransactionalEmail({
   text,
   html,
   messageTags = [],
+  attachments = [],
   fromEmail = SES_FROM_EMAIL,
   fromName = SES_FROM_NAME,
   replyTo = SES_REPLY_TO
@@ -492,6 +493,9 @@ async function sendTransactionalEmail({
       }
     }
   };
+
+  // SES v2 accepts binary attachments; the SDK performs transport encoding.
+  if (attachments.length) commandInput.Content.Simple.Attachments = attachments;
 
 
   if (
