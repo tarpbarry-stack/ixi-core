@@ -1,7 +1,9 @@
 # AOS stabilization release — September 13, 2026
 
 Owner: this stabilization task. The user paused competing agents and authorized implementation and release.
-Status: candidate under validation; production completion requires the evidence below.
+Status: frontend release merged and deployed; backend promotion blocked by AWS administrator setup.
+The first deployment stopped before any runtime installation because the GitHub deployment user
+does not have s3:CreateBucket. Backend completion still requires the evidence below.
 
 ## Product contracts retained
 
@@ -46,6 +48,20 @@ Financial, Freight and Ticket DynamoDB tables require 35-day point-in-time recov
 Treasury's additional IAM permission is restricted to UpdateItem on the existing Financial table inside
 TransactWriteItems. No frontend user permissions are widened.
 AWS reference: https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis-iam.html
+
+## One-time AWS setup and ordinary deployments
+
+An authorized AWS administrator runs `ops/configure-runtime-recovery.sh` in account 459212966383,
+region us-east-2. It creates the dedicated private versioned recovery bucket, enables its encryption
+and retention, grants the existing runtime role only recovery access and the required conditional
+Treasury update, and enables 35-day recovery on the three existing business tables. It does not
+grant the GitHub deployment user S3 or IAM administration, and does not write business records.
+
+Normal GitHub deployments verify the account and instance, then use their existing SSM access.
+The runtime role checks private versioned storage, actual DynamoDB recovery configuration, and the
+no-write Treasury authorization probe before stopping writers. Missing setup blocks installation.
+Git operations in the staged release run as the checkout owner, while protected source installation
+and recovery capture run as root; Git ownership safeguards remain enabled.
 
 ## Required release evidence
 

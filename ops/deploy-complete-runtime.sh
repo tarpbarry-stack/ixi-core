@@ -27,7 +27,7 @@ run_stage git checkout -q --detach FETCH_HEAD
 test "$(run_stage git rev-parse HEAD)" = "$IXI_CORE_SHA"
 run_stage npm ci --no-audit --no-fund
 run_stage npm test
-node "$STAGE/ops/runtime-release.js" create "$STAGE" "$IXI_CORE_SHA" > "$STAGE/release.json"
+run_stage node "$STAGE/ops/runtime-release.js" create "$STAGE" "$IXI_CORE_SHA" > "$STAGE/release.json"
 node "$STAGE/ops/runtime-release.js" verify "$STAGE" "$STAGE/release.json"
 # Check remote recovery access before stopping a healthy service.
 sudo -u ubuntu -H env AWS_REGION="$AWS_REGION" IXI_RECOVERY_BUCKET="$IXI_RECOVERY_BUCKET" \
