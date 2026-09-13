@@ -71,7 +71,7 @@ async function loadPolicy(
 
 
   const scopedRecords =
-    authorityPolicyReadScope.getStore();
+    authorityPolicyReadScope.getStore()?.records;
 
   let recordRequest =
     scopedRecords?.get(id);
@@ -124,13 +124,13 @@ function withAuthorityPolicyReadScope(callback) {
   }
 
   return authorityPolicyReadScope.run(
-    new Map(),
+    { records: new Map(), chains: new Map() },
     callback
   );
 }
 
 
-async function resolveAuthorityPolicyChain(
+async function resolveAuthorityPolicyChainUncached(
   targetPassportId
 ) {
   const targetId =
@@ -254,6 +254,24 @@ async function resolveAuthorityPolicyChain(
   };
 }
 
+
+function resolveAuthorityPolicyChain(targetPassportId) {
+  const targetId = clean(targetPassportId);
+  const chains = authorityPolicyReadScope.getStore()?.chains;
+  if (!chains) return resolveAuthorityPolicyChainUncached(targetId);
+
+  let request = chains.get(targetId);
+  if (!request) {
+    // Only the graph and policy inputs are shared. Decisions remain specific
+    // to each principal and capability, and nothing survives this read scope.
+    request = resolveAuthorityPolicyChainUncached(targetId).catch(error => {
+      if (chains.get(targetId) === request) chains.delete(targetId);
+      throw error;
+    });
+    chains.set(targetId, request);
+  }
+  return request;
+}
 
 module.exports = {
   loadPolicy,

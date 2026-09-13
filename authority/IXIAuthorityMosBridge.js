@@ -108,6 +108,14 @@ async function evaluateMosObjectAuthority({
   object,
   capability
 } = {}) {
+  return evaluateResolvedMosObjectAuthority({
+    principal,
+    identity: principal?.authenticated ? getObjectAuthorityIdentity(object) : null,
+    capability
+  });
+}
+
+async function evaluateResolvedMosObjectAuthority({ principal, identity, capability }) {
   if (!principal?.authenticated) {
     return {
       enforced:
@@ -120,12 +128,6 @@ async function evaluateMosObjectAuthority({
         "compatibility-no-ixi-principal"
     };
   }
-
-
-  const identity =
-    getObjectAuthorityIdentity(
-      object
-    );
 
 
   if (!identity.passportId) {
@@ -304,9 +306,10 @@ const ACTOR_AUTHORITY_CAPABILITIES = Object.freeze({
 async function buildMosObjectActorAuthority({ principal, object } = {}) {
   const decisions = {};
   const actorAuthority = {};
+  const identity = principal?.authenticated ? getObjectAuthorityIdentity(object) : null;
 
   for (const capability of new Set(Object.values(ACTOR_AUTHORITY_CAPABILITIES))) {
-    const decision = await evaluateMosObjectAuthority({ principal, object, capability });
+    const decision = await evaluateResolvedMosObjectAuthority({ principal, identity, capability });
     decisions[capability] = decision;
   }
   for (const [key, capability] of Object.entries(ACTOR_AUTHORITY_CAPABILITIES)) {
