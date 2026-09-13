@@ -137,6 +137,7 @@ function isActiveReceivableSettlement(document = {}) {
 async function assertPayablesSettlementAvailable({
   financialDocument = {},
   entityPassportId = "",
+  excludeFinancialDocumentId = "",
 } = {}) {
   const settlement = financialDocumentFromRecord(financialDocument),
     type = clean(settlement.documentType).toLowerCase();
@@ -196,6 +197,7 @@ async function assertPayablesSettlementAvailable({
     .filter(
       (item) =>
         clean(item.sourceFinancialDocumentId) === sourceId &&
+        (!excludeFinancialDocumentId || clean(item.financialDocumentId) !== clean(excludeFinancialDocumentId)) &&
         !["void", "reversed"].includes(
           clean(item.financialState).toLowerCase(),
         ) &&
@@ -205,7 +207,7 @@ async function assertPayablesSettlementAvailable({
     );
   const settled =
       Math.round(
-        existing.reduce((sum, item) => sum + financialAmount(item), 0) * 100,
+        existing.filter(item => type !== "credit" || clean(item.documentType) === "credit").reduce((sum, item) => sum + financialAmount(item), 0) * 100,
       ) / 100,
     newAmount = financialAmount(settlement),
     billAmount = financialAmount(bill);
@@ -216,7 +218,7 @@ async function assertPayablesSettlementAvailable({
     );
   if (settled + newAmount > billAmount + 0.005)
     throw Object.assign(
-      new Error("A/P settlement exceeds the canonical open Bill balance."),
+      new Error(type === "credit" ? "Carrier/vendor credits cannot exceed the original Bill amount. Correct the credit amount." : "Payment exceeds the remaining Bill balance after credits and earlier payments."),
       {
         name: "IXIFinancialSettlementOverpaymentError",
         details: {

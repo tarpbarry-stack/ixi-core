@@ -116,7 +116,7 @@ test("Freight amendments preserve canonical identity and create a new revision",
   assert.equal(amended.audit.updatedBy, "ACTOR-2");
 });
 
-test("requested Freight amendments require a reason and reject stale revisions", () => {
+test("Freight edits keep reasons optional and reject stale revisions", () => {
   const draft = createFreightOrder({
     entityId: "ENTITY-1",
     actorId: "ACTOR-1",
@@ -125,18 +125,12 @@ test("requested Freight amendments require a reason and reject stale revisions",
   });
   const requested = { ...draft, status: "requested" };
 
-  assert.throws(
-    () => buildAmendedFreightOrder({ current: requested, expectedRevision: 1 }),
-    error => error?.code === "FREIGHT_AMENDMENT_REASON_REQUIRED"
-  );
+  assert.equal(buildAmendedFreightOrder({ current: requested, expectedRevision: 1, amendment: { metadata: { notes: "New pickup instruction" } } }).metadata.notes, "New pickup instruction");
   assert.throws(
     () => buildAmendedFreightOrder({ current: requested, expectedRevision: 0, changeReason: "Carrier changed" }),
     error => error?.code === "FREIGHT_REVISION_CONFLICT"
   );
-  assert.throws(
-    () => buildAmendedFreightOrder({ current: { ...requested, status: "closed" }, expectedRevision: 1, changeReason: "Correction" }),
-    error => error?.code === "FREIGHT_AMENDMENT_STATE_INVALID"
-  );
+  assert.equal(buildAmendedFreightOrder({ current: { ...requested, status: "closed" }, expectedRevision: 1, amendment: { route: { destination: { label: "California yard" } } } }).route.destination.label, "California yard");
 });
 
 test("Freight amendments whitelist commercial terms and expose an exact audit diff", () => {

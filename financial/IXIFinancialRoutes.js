@@ -52,7 +52,7 @@ const financialStore = require("./IXIFinancialDynamoStore");
 
 const financialCommandRoutes = require("./IXIFinancialCommandRoutes");
 
-const { assertFinancialPeriodOpen } = require("./IXIFinancialCommandEngine");
+const { assertFinancialPeriodOpen, assertPayablesSettlementAvailable } = require("./IXIFinancialCommandEngine");
 
 const authorizedFinancialService = require("./IXIFinancialAuthorizedService");
 
@@ -120,7 +120,10 @@ function getBillPatchAction(existing = {}, merged = {}) {
     const afterApproval = clean(after?.approval?.status).toLowerCase();
     const beforeStatus = clean(before?.status).toLowerCase();
     const afterStatus = clean(after?.status).toLowerCase();
-    if (afterApproval === "approved" && beforeApproval !== "approved")
+    const billTermsChanged = JSON.stringify([before.bill?.amount, before.bill?.vendorLabel, before.bill?.invoiceDate, before.identity?.invoiceNumber]) !== JSON.stringify([after.bill?.amount, after.bill?.vendorLabel, after.bill?.invoiceDate, after.identity?.invoiceNumber]);
+  if (beforeApproval === "approved" && afterApproval === "approved" && billTermsChanged)
+    return IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT;
+  if (afterApproval === "approved" && beforeApproval !== "approved")
       return IXI_FINANCIAL_ACTIONS.APPROVE_DOCUMENT;
     if (
       ["returned", "denied", "rejected"].includes(afterApproval) &&
@@ -134,6 +137,7 @@ function getBillPatchAction(existing = {}, merged = {}) {
       return IXI_FINANCIAL_ACTIONS.VOID_DOCUMENT;
     return IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT;
   }
+  if (type === "credit") return IXI_FINANCIAL_ACTIONS.APPLY_VENDOR_CREDIT;
   if (!["bill", "supplier-invoice"].includes(type))
     return IXI_FINANCIAL_ACTIONS.PATCH_DOCUMENT;
   const before = safeObject(existing.billRecord);
@@ -1477,6 +1481,14 @@ router.patch("/documents/:financialDocumentId", async (req, res) => {
     );
   }
 
+  if (clean(mergedDocument.documentType).toLowerCase() === "credit") {
+    try {
+      if (clean(existing?.financialDocument?.sourceFinancialDocumentId) !== clean(mergedDocument.sourceFinancialDocumentId)) throw new Error("A saved credit must remain linked to its original Bill.");
+      await assertPayablesSettlementAvailable({ financialDocument: mergedDocument, entityPassportId: accessContext.entityPassportId, excludeFinancialDocumentId: req.params.financialDocumentId });
+      await assertFinancialPeriodOpen({ financialDocument: existing.financialDocument, entityPassportId: accessContext.entityPassportId });
+      await assertFinancialPeriodOpen({ financialDocument: mergedDocument, entityPassportId: accessContext.entityPassportId });
+    } catch (error) { return res.status(409).json({ ok: false, errors: [{ name: error.name, message: error.message, details: error.details || {} }] }); }
+  }
   const context = getRequestContext(req);
 
   let boundPatch = bindBillActorEvidence(
@@ -1511,8 +1523,11 @@ router.patch("/documents/:financialDocumentId", async (req, res) => {
    * is closed. Once closed, corrections must use the existing controlled
    * period-reopen workflow instead of silently rewriting settled economics.
    */
-  if (clean(mergedDocument.documentType).toLowerCase() === "settlement") {
+  if (clean(mergedDocument.documentType).toLowerCase() === "settlement" ||
+      (["bill", "supplier-invoice"].includes(clean(mergedDocument.documentType).toLowerCase()) &&
+       JSON.stringify([existing?.financialDocument?.totals, existing?.financialDocument?.occurredAt]) !== JSON.stringify([mergedDocument.totals, mergedDocument.occurredAt]))) {
     try {
+      if (["bill", "supplier-invoice"].includes(clean(mergedDocument.documentType).toLowerCase())) await assertFinancialPeriodOpen({ financialDocument: existing.financialDocument, entityPassportId: accessContext.entityPassportId });
       await assertFinancialPeriodOpen({
         financialDocument: mergedDocument,
         entityPassportId: accessContext.entityPassportId,
@@ -1941,6 +1956,8 @@ router.get("/access-context", async (req, res) => {
             },
           ]
         : [],
+
+      capabilities: Object.fromEntries(Object.values(IXI_FINANCIAL_ACTIONS).map(action => [action, authorizeFinancialAction({ accessContext, action }).allowed === true])),
 
       locations: [],
 

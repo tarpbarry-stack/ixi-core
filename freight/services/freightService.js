@@ -67,7 +67,10 @@ const {
   FreightError
 } = require("../FreightError");
 
+const { validateFreightRecipients } = require("./freightRecipients");
+
 async function create(args = {}) {
+  validateFreightRecipients(args.entityId, args.metadata?.notificationRecipients);
   const object =
     resolveOrProvisionAosObjectForPassport({
       passportId:
@@ -107,31 +110,17 @@ async function create(args = {}) {
       }
     });
 
-  await createOrder(record);
-
-  await appendFreightEvent({
-    entityId:
-      args.entityId,
-
-    freightOrderId:
-      record.identity.freightOrderId,
-
-    eventType:
-      "freight.created",
-
-    actorId:
-      args.actorId,
-
-    commandId:
-      args.commandId,
-
-    payload: {
-      status:
-        record.status
-    }
-  });
-
-  return record;
+  const commandId = clean(args.commandId);
+  if (!commandId) throw new FreightError("FREIGHT_COMMAND_ID_REQUIRED", "A request ID is required. Reopen the form and retry.", {}, 400);
+  const fingerprint = amendmentFingerprint({ operation: "freight.create", entityId: args.entityId, actorId: args.actorId, asset: args.asset, route: args.route, execution: args.execution, economics: args.economics, purpose: args.purpose, metadata: args.metadata });
+  const prior = await getAmendmentCommand({ entityId: args.entityId, commandId });
+  if (prior) {
+    if (prior.fingerprint !== fingerprint) throw new FreightError("FREIGHT_COMMAND_CONFLICT", "This request ID was already saved with different details.", {}, 409);
+    return prior.result;
+  }
+  const event = buildFreightEvent({ entityId: args.entityId, freightOrderId: record.identity.freightOrderId, eventType: "freight.created", actorId: args.actorId, commandId, payload: { status: record.status, request: record } });
+  const result = await transactAmendOrder({ record, expectedRevision: 0, eventItem: freightEventItem(event), commandId, fingerprint, operation: "freight.create" });
+  return result.record;
 }
 
 async function load(
@@ -225,11 +214,11 @@ async function request(args) {
 }
 
 const AMENDABLE_ORDER_STATUSES = new Set([
-  "draft",
-  "requested"
+  "draft", "requested", "awarded", "dispatched", "picked-up", "in-transit", "delivered", "billed", "reconciled", "paid", "closed", "cancelled"
 ]);
 
 const AMENDMENT_FIELDS = [
+  "status", "execution.actualPickupAt", "execution.actualDeliveryAt", "metadata.notificationRecipients",
   "asset.weight",
   "purpose.type",
   "route.origin.objectId",
@@ -314,7 +303,7 @@ function buildAmendedFreightOrder({
   if (!canAmendOrderAtStatus(current.status)) {
     throw new FreightError(
       "FREIGHT_AMENDMENT_STATE_INVALID",
-      "Freight Order terms may be edited only while the order is draft or requested.",
+      "This Freight status is not recognized. Reload the request before editing.",
       { status: current.status },
       409
     );
@@ -330,14 +319,6 @@ function buildAmendedFreightOrder({
   }
 
   const reason = clean(changeReason);
-  if (clean(current.status) === "requested" && !reason) {
-    throw new FreightError(
-      "FREIGHT_AMENDMENT_REASON_REQUIRED",
-      "A change reason is required after Freight has been requested.",
-      {},
-      400
-    );
-  }
 
   const patch = safeObject(amendment);
   const assetPatch = safeObject(patch.asset);
@@ -391,13 +372,14 @@ function buildAmendedFreightOrder({
     },
     metadata: {
       ...(current.metadata || {}),
-      ...pick(metadataPatch, ["payer", "customerRebill", "acquisitionCost", "notes"])
+      ...pick(metadataPatch, ["payer", "customerRebill", "acquisitionCost", "notes", "notificationRecipients"])
     }
   });
   const timestamp = nowIso();
 
   const next = {
     ...current,
+    status: Object.hasOwn(patch, "status") ? clean(patch.status) : current.status,
     identity: {
       ...current.identity,
       revision: currentRevision + 1
@@ -410,8 +392,8 @@ function buildAmendedFreightOrder({
     route: normalized.route,
     execution: {
       ...normalized.execution,
-      actualPickupAt: clean(current?.execution?.actualPickupAt),
-      actualDeliveryAt: clean(current?.execution?.actualDeliveryAt)
+      actualPickupAt: Object.hasOwn(executionPatch, "actualPickupAt") ? clean(executionPatch.actualPickupAt) : clean(current?.execution?.actualPickupAt),
+      actualDeliveryAt: Object.hasOwn(executionPatch, "actualDeliveryAt") ? clean(executionPatch.actualDeliveryAt) : clean(current?.execution?.actualDeliveryAt)
     },
     economics: {
       ...current.economics,
@@ -430,6 +412,16 @@ function buildAmendedFreightOrder({
     }
   };
 
+  if (!AMENDABLE_ORDER_STATUSES.has(next.status)) throw new FreightError("FREIGHT_STATUS_INVALID", "Choose a valid request status.", {}, 400);
+  // These are recorded shipment facts, including historical corrections. They
+  // never invoke MOS movement commands or change a machine's current placement.
+  for (const field of ["requestedPickupAt", "scheduledPickupAt", "expectedDeliveryAt", "actualPickupAt", "actualDeliveryAt"]) {
+    const value = clean(next.execution[field]);
+    if (value && (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value.slice(0,10)).toISOString().slice(0,10) !== value.slice(0,10)))
+      throw new FreightError("FREIGHT_DATE_INVALID", `Enter a valid date and time for ${field}.`, { field }, 400);
+  }
+  if (next.execution.actualPickupAt && next.execution.actualDeliveryAt && Date.parse(next.execution.actualDeliveryAt) < Date.parse(next.execution.actualPickupAt))
+    throw new FreightError("FREIGHT_DELIVERY_BEFORE_PICKUP", "Actual delivery must be on or after actual pickup. Correct either date and save again.", {}, 400);
   if (!freightAmendmentDiff(current, next).length) {
     throw new FreightError(
       "FREIGHT_AMENDMENT_NO_CHANGES",
@@ -484,6 +476,7 @@ async function amend({
     return priorCommand.result;
   }
 
+  validateFreightRecipients(entityId, amendment?.metadata?.notificationRecipients);
   const current = await load(entityId, freightOrderId);
   const next = buildAmendedFreightOrder({
     current,

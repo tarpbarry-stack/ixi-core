@@ -77,13 +77,6 @@ function createFreightOrder({
     );
   }
 
-  if (!destinationId && !destinationLabel) {
-    throw new FreightError(
-      "FREIGHT_DESTINATION_REQUIRED",
-      "Destination AOS object, address, or label is required."
-    );
-  }
-
   const mode =
     Object.values(FREIGHT_MODE)
       .includes(clean(execution.mode))
