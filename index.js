@@ -147,6 +147,7 @@ app.use(
 
 app.use(
   "/tickets/v1",
+  ixiInternalFinancialRequest,
   ixiAuthenticatedFinancialRequest,
   ticketAuthenticatedRequest,
   ticketRouter

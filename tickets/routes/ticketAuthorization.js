@@ -59,9 +59,16 @@ function principalIsOwnerOrAdmin(req) {
   const access =
     req.ixiAuthenticatedAccess || {};
 
+  const trusted =
+    req.trustedFinancialAccess || {};
+
   const roles = [
     ...safeArray(
       principal.roles
+    ),
+
+    ...safeArray(
+      principal.roleIds
     ),
 
     ...safeArray(
@@ -69,7 +76,23 @@ function principalIsOwnerOrAdmin(req) {
     ),
 
     ...safeArray(
+      access.roleIds
+    ),
+
+    ...safeArray(
+      access.membership?.roles
+    ),
+
+    ...safeArray(
+      access.membership?.roleIds
+    ),
+
+    ...safeArray(
       access.authority?.roles
+    ),
+
+    ...safeArray(
+      trusted.roles
     )
   ]
     .map(value =>

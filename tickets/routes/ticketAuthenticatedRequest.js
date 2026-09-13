@@ -40,7 +40,8 @@ function ticketAuthenticatedRequest(
   const aosEntityId =
     clean(
       identity.aosEntityId ||
-      accessIdentity.aosEntityId
+      accessIdentity.aosEntityId ||
+      principal.entityId
     );
 
   const identityEntityId =
