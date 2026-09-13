@@ -4,14 +4,16 @@ on:
   pull_request:
     paths:
       - 'integrity/**'
-      - 'live/**'
+      - 'mos/integrity/**'
+      - 'mos/provisioning/**'
       - 'ops/**'
       - '.github/workflows/creation-integrity-tests.yml'
   push:
     branches: [main]
     paths:
       - 'integrity/**'
-      - 'live/**'
+      - 'mos/integrity/**'
+      - 'mos/provisioning/**'
       - 'ops/**'
       - '.github/workflows/creation-integrity-tests.yml'
 
@@ -28,7 +30,7 @@ jobs:
           node-version: '24'
 
       - name: Install dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Syntax check
         run: |
@@ -39,9 +41,9 @@ jobs:
           node -c integrity/creationIntegrityWorker.js
           node -c integrity/creationIntegrityService.test.js
           node -c integrity/creationIntegrityRunner.test.js
-          node -c live/mos/integrity/liveCreationIntegrityAdapter.js
-          node -c live/mos/integrity/liveCreationIntegrityWorkerAdapter.js
-          node -c live/mos/provisioning/aosObjectPassportService.js
+          node -c mos/integrity/liveCreationIntegrityAdapter.js
+          node -c mos/integrity/liveCreationIntegrityWorkerAdapter.js
+          node -c mos/provisioning/aosObjectPassportService.js
           bash -n ops/deploy-live-aos-integrity.sh
           bash -n ops/verify-live-aos-integrity.sh
 

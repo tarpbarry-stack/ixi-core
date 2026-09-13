@@ -51,7 +51,8 @@ const {
 
 
 const {
-  findPassportBySource
+  findPassportBySource,
+  passportSources
 } =
   require(
     "../passport/passportRegistry"
@@ -174,18 +175,11 @@ function resolveProductionObjectIdentity(
   }
 
 
-  if (
-    clean(
-      registryPassport
-        ?.sourceType
-    ) !==
-      "aos-object" ||
-    clean(
-      registryPassport
-        ?.sourceId
-    ) !==
-      objectId
-  ) {
+  // A Passport keeps its original source when AOS binds an existing listing.
+  // Validate the permanent AOS binding without replacing that shared identity.
+  if (!passportSources(registryPassport).some(source =>
+    source.sourceType === "aos-object" && source.sourceId === objectId
+  )) {
     return null;
   }
 
