@@ -24,7 +24,16 @@ def safe(root, relative):
     return result
 
 def atomic_copy(source, target, mode=None):
-    target.parent.mkdir(parents=True, exist_ok=True)
+    missing = []
+    directory = target.parent
+    while not directory.exists():
+        missing.append(directory)
+        directory = directory.parent
+    for directory in reversed(missing):
+        directory.mkdir()
+        # Deployment runs with umask 077; source must remain traversable by the
+        # unprivileged runtime. Existing data-directory permissions are retained.
+        directory.chmod(0o755)
     descriptor, temporary = tempfile.mkstemp(prefix=".ixi-install-", dir=target.parent)
     os.close(descriptor)
     try:
