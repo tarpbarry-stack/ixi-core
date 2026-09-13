@@ -15,6 +15,11 @@ const {
 } = require("../provisioning/aosObjectProvisioningService");
 
 const {
+  ownedEquipmentIndexForListing,
+  ensureOwnedMachineEquipmentMembership
+} = require("./ownedMachineEquipmentMembershipService");
+
+const {
   cleanText
 } = require("../util/normalize");
 
@@ -92,6 +97,10 @@ function provisionSharetribeMachine({
     );
   }
 
+  // Validate the existing index before creating identity. Missing or ambiguous
+  // indexes must not silently report successful owned-machine onboarding.
+  ownedEquipmentIndexForListing({ entityId: ownerEntityId, listing });
+
   const legacyPassport = findPassportBySource(
     "sharetribe-listing",
     listingId
@@ -134,16 +143,29 @@ function provisionSharetribeMachine({
     }
   }, { adoptObjectId });
 
-  const passport = bindPassportSource({
-    passportId: result.passport.passportId,
-    sourceType: "sharetribe-listing",
-    sourceId: listingId,
-    entityId: ownerEntityId
-  });
+  // Provisioning may have added a new active Object to historical lineage.
+  // Read the current registry before deciding whether a binding write is needed.
+  const boundPassport = findPassportBySource("sharetribe-listing", listingId);
+  const passport = boundPassport?.passportId === result.passport.passportId &&
+    cleanText(boundPassport.entityId) === ownerEntityId
+    ? boundPassport
+    : bindPassportSource({
+      passportId: result.passport.passportId,
+      sourceType: "sharetribe-listing",
+      sourceId: listingId,
+      entityId: ownerEntityId
+    });
 
   return {
     ...result,
     passport,
+    equipmentMembership: ensureOwnedMachineEquipmentMembership({
+      entityId: ownerEntityId,
+      principalId: actorId,
+      listing,
+      objectId: result.object.objectId,
+      passportId: passport.passportId
+    }),
     relationship: {
       principalType: "sharetribe-user",
       principalId: actorId,
