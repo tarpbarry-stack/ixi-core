@@ -405,6 +405,7 @@ function createInvoiceDocument({
   financialDocumentId = "",
 
   documentNumber = "",
+  serviceInvoice = null,
 
   financialState = "billed",
 
@@ -617,6 +618,7 @@ function createInvoiceDocument({
 
     documentType:
       "invoice",
+    ...(serviceInvoice && typeof serviceInvoice === "object" ? { serviceInvoice: safeObject(serviceInvoice) } : {}),
 
     documentNumber:
       clean(

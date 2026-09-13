@@ -87,6 +87,7 @@ const {
 } = require("./IXIFinancialDashboardRequestContract");
 
 const { getFinancialGLProjection } = require("./IXIFinancialGLService");
+const { createDesktopAccountingProjection } = require("./IXIFinancialDesktopAccountingProjection");
 
 const router = express.Router();
 
@@ -1534,6 +1535,20 @@ router.patch("/documents/:financialDocumentId", async (req, res) => {
       await assertFinancialPeriodOpen({ financialDocument: mergedDocument, entityPassportId: accessContext.entityPassportId });
     } catch (error) { return res.status(409).json({ ok: false, errors: [{ name: error.name, message: error.message, details: error.details || {} }] }); }
   }
+  try {
+    require("./IXIFinancialDeliveryReceiptControl").assertPurchaseOrderDelivery({
+      existing: existing?.financialDocument, merged: mergedDocument, accessContext,
+      getDelivery: require("../communications/passportEmailStore").getPassportEmailDelivery
+    });
+    if (mergedDocument.documentType === "invoice" && mergedDocument.serviceInvoice) {
+      const prior = existing.financialDocument;
+      if (prior.financialState !== "draft") throw new Error("Issued service invoices are immutable. Use a linked credit for a correction.");
+      if (!["draft", "billed", "void"].includes(mergedDocument.financialState)) throw new Error("Choose a valid service invoice action.");
+      if (JSON.stringify([prior.totals, prior.sourceFinancialDocumentId, prior.currency, prior.serviceInvoice.charges]) !== JSON.stringify([mergedDocument.totals, mergedDocument.sourceFinancialDocumentId, mergedDocument.currency, mergedDocument.serviceInvoice.charges])) throw new Error("Invoice charges and source are fixed when saved. Void the draft and create a corrected invoice.");
+      await assertFinancialPeriodOpen({ financialDocument: mergedDocument, entityPassportId: accessContext.entityPassportId });
+    }
+  } catch (error) { return res.status(409).json({ ok: false, errors: [{ message: error.message }] }); }
+
   const context = getRequestContext(req);
 
   let boundPatch = bindBillActorEvidence(
@@ -1864,6 +1879,28 @@ router.post("/scopes/snapshot", async (req, res) => {
  * snapshots for TRAN$ACT Desktop.
  */
 
+// The PDF is rendered by the authenticated frontend server from canonical
+// records. Browser-supplied PDF/content is never accepted by the public proxy.
+router.post("/delivery/email", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store, private");
+  try {
+    if (!req.ixiInternalAuth) return res.status(403).json({ ok: false, errors: [{ code: "INTERNAL_DELIVERY_REQUIRED", message: "Use the authenticated transaction send action." }] });
+    const accessContext = normalizeFinancialAccessContext(await getAccess(req));
+    const authority = authorizeFinancialAction({ accessContext, action: IXI_FINANCIAL_ACTIONS.EXPORT });
+    if (!authority.allowed) return sendEnvelope(res, createAuthorizationFailure({ accessContext, action: IXI_FINANCIAL_ACTIONS.EXPORT, operation: "financial.delivery.email", reason: authority.reason }));
+    const { deliverFinancialDocuments } = require("./IXIFinancialDocumentDelivery");
+    const store = require("../communications/passportEmailStore");
+    const { sendTransactionalEmail } = require("../identity/IXICommunicationsService");
+    const data = await deliverFinancialDocuments({ ...safeObject(req.body), actorPassportId: accessContext.actorPassportId, entityPassportId: accessContext.entityPassportId }, {
+      loadDocument: id => getFinancialStorageProvider().getFinancialDocumentRecord(id),
+      authorize: async id => { const failure = await authorizeDocumentRead({ accessContext, financialDocumentId: id, action: IXI_FINANCIAL_ACTIONS.VIEW_DOCUMENT, operation: "financial.delivery.email" }); if (failure) { const error = new Error("You cannot send one of the selected transactions."); error.status = 403; throw error; } },
+      claim: store.claimPassportEmailDelivery, complete: store.completePassportEmailDelivery,
+      consumeRate: store.consumePassportEmailRate, failDelivery: store.failPassportEmailDelivery, sendEmail: sendTransactionalEmail
+    });
+    return res.json({ ok: true, operation: "financial.delivery.email", data });
+  } catch (error) { return res.status(error.status || 502).json({ ok: false, errors: [{ code: error.code || "DELIVERY_FAILED", message: error.message }] }); }
+});
+
 router.post("/dashboard", async (req, res) => {
   const context = getRequestContext(req);
   try {
@@ -1893,6 +1930,26 @@ router.post("/dashboard", async (req, res) => {
       query: effectiveQuery,
       accessContext,
     });
+
+    // Only the authenticated company scope may include entity books. Object
+    // scopes retain their own history; never leak company accounts into them.
+    if (clean(effectiveQuery.rootPassportId) === clean(accessContext.entityPassportId) &&
+        authorizeFinancialAction({ accessContext, action: IXI_FINANCIAL_ACTIONS.VIEW_GENERAL_LEDGER }).allowed) {
+      try {
+      const accounting = await getFinancialGLProjection({
+        entityPassportId: accessContext.entityPassportId,
+        period: clean(effectiveQuery.startAt).slice(0, 7),
+        currency: effectiveQuery.currency || "USD",
+        includeDocuments: authorizeFinancialAction({ accessContext, action: IXI_FINANCIAL_ACTIONS.VIEW_DOCUMENT }).allowed === true
+      });
+      const accountingProjection = createDesktopAccountingProjection(accounting);
+      accountingProjection.executive = { ...projection.executive, ...accountingProjection.executive };
+      Object.assign(projection, accountingProjection);
+      } catch (error) {
+        projection.accountingError = { code: "ACCOUNTING_PROJECTION_UNAVAILABLE", message: "Posted accounting reports could not be loaded. Refresh to retry." };
+        projection.attention = { ...(projection.attention || {}), warnings: [...(projection.attention?.warnings || []), projection.accountingError] };
+      }
+    }
 
     if (authenticatedEstate.scopePassportIds.length) {
       projection.scopeDiscovery = authenticatedEstate;
