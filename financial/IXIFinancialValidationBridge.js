@@ -2492,17 +2492,21 @@ function validateFinancialDocument(document = {}) {
         "signed",
       ].includes(status)
     ) {
-      if (
-        !clean(record?.customer?.name) ||
-        !clean(record?.customer?.email || record?.customer?.phone)
-      )
+      const recordedOutsideIXI = manualSignatureAttestation &&
+        ["signed-invoice-pending", "signed"].includes(status);
+      if (!clean(record?.customer?.name))
+        errors.push("sales order customer name is required.");
+      // Delivery contact, serial capture and hosted terms belong to issuing an
+      // IXI signing package. An attested external copy already identifies its
+      // agreement; the canonical asset/Entity Passports remain required above.
+      if (!recordedOutsideIXI && !clean(record?.customer?.email || record?.customer?.phone))
         errors.push(
           "signable sales order requires customer identity and delivery contact.",
         );
-      if (!clean(record?.asset?.serialNumber))
+      if (!recordedOutsideIXI && !clean(record?.asset?.serialNumber))
         errors.push("signable sales order requires serial/VIN.");
       if (
-        !manualSignatureAttestation &&
+        !recordedOutsideIXI &&
         (!clean(terms.documentId) ||
           !/^[a-f0-9]{64}$/i.test(clean(terms.sha256)) ||
           !clean(terms.url) ||

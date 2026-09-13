@@ -209,6 +209,8 @@ function invoiceInput(order = {}, salesOrderId = "", references = []) {
   const total = Number(order?.totals?.total || 0);
   return {
     financialState: "draft",
+    // One stable commercial number for the one Invoice generated per order.
+    documentNumber: clean(salesOrderId) ? `INV-${hash(clean(salesOrderId)).slice(0, 12).toUpperCase()}` : "",
     currency: clean(order?.commercial?.currency || "USD"),
     occurredAt: nowIso(),
     dueDate: clean(order?.commercial?.dueDate),
