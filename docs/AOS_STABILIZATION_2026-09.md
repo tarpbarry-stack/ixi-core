@@ -1,9 +1,12 @@
 # AOS stabilization release — September 13, 2026
 
 Owner: this stabilization task. The user paused competing agents and authorized implementation and release.
-Status: frontend release merged and deployed; backend promotion blocked by AWS administrator setup.
-The first deployment stopped before any runtime installation because the GitHub deployment user
-does not have s3:CreateBucket. Backend completion still requires the evidence below.
+Status: deployed and verified on September 13, 2026. The administrator completed recovery setup;
+the resumed deployment installed and verified all 417 runtime source files from
+da2d6456815a2580ed13cc19779e183ef4e39f75. All required release evidence below passed.
+The paired [release record](https://github.com/tarpbarry-stack/ironxchange-homepage/blob/main/docs/AOS_RELEASE_STATUS_2026-09-13.md)
+contains the exact versions, recovery receipts, live UI checks and scope limits. Building can resume
+from that baseline. This documentation update does not change the installed runtime source.
 
 ## Product contracts retained
 
@@ -25,9 +28,9 @@ does not have s3:CreateBucket. Backend completion still requires the evidence be
 6. Current recoverability and scheduled backups were not established.
 7. IAM simulation found the runtime role lacked UpdateItem used by atomic Treasury balance updates.
 
-## Candidate changes
+## Released changes
 
-Session recovery lives in the paired frontend branch. Real signed HTTP/SQLite tests cover two clients,
+Session recovery is deployed in the paired frontend release. Real signed HTTP/SQLite tests cover two clients,
 queued gestures, lost responses, refused Recall, process restart and Return.
 Financial tests exercise the real listing-to-AOS provisioning path without creating a second Passport.
 Idempotency records/results remain durable; existing history remains untouched. New full-map
