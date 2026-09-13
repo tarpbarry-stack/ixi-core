@@ -26,7 +26,11 @@ run_stage git fetch -q --depth=1 origin "$IXI_CORE_SHA"
 run_stage git checkout -q --detach FETCH_HEAD
 test "$(run_stage git rev-parse HEAD)" = "$IXI_CORE_SHA"
 run_stage npm ci --no-audit --no-fund
-run_stage npm test
+if ! run_stage npm test > "$STAGE/test-results.log" 2>&1; then
+  tail -100 "$STAGE/test-results.log"
+  exit 1
+fi
+tail -9 "$STAGE/test-results.log"
 run_stage node "$STAGE/ops/runtime-release.js" create "$STAGE" "$IXI_CORE_SHA" > "$STAGE/release.json"
 node "$STAGE/ops/runtime-release.js" verify "$STAGE" "$STAGE/release.json"
 # Check remote recovery access before stopping a healthy service.
@@ -144,6 +148,9 @@ chmod 0600 /etc/ixi-recovery.env
 systemctl daemon-reload
 systemctl enable --now ixi-core-recovery.timer
 flock -u 9
-systemctl start ixi-core-recovery.service
+if ! systemctl start ixi-core-recovery.service; then
+  journalctl -u ixi-core-recovery.service -n 25 --no-pager -o cat >&2
+  exit 1
+fi
 systemctl is-active --quiet ixi-core-recovery.timer
 printf 'Complete IX-Core release verified: %s\n' "$IXI_CORE_SHA"
