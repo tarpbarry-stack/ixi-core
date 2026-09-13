@@ -6,6 +6,7 @@ const {
   S3Client,
   PutObjectCommand,
   HeadObjectCommand,
+  GetObjectCommand,
 } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const { REGION, BUCKET } = require("../media/config/mediaConfig");
@@ -141,6 +142,36 @@ async function completeFinancialAttachmentUpload(input = {}) {
   return { ...attachment, verification: signFinancialAttachmentEvidence(attachment) };
 }
 
+// Callers must authorize VIEW_DOCUMENT before invoking this service. The proof
+// binds the attachment to its canonical document; a client-supplied S3 key is
+// never accepted. Short-lived links expose only this verified private object.
+async function createFinancialAttachmentDownload({ financialDocument = {}, attachmentId = "" } = {}, dependencies = {}) {
+  const documentId = clean(financialDocument.financialDocumentId);
+  const collections = [financialDocument.attachments, financialDocument.expenseRecord?.attachments,
+    financialDocument.billRecord?.documents, financialDocument.assetAcquisition?.documents,
+    financialDocument.salesOrder?.documents];
+  const attachment = collections.flatMap(items => Array.isArray(items) ? items : [])
+    .find(item => clean(item.attachmentId) === clean(attachmentId));
+  if (!documentId || !attachment || !verifyFinancialAttachmentEvidence(attachment, { financialDocumentId: documentId })) {
+    throw Object.assign(new Error("Verified evidence is unavailable for this transaction."), { status: 404, code: "IXI_FINANCIAL_EVIDENCE_UNAVAILABLE" });
+  }
+  const sizeBytes = Number(attachment.sizeBytes || attachment.size);
+  const mimeType = clean(attachment.mimeType || attachment.contentType).toLowerCase();
+  if (!ALLOWED_CONTENT_TYPES.has(mimeType) || !Number.isInteger(sizeBytes) || sizeBytes < 1 || sizeBytes > MAX_FINANCIAL_ATTACHMENT_BYTES || !clean(attachment.storageKey).startsWith("financial-evidence/")) {
+    throw Object.assign(new Error("Evidence file controls are invalid."), { status: 409, code: "IXI_FINANCIAL_EVIDENCE_INVALID" });
+  }
+  const head = await (dependencies.head || (input => s3.send(new HeadObjectCommand(input))))({ Bucket: BUCKET, Key: attachment.storageKey, ChecksumMode: "ENABLED" });
+  if (Number(head.ContentLength) !== sizeBytes || clean(head.ContentType).split(";")[0] !== mimeType || clean(head.ChecksumSHA256) !== clean(attachment.checksumSha256)) {
+    throw Object.assign(new Error("Stored evidence does not match its verified checksum and file controls."), { status: 409, code: "IXI_FINANCIAL_EVIDENCE_MISMATCH" });
+  }
+  const fileName = path.basename(clean(attachment.fileName) || "evidence").replace(/[\r\n]/g, "").slice(0, 180);
+  const disposition = `attachment; filename="${safeSegment(fileName) || "evidence"}"; filename*=UTF-8''${encodeURIComponent(fileName).replace(/['()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)}`;
+  const command = new GetObjectCommand({ Bucket: BUCKET, Key: attachment.storageKey, ResponseContentType: mimeType, ResponseContentDisposition: disposition, ResponseCacheControl: "private, no-store" });
+  const downloadUrl = await (dependencies.sign || ((request, options) => getSignedUrl(s3, request, options)))(command, { expiresIn: 60 });
+  return { attachmentId: clean(attachment.attachmentId), financialDocumentId: documentId, fileName, mimeType, sizeBytes,
+    checksumSha256: attachment.checksumSha256, downloadUrl, expiresInSeconds: 60 };
+}
+
 module.exports = {
   ALLOWED_CONTENT_TYPES,
   MAX_FINANCIAL_ATTACHMENT_BYTES,
@@ -150,4 +181,5 @@ module.exports = {
   verifyFinancialAttachmentEvidence,
   createFinancialAttachmentUpload,
   completeFinancialAttachmentUpload,
+  createFinancialAttachmentDownload,
 };
