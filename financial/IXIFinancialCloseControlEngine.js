@@ -1,4 +1,5 @@
 "use strict";
+const { expenseCreatesPayable } = require("./IXIFinancialExpensePaymentPolicy");
 
 /*
  * Server-derived accounting close certification.
@@ -87,7 +88,7 @@ function buildFinancialCloseControls({ documents = [], journals = [], endingTria
   const unclassifiedLines = array(journals).flatMap(journal => array(journal.lines).filter(line => !chartMap.has(clean(line.accountCode))).map(line => ({ journalEntryId: clean(journal.financialDocumentId), accountCode: clean(line.accountCode) })));
   const suspenseLines = array(journals).flatMap(journal => array(journal.lines).filter(line => clean(chartMap.get(clean(line.accountCode))?.control).toLowerCase() === "suspense" && money(Number(line.debit || 0) - Number(line.credit || 0)) !== 0).map(line => ({ journalEntryId: clean(journal.financialDocumentId), accountCode: clean(line.accountCode), amount: money(Number(line.debit || 0) - Number(line.credit || 0)) })));
   const ar = operationalBalance({ documents: population, sourceTypes: ["invoice"], paymentDirection: "inflow" });
-  const ap = operationalBalance({ documents: population.filter(document => !["bill", "supplier-invoice"].includes(clean(document.documentType).toLowerCase()) || document?.accountingTreatment?.createsPayable === true), sourceTypes: ["bill", "supplier-invoice"], paymentDirection: "outflow", creditTypes: ["credit"] });
+  const ap = operationalBalance({ documents: population.filter(document => clean(document.documentType).toLowerCase() === "expense" ? expenseCreatesPayable(document) : !["bill", "supplier-invoice"].includes(clean(document.documentType).toLowerCase()) || document?.accountingTreatment?.createsPayable === true), sourceTypes: ["bill", "supplier-invoice", "expense"], paymentDirection: "outflow", creditTypes: ["credit"] });
   const arGl = accountBalance(endingTrialBalance, "ar");
   const apGl = money(-accountBalance(endingTrialBalance, "ap"));
   const treasury = treasuryControl(population, endingTrialBalance, period);

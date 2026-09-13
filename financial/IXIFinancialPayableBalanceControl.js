@@ -1,4 +1,5 @@
 "use strict";
+const { isPayableSource } = require("./IXIFinancialExpensePaymentPolicy");
 
 const clean = value => String(value ?? "").trim();
 const doc = record => record?.financialDocument || {};
@@ -9,7 +10,7 @@ const cents = document => active(document) ? Math.round(Number(document.totals?.
 // transaction. Two users cannot both spend the same remaining Bill balance.
 async function payableBalanceTransactionItems({ record, previousRecord, tableName, getRecord, getGuard, listRecords }) {
   const document = doc(record), previous = doc(previousRecord), type = clean(document.documentType);
-  const isBill = ["bill", "supplier-invoice"].includes(type);
+  const isBill = isPayableSource(document) || isPayableSource(previous);
   if (!isBill && !(type === "credit" || (type === "payment" && document.paymentDirection === "outflow"))) return [];
   const billId = clean(isBill ? document.financialDocumentId : document.sourceFinancialDocumentId);
   if (!billId) return [];
@@ -17,7 +18,7 @@ async function payableBalanceTransactionItems({ record, previousRecord, tableNam
   const guard = await getGuard(key);
   const billRecord = isBill ? record : await getRecord(billId);
   const bill = doc(billRecord);
-  if (!["bill", "supplier-invoice"].includes(clean(bill.documentType))) return [];
+  if (!isPayableSource(bill) && !isPayableSource(previous)) return [];
   const entity = clean(record.server?.entityPassportId);
   if (!entity || entity !== clean(billRecord?.server?.entityPassportId)) throw new Error("Bill and settlement must belong to the same Entity.");
   if (clean(document.currency) !== clean(bill.currency)) throw new Error("Bill and settlement currencies must match.");
@@ -33,6 +34,7 @@ async function payableBalanceTransactionItems({ record, previousRecord, tableNam
       if (item.documentType === "payment" && item.paymentDirection === "outflow") paid += cents(item);
     }
   }
+  if (isBill && type === "expense" && paid > 0 && clean(previous.paymentMethod) !== clean(document.paymentMethod)) throw new Error("This Expense has saved payments. Correct those payments before changing how the Expense was paid.");
   const delta = cents(document) - (previousRecord ? cents(previous) : 0);
   if (type === "credit") credited += delta;
   if (type === "payment") paid += delta;
