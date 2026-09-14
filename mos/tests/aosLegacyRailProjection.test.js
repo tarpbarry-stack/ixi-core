@@ -129,3 +129,105 @@ test("governed edge wins when the same legacy member is also present", () => {
   );
   assert.equal(projection[owner.objectId].members[0].migrationEvidence, null);
 });
+
+test("governed membership wins globally over a stale legacy owner", () => {
+  const locations = objectWithPassport({
+    objectId: "object-locations-global",
+    displayName: "Customer location index",
+    passportId: "IXIRAIL004"
+  });
+  const equipment = objectWithPassport({
+    objectId: "object-equipment-global",
+    displayName: "Customer equipment index",
+    passportId: "IXIRAIL005"
+  });
+  const machine = objectWithPassport({
+    objectId: "object-machine-global",
+    displayName: "Customer machine",
+    passportId: "IXIRAIL006",
+    directContainerId: locations.objectId
+  });
+  writePassportRecords([
+    ...readPassportRecords(),
+    ...[locations, equipment, machine].map(object => ({
+      passportId: object.identities[0].passportId,
+      entityId: object.entityId,
+      status: "active",
+      sources: [{ sourceType: "aos-object", sourceId: object.objectId }]
+    }))
+  ]);
+  const relationships = [
+    {
+      relationshipId: "relationship-legacy-location",
+      entityId: "entity-rail",
+      sourceObjectId: machine.objectId,
+      targetObjectId: locations.objectId,
+      behaviorId: null,
+      status: "active",
+      revision: 1
+    },
+    {
+      relationshipId: "relationship-governed-equipment",
+      entityId: "entity-rail",
+      sourceObjectId: machine.objectId,
+      targetObjectId: equipment.objectId,
+      behaviorId: EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP,
+      definitionId: "definition-neutral",
+      status: "active",
+      revision: 1
+    }
+  ];
+
+  const projection = buildRailProjectionMap(
+    relationships,
+    [locations, equipment, machine]
+  );
+
+  assert.equal(projection[locations.objectId], undefined);
+  assert.deepEqual(
+    projection[equipment.objectId].members.map(item => item.objectId),
+    [machine.objectId]
+  );
+  assert.equal(
+    projection[equipment.objectId].members[0].relationshipId,
+    "relationship-governed-equipment"
+  );
+});
+
+test("legacy evidence never nests one System Index inside another", () => {
+  const locations = {
+    ...objectWithPassport({
+      objectId: "object-locations-peer",
+      displayName: "Customer location index",
+      passportId: "IXIRAIL007"
+    }),
+    objectType: "system-index",
+    metadata: { systemIndexPresentation: true }
+  };
+  const workforce = {
+    ...objectWithPassport({
+      objectId: "object-workforce-peer",
+      displayName: "Customer workforce index",
+      passportId: "IXIRAIL008",
+      directContainerId: locations.objectId
+    }),
+    objectType: "system-index",
+    metadata: { systemIndexPresentation: true }
+  };
+  const relationship = {
+    relationshipId: "relationship-legacy-peer-index",
+    entityId: "entity-rail",
+    sourceObjectId: workforce.objectId,
+    targetObjectId: locations.objectId,
+    behaviorId: null,
+    status: "active",
+    revision: 1
+  };
+
+  const projection = buildRailProjectionMap(
+    [relationship],
+    [locations, workforce]
+  );
+
+  assert.equal(projection[locations.objectId], undefined);
+});
