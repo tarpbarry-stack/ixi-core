@@ -67,26 +67,85 @@ function buildProjectionMap(
   return map;
 }
 
+const SYSTEM_INDEX_TEMPLATE_ID =
+  "ixi-system-index-v1";
+
+function isSystemIndexObject(object = {}) {
+  const metadata =
+    object?.metadata &&
+    typeof object.metadata === "object"
+      ? object.metadata
+      : {};
+
+  const templateId = cleanText(
+    object?.cardTemplateSlug ||
+    object?.templateId ||
+    metadata?.templateId ||
+    metadata?.cardTemplateId
+  );
+
+  return (
+    metadata.systemIndex === true ||
+    metadata.isSystemIndex === true ||
+    metadata.systemIndexPresentation === true ||
+    metadata.systemAdapter === true ||
+    templateId === SYSTEM_INDEX_TEMPLATE_ID ||
+    cleanText(object?.objectType).toLowerCase() === "system-index"
+  );
+}
+
 function buildRailProjectionMap(relationships = [], objects = []) {
   const map = {};
   const objectsById = new Map(
     objects.map(object => [cleanText(object?.objectId), object])
   );
   const projectedMembersByOwner = new Map();
+  const governedMemberObjectIds = new Set(
+    relationships
+      .filter(relationship =>
+        relationship?.status === "active" &&
+        relationship?.behaviorId === EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP
+      )
+      .map(relationship => cleanText(relationship?.sourceObjectId))
+      .filter(Boolean)
+  );
 
   relationships
-    .filter(relationship =>
-      relationship?.status === "active" && (
-        relationship?.behaviorId === EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP ||
-        (
-          !cleanText(relationship?.behaviorId) &&
-          cleanText(
-            objectsById.get(cleanText(relationship?.sourceObjectId))
-              ?.directContainerId
-          ) === cleanText(relationship?.targetObjectId)
-        )
-      )
-    )
+    .filter(relationship => {
+      if (relationship?.status !== "active") return false;
+      if (relationship?.behaviorId === EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP) {
+        return true;
+      }
+      if (cleanText(relationship?.behaviorId)) return false;
+
+      const sourceObjectId = cleanText(relationship?.sourceObjectId);
+      const targetObjectId = cleanText(relationship?.targetObjectId);
+      const sourceObject = objectsById.get(sourceObjectId);
+      const targetObject = objectsById.get(targetObjectId);
+
+      /*
+       * Legacy direct-container state is read-only migration evidence. It
+       * cannot compete with a governed rail membership, even when the two
+       * edges name different owners. This prevents stale exclusive placement
+       * from swallowing an Object that already has governed membership.
+       */
+      if (governedMemberObjectIds.has(sourceObjectId)) return false;
+
+      /*
+       * System Indexes are root peer collections. A stale legacy containment
+       * record must never project one System Index inside another.
+       */
+      if (
+        isSystemIndexObject(sourceObject) &&
+        isSystemIndexObject(targetObject)
+      ) {
+        return false;
+      }
+
+      return (
+        cleanText(sourceObject?.directContainerId) === targetObjectId
+      );
+    })
     .sort((left, right) =>
       Number(right?.behaviorId === EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP) -
         Number(left?.behaviorId === EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP) ||
