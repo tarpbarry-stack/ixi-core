@@ -4,7 +4,7 @@ const crypto = require("node:crypto");
 const provider = require("./IXIFinancialProviderService");
 const { createCostCreditDocument } = require("./IXIFinancialCreditFactory");
 const { createPaymentDocument } = require("./IXIFinancialPaymentFactory");
-const { documentOf, entityOf, totalOf, isActive, isRevenueCredit, isCustomerRefund } = require("./IXIFinancialInventoryLifecycle");
+const { documentOf, entityOf, totalOf, isActive, isRevenueCredit, isCustomerRefund, resolveSoldBusinessDate } = require("./IXIFinancialInventoryLifecycle");
 const clean = value => String(value ?? "").trim();
 const array = value => Array.isArray(value) ? value : [];
 const cents = value => Math.round(Number(value) * 100);
@@ -59,7 +59,7 @@ function planAdjustment({ invoice, documents, body, accessContext }) {
   const kind = clean(body.kind);
   if (!["price-adjustment", "return"].includes(kind)) throw fail("Choose a price adjustment or a machine return.");
   const effectiveDate = businessDate(body.effectiveDate);
-  if (effectiveDate < invoice.metadata.assetSaleRecord.sale.saleDate) throw fail("An adjustment cannot predate this sale.");
+  if (effectiveDate < resolveSoldBusinessDate(invoice, documents).date) throw fail("An adjustment cannot predate this sale.");
   const reason = clean(body.reason);
   if (reason.length < 3) throw fail("Record the reason for the adjustment.");
   const amount = Number(body.amount);
@@ -145,7 +145,7 @@ function planReturn({ record, invoice, documents, body, accessContext }) {
   if (!credit) throw fail("Record the sale return credit before restoring private inventory.");
   if (body.machineReturned !== true) throw fail("Confirm that the machine has returned to your inventory.");
   const effectiveDate = businessDate(body.effectiveDate);
-  if (effectiveDate < invoice.metadata.assetSaleRecord.sale.saleDate || effectiveDate < clean(credit.occurredAt).slice(0, 10)) throw fail("The machine return cannot predate the recorded sale reversal.");
+  if (effectiveDate < resolveSoldBusinessDate(invoice, documents).date || effectiveDate < clean(credit.occurredAt).slice(0, 10)) throw fail("The machine return cannot predate the recorded sale reversal.");
   const reason = clean(body.reason);
   if (reason.length < 3) throw fail("Record the reason and evidence for returning this machine.");
   const expectedRevision = Number(body.expectedRevision);
