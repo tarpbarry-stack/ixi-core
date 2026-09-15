@@ -18,8 +18,7 @@ function ownedEquipmentIndexForListing({ entityId, listing }) {
     object.objectType === "system-index" &&
     object.metadata?.adapterId === "ixi-owned-equipment" &&
     object.metadata?.systemIndex === true &&
-    object.metadata?.systemAdapter === true &&
-    object.metadata?.systemIndexPresentation === true
+    object.metadata?.systemAdapter === true
   );
   if (matches.length !== 1) {
     throw new MosError("IXI_MACHINE_EQUIPMENT_INDEX_INVALID",

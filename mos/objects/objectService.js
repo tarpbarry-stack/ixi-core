@@ -42,6 +42,7 @@ const {
 
 const {
   isExplicitAosSystemIndexObject,
+  getAosSystemIndexMembershipPolicy,
   assertValidAosSystemIndexMembershipPolicy
 } = require("../relationships/aosSystemIndexMembershipPolicy");
 
@@ -352,7 +353,7 @@ function resolveDefinitionForCreate({
 }
 
 
-function createObject({
+function buildObjectForCreation({
   entityId,
 
   definitionId = null,
@@ -417,6 +418,10 @@ function createObject({
       definitionId,
       definitionKey
     });
+
+  if (definition && definition.status !== "active") {
+    throw new MosError("OBJECT_CREATION_DEFINITION_INACTIVE", "Choose an active customer definition before saving.", null, 409);
+  }
 
   let normalizedType = null;
   let legacyTemplate = null;
@@ -626,8 +631,44 @@ function createObject({
       1
   });
 
-  objects[objectId] =
-    object;
+  if (isExplicitAosSystemIndexObject(object)) {
+    const policy = getAosSystemIndexMembershipPolicy(object);
+    if (!policy) throw new MosError("AOS_SYSTEM_INDEX_MEMBERSHIP_POLICY_REQUIRED",
+      "Choose what the new index accepts before saving.", null, 409);
+    for (const type of policy.allowedObjectTypes) {
+      if (getObjectTemplate(type).objectType !== type) {
+        throw new MosError("AOS_SYSTEM_INDEX_MEMBER_TYPE_INVALID", "Choose a supported classification or a customer definition.",
+          { objectType: type }, 409);
+      }
+    }
+    for (const definitionId of policy.allowedDefinitionIds) {
+      const memberDefinition = resolveDefinitionForCreate({ entityId: object.entityId, definitionId });
+      if (memberDefinition.status !== "active") {
+        throw new MosError("OBJECT_CREATION_DEFINITION_INACTIVE", "The new index must use active customer definitions.", null, 409);
+      }
+    }
+  }
+  return { object, objects };
+}
+
+function prepareObjectForCreation(input) {
+  return buildObjectForCreation(input).object;
+}
+
+function createObject(input, { reservedObjectId = "" } = {}) {
+  const { object, objects } = buildObjectForCreation(input);
+  // A creation coordinator may reserve one ID in its durable Save intent.
+  // A stale worker must never replace an Object already written by a retry.
+  if (reservedObjectId) {
+    if (objects[reservedObjectId]) {
+      throw new MosError("OBJECT_CREATION_ALREADY_EXISTS", "The intended Object already exists. Resume its saved request.",
+        { objectId: reservedObjectId }, 409);
+    }
+    object.objectId = reservedObjectId;
+  }
+  const { objectId } = object;
+  const actorId = input.actorId || null;
+  objects[objectId] = object;
 
   writeObjects(
     objects
@@ -749,6 +790,7 @@ function listObjects({
 
 function updateObject({
   objectId,
+  objectType = undefined,
 
   expectedRevision = undefined,
   commandId = null,
@@ -853,6 +895,24 @@ function updateObject({
     }
   }
 
+  let nextObjectType = current.objectType;
+  if (objectType !== undefined && objectType !== current.objectType) {
+    const supported = Object.values(MOS_OBJECT_TYPES).filter(type =>
+      ![MOS_OBJECT_TYPES.GENERIC, MOS_OBJECT_TYPES.ENTITY, MOS_OBJECT_TYPES.SYSTEM_INDEX].includes(type)
+    );
+    if (current.objectType !== MOS_OBJECT_TYPES.GENERIC || current.definitionId ||
+      isExplicitAosSystemIndexObject(current) || !supported.includes(objectType)) {
+      throw new MosError("OBJECT_CLASSIFICATION_CHANGE_PROHIBITED",
+        "Only an unclassified ordinary Object can receive an explicit supported classification.",
+        { objectId, currentObjectType: current.objectType, requestedObjectType: objectType }, 409);
+    }
+    if (expectedRevision === undefined || expectedRevision === null || !cleanText(commandId)) {
+      throw new MosError("OBJECT_CLASSIFICATION_COMMAND_REQUIRED",
+        "Classification requires a revision and an auditable commandId.", { objectId }, 428);
+    }
+    nextObjectType = objectType;
+  }
+
   let definition = null;
 
   if (current.definitionId) {
@@ -953,6 +1013,7 @@ function updateObject({
 
   const updated = validateSystemIndexMembershipPolicy({
     ...current,
+    objectType: nextObjectType,
 
     displayName:
       nextDisplayName,
@@ -1067,6 +1128,9 @@ function updateObject({
     commandId,
 
     payload: {
+      ...(nextObjectType !== current.objectType ? {
+        classification: { previousObjectType: current.objectType, objectType: nextObjectType }
+      } : {}),
       displayName:
         updated.displayName,
 
@@ -1348,6 +1412,7 @@ function restoreObject({
 
 
 module.exports = {
+  prepareObjectForCreation,
   createObject,
   getObject,
   listObjects,

@@ -31,6 +31,32 @@ function totalOf(doc = {}) {
   return money(array(doc.lines).reduce((sum, line) => sum + Number(line.amount || 0), 0));
 }
 
+// Current closeouts store a machine-specific price. Earlier closeouts already
+// recorded it as the source invoice's commercial subtotal. Resolve that existing
+// fact only for a single matching machine and a reconciled commercial breakdown.
+function resolveMachineSalePrice(doc = {}, sale = {}, passportId = "") {
+  const explicit = money(sale.sale?.machineSalePrice);
+  if (explicit !== null && explicit >= 0) return { amount: explicit, source: "sold-record" };
+  const assetRoles = new Set(["asset", "machine", "equipment"]);
+  const assetIds = new Set([
+    ...array(doc.references),
+    ...array(doc.lines).flatMap(line => array(line.references))
+  ].filter(ref => assetRoles.has(ref.role)).map(ref => clean(ref.passportId)).filter(Boolean));
+  const saleAsset = clean(sale.context?.assetPassportId);
+  if (!passportId || assetIds.size !== 1 || !assetIds.has(passportId) || (saleAsset && saleAsset !== passportId)) {
+    return { amount: null, source: "" };
+  }
+  const breakdown = doc.metadata?.commercialBreakdown;
+  const fields = ["subtotal", "tax", "freight", "fees", "tradeAllowance", "total"];
+  const values = fields.map(field => cents(breakdown?.[field]));
+  if (values.some(value => value === null || value < 0)) return { amount: null, source: "" };
+  const [subtotal, tax, freight, fees, tradeAllowance, total] = values;
+  if (subtotal + tax + freight + fees - tradeAllowance !== total || cents(totalOf(doc)) !== total) {
+    return { amount: null, source: "" };
+  }
+  return { amount: subtotal / 100, source: "invoice-commercial-subtotal" };
+}
+
 function isRevenueCredit(doc = {}) {
   return doc.documentType === "credit" && doc.creditType === "revenue-credit";
 }
@@ -41,6 +67,36 @@ function isCustomerRefund(doc = {}) {
 
 function isActive(doc = {}) {
   return !inactive.has(clean(doc.financialState || doc.status).toLowerCase());
+}
+
+// Older closeout forms defaulted to the entry day. Recover the business date
+// only when the original invoice and fully collected canonical receipts agree.
+// Explicit operator dates and the original audit record remain untouched.
+function resolveSoldBusinessDate(invoice = {}, documents = []) {
+  const sale = invoice.metadata?.assetSaleRecord || {};
+  const stored = date(sale.sale?.saleDate);
+  const fallback = { date: stored, source: clean(sale.sale?.saleDateSource) || "sold-record" };
+  const invoiceDate = date(invoice.occurredAt);
+  const valid = day => /^\d{4}-\d{2}-\d{2}$/.test(day) && Number.isFinite(Date.parse(day)) && new Date(day).toISOString().slice(0, 10) === day;
+  if (sale.sale?.saleDateSource || !valid(stored) || !valid(invoiceDate) || invoiceDate >= stored ||
+      stored !== date(sale.audit?.closedAt) || !entityOf(invoice) || !clean(invoice.currency)) return fallback;
+  const invoiceCents = cents(totalOf(invoice));
+  if (!(invoiceCents > 0)) return fallback;
+  const receipts = new Map();
+  for (const record of array(documents)) {
+    const doc = documentOf(record);
+    if (clean(doc.sourceFinancialDocumentId) !== clean(invoice.financialDocumentId) ||
+        !clean(doc.financialDocumentId) || entityOf(record) !== entityOf(invoice) ||
+        clean(doc.currency) !== clean(invoice.currency) || doc.documentType !== "payment" ||
+        doc.paymentDirection !== "inflow" || !["paid", "posted", "collected", "closed"].includes(doc.financialState) ||
+        !valid(date(doc.occurredAt)) || date(doc.occurredAt) > invoiceDate || !(cents(totalOf(doc)) > 0)) continue;
+    receipts.set(doc.financialDocumentId, doc);
+  }
+  const received = [...receipts.values()];
+  const receivedCents = received.reduce((sum, doc) => sum + cents(totalOf(doc)), 0);
+  const lastReceiptDate = received.map(doc => date(doc.occurredAt)).sort().at(-1);
+  return receivedCents >= invoiceCents && lastReceiptDate === invoiceDate
+    ? { date: invoiceDate, source: "invoice-and-collection" } : fallback;
 }
 
 function projectInventory({ records = [], entityPassportId = "" } = {}) {
@@ -71,7 +127,8 @@ function projectInventory({ records = [], entityPassportId = "" } = {}) {
     const sale = doc.metadata?.assetSaleRecord;
     if (doc.documentType !== "invoice" || sale?.status !== "sold" || doc.metadata?.assetSale !== true) continue;
     const saleId = clean(doc.financialDocumentId);
-    const effectiveDate = date(sale.sale?.saleDate);
+    const businessDate = resolveSoldBusinessDate(doc, documents);
+    const effectiveDate = businessDate.date;
     if (!passportId || !effectiveDate || !saleId || clean(sale.identity?.financialInvoiceId || sale.identity?.saleId) !== saleId) {
       issues.push({ documentId: saleId, passportId, code: "INCOMPLETE_SALE_IDENTITY", message: "The recorded sale needs its machine, invoice lineage, and original sale date reconciled." });
       if (passportId) holds.set(passportId, { state: "sold", documentId: saleId, reconciliationRequired: true });
@@ -93,15 +150,15 @@ function projectInventory({ records = [], entityPassportId = "" } = {}) {
     const settlements = related.filter(item => item.documentType === "settlement");
     const settlement = settlements.sort((a, b) => clean(a.updatedAt || a.occurredAt).localeCompare(clean(b.updatedAt || b.occurredAt))).at(-1);
     const settlementClosed = ["closed", "settled"].includes(clean(settlement?.assetSettlement?.status || settlement?.financialState));
-    // Older closeouts used salePrice for the whole invoice, potentially
-    // including tax or freight. Never label that as the machine price.
-    const recordedSalePrice = money(sale.sale?.machineSalePrice);
+    const machinePrice = resolveMachineSalePrice(doc, sale, passportId);
+    const recordedSalePrice = machinePrice.amount;
     const summary = {
       saleId, passportId, entityPassportId: entity,
       objectId: clean(sale.context?.assetObjectId),
       listingId: clean(sale.context?.assetListingId),
       label: clean(sale.context?.assetLabel),
-      saleDate: effectiveDate, salePrice: recordedSalePrice,
+      saleDate: effectiveDate, saleDateSource: businessDate.source, recordedSaleDate: date(sale.sale?.saleDate),
+      salePrice: recordedSalePrice, salePriceSource: machinePrice.source,
       customerTotal, currency: clean(doc.currency || sale.sale?.currency || "USD"),
       buyerLabel: clean(sale.sale?.buyerLabel), buyerPassportId: clean(sale.sale?.buyerPassportId),
       soldByLabel: clean(sale.sale?.soldByLabel), soldByPassportId: clean(sale.sale?.soldByPassportId),
@@ -121,7 +178,11 @@ function projectInventory({ records = [], entityPassportId = "" } = {}) {
     sales.push(summary);
     // A questionable historical closeout stays excluded from available stock;
     // it is reported for reconciliation instead of being silently put back.
-    if (receivedCents <= 0 || legacyCredits.length) issues.push({ documentId: saleId, passportId,
+    // Itemized all-trade SOLD writes verify the incoming acquisitions at closeout.
+    // Their recorded noncash consideration must not be presented as missing cash.
+    const tradeCents = array(doc.metadata?.trades).reduce((sum, trade) => sum + (cents(trade.allowance) || 0), 0);
+    const fullyTraded = customerTotal === 0 && tradeCents > 0 && cents(sale.collection?.tradeValue) === tradeCents;
+    if ((receivedCents <= 0 && !fullyTraded) || legacyCredits.length) issues.push({ documentId: saleId, passportId,
       code: "COLLECTION_RECONCILIATION_REQUIRED", message: "Check receipts and legacy credits for this recorded sale." });
     if (!summary.soldByLabel) issues.push({ documentId: saleId, passportId, code: "SALESPERSON_NOT_RECORDED", message: "The historical salesperson has not been recorded." });
     if (recordedSalePrice === null) issues.push({ documentId: saleId, passportId, code: "MACHINE_SALE_PRICE_NOT_RECORDED", message: "Verify the historical machine sale price separately from the invoice total." });
@@ -166,4 +227,4 @@ function querySoldInventory(projection, query = {}) {
   return { ...projection, sales: sales.slice((page - 1) * pageSize, page * pageSize), total, page, pageSize };
 }
 
-module.exports = { documentOf, entityOf, assetOf, totalOf, isActive, isRevenueCredit, isCustomerRefund, projectInventory, querySoldInventory };
+module.exports = { documentOf, entityOf, assetOf, totalOf, isActive, isRevenueCredit, isCustomerRefund, resolveSoldBusinessDate, projectInventory, querySoldInventory };

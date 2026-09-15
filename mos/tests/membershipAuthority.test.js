@@ -68,6 +68,18 @@ test("signed principal resolves through exactly one active same-tenant membershi
   assert.equal(resolved.principal.tenantId, bootstrap.account.tenantId);
 });
 
+test("an Entity owner's wildcard never authorizes another Entity's Object", async () => {
+  const other = ensureAosAccount({ ownerUserId: "other-entity-owner", displayName: "Other Entity" });
+  const { principal } = resolveMosMembershipPrincipal({ principalId: "other-entity-owner", entityId: other.entity.entityId });
+  assert.ok(principal.directGrants.includes("*"));
+  for (const capability of ["aos.view", "aos.edit", "aos.relationship.create", "transact.open"]) {
+    const decision = await evaluateMosObjectAuthority({ principal, object: provisioned.object, capability });
+    assert.equal(decision.enforced, true);
+    assert.equal(decision.allowed, false);
+    assert.equal(decision.reason, "object-entity-mismatch");
+  }
+});
+
 test("missing and cross-tenant membership fail closed", () => {
   assert.throws(
     () => resolveMosMembershipPrincipal({

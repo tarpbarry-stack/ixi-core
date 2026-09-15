@@ -241,13 +241,15 @@ function recoverAosObjectProvisioning({
           object.objectId,
 
         passportId:
-          persistedIdentity.passportId
+          persistedIdentity.passportId,
+        entityId: normalizedEntityId
       });
   } else {
     const passportResult =
       ensurePassportForAosObject({
         objectId:
-          object.objectId
+          object.objectId,
+        entityId: normalizedEntityId
       });
 
     passport =
@@ -277,6 +279,7 @@ function recoverAosObjectProvisioning({
         ...safeObject(
           object.metadata
         ),
+        transactEligible: true,
 
         provisioning: {
           ...safeObject(
@@ -308,7 +311,8 @@ function recoverAosObjectProvisioning({
           object.objectId,
 
         passportId:
-          passport.passportId
+          passport.passportId,
+        entityId: normalizedEntityId
       });
   }
 

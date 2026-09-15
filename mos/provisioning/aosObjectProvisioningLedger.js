@@ -2,6 +2,7 @@
 
 const {
   beginCommand,
+  getCommandRecord,
   completeCommand,
   failCommand
 } = require(
@@ -26,7 +27,8 @@ const {
 function beginProvisioning({
   commandId,
   entityId,
-  payloadHash
+  payloadHash,
+  resumeInterrupted = false
 }) {
   const result =
     beginCommand({
@@ -102,6 +104,12 @@ function beginProvisioning({
     };
   }
 
+  // Only the creation coordinator may resume under its durable lease. It has
+  // already established that no Object exists for this identity command.
+  if (resumeInterrupted && ["failed", "processing"].includes(existing.status)) {
+    return { replayed: false, record: existing, result: null };
+  }
+
   if (
     existing.status ===
       "processing"
@@ -151,6 +159,8 @@ function failProvisioning({
   commandId,
   error
 }) {
+  const current = getCommandRecord(commandId);
+  if (current?.status === "completed") return current;
   return failCommand({
     commandId,
     error

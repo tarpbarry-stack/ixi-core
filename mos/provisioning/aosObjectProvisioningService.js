@@ -97,7 +97,7 @@ function getObjectPassportIdentity(
 
 function provisionAosObject(
   input = {},
-  { adoptObjectId = "" } = {}
+  { adoptObjectId = "", resumeInterrupted = false, reservedObjectId = "" } = {}
 ) {
   const {
     normalized,
@@ -117,7 +117,8 @@ function provisionAosObject(
       entityId:
         normalized.entityId,
 
-      payloadHash
+      payloadHash,
+      resumeInterrupted
     });
 
 
@@ -295,7 +296,7 @@ function provisionAosObject(
               "object-created"
           }
         }
-        });
+        }, { reservedObjectId });
     }
 
 

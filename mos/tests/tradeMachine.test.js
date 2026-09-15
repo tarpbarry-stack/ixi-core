@@ -278,4 +278,36 @@ test("financial writes verify the saved order and permanent acquisition identity
     /machine/,
   );
 });
+test("all-trade SOLD verifies the actual acquisition and rejects a later reversal", async () => {
+  const req = input("trade-closeout"), provider = require("../../financial/IXIFinancialProviderService");
+  service.reserveTradeMachine(req);
+  const row = complete(req).row;
+  const trade = { ...row.machine, tradeId: row.tradeId, passportId: row.passportId,
+    objectId: row.objectId, listingId: row.listingId, allowance: 20619 };
+  const acquisition = { financialDocumentId: "acq-closeout", documentType: "asset-acquisition", financialState: "incurred",
+    assetAcquisition: { context: { primaryPassportId: row.passportId, entityPassportId: owner.passports.entityPassportId },
+      trade: { tradeId: row.tradeId, dealId: row.dealId } } };
+  const invoice = { financialDocumentId: "invoice-closeout", documentType: "invoice", financialState: "billed",
+    totals: { total: 0 }, metadata: { trades: [trade], dealId: req.dealId,
+      tradeContext: { primaryPassportId: req.outgoingPassportId, entityPassportId: owner.passports.entityPassportId } } };
+  const merged = { ...invoice, financialState: "collected", metadata: { ...invoice.metadata, assetSale: true,
+    assetSaleRecord: { status: "sold", identity: { financialInvoiceId: invoice.financialDocumentId } } } };
+  const saved = { getDocument: provider.getDocument, listDocumentsByPassport: provider.listDocumentsByPassport };
+  try {
+    provider.getDocument = async () => ({ ok: true, data: { record: { financialDocument: acquisition } } });
+    provider.listDocumentsByPassport = async () => ({ ok: true, data: { documents: [] } });
+    const { assertInvoiceCollectionPatchAvailable } = require("../../financial/IXIFinancialSalesCloseoutControl");
+    const check = () => assertInvoiceCollectionPatchAvailable({ existing: invoice, merged, entityPassportId: owner.passports.entityPassportId });
+    await assert.rejects(check(), /Record each trade acquisition/);
+    await service.confirmTradeAcquisition({ ...req, acquisitionId: acquisition.financialDocumentId });
+    const result = await check();
+    assert.equal(result.checked, true);
+    assert.equal(result.balance, 0);
+    assert.equal(result.received, 0);
+    acquisition.financialState = "reversed";
+    await assert.rejects(check(), /matching recorded trade acquisition/);
+  } finally {
+    Object.assign(provider, saved);
+  }
+});
 test.after(() => fs.rmSync(root, { recursive: true, force: true }));

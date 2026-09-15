@@ -48,7 +48,9 @@ async function bindSoldInventory({ existing = {}, next = {}, accessContext, comm
   const previousSale = projection.sales.find(item => item.passportId === passportId);
   const recordedAt = new Date().toISOString();
   return { ...next.metadata,
-    assetSaleRecord: { ...sale, context: { ...sale.context, entityPassportId: accessContext.entityPassportId, actorPassportId: accessContext.actorPassportId },
+    assetSaleRecord: { ...sale,
+      sale: { ...sale.sale, saleDateSource: sale.sale.saleDateSource === "invoice" && sale.sale.saleDate === clean(existing.occurredAt).slice(0, 10) ? "invoice" : "operator" },
+      context: { ...sale.context, entityPassportId: accessContext.entityPassportId, actorPassportId: accessContext.actorPassportId },
       audit: { ...sale.audit, createdBy: accessContext.actorPassportId, closedAt: recordedAt, updatedAt: recordedAt } },
     inventoryMutation: { commandId, sequence: Number(current?.sequence || 0) + 1, type: "sale", passportId, state: "sold", previousSaleId: previousSale?.saleId || "", effectiveDate: sale.sale.saleDate, recordedAt }
   };
