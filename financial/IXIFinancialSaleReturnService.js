@@ -58,6 +58,7 @@ function planAdjustment({ invoice, documents, body, accessContext }) {
   if (replay) { if ((replay.metadata?.saleId || replay.sourceFinancialDocumentId) !== invoice.financialDocumentId) throw fail("This command already belongs to a different sale."); return checkedReplay(replay, body); }
   const kind = clean(body.kind);
   if (!["price-adjustment", "return"].includes(kind)) throw fail("Choose a price adjustment or a machine return.");
+  if (kind === "return" && array(invoice.metadata?.trades).length) throw fail("This sale includes trade-in machines. A full return must account for those machines and their acquisition reversals; the cash-only return action cannot close this deal.");
   const effectiveDate = businessDate(body.effectiveDate);
   if (effectiveDate < invoice.metadata.assetSaleRecord.sale.saleDate) throw fail("An adjustment cannot predate this sale.");
   const reason = clean(body.reason);

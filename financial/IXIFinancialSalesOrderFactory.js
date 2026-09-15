@@ -28,7 +28,8 @@ function createSalesOrderDocument({
   externalReference = "",
   metadata = {}
 } = {}) {
-  const record = object(salesOrder);
+  const record = require("./IXIFinancialTradeContract").normalizeSalesTrades(object(salesOrder));
+  if (record.trades?.length) require("../mos/onboarding/tradeMachineService").verifiedOrderTrades(record);
   const id = clean(financialDocumentId) || randomId("ifd");
   const numberValue = clean(documentNumber) || `SO-${id.slice(-8).toUpperCase()}`;
   const subtotal = money(record?.totals?.subtotal);

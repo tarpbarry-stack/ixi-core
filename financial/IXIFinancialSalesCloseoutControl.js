@@ -126,7 +126,16 @@ async function assertInvoiceCollectionPatchAvailable({
         },
       );
     }
-    if (!(position.received > 0) || position.invoiceAmount <= position.credited) {
+    const trades = array(existing.metadata?.trades);
+    if (trades.length) {
+      const linked = require("../mos/onboarding/tradeMachineService").verifiedOrderTrades({
+        trades, identity: { dealId: existing.metadata?.dealId }, context: existing.metadata?.tradeContext
+      });
+      if (linked.some(row => row.status !== "acquired" || !row.acquisitionId)) throw new Error("Record each trade acquisition before completing SOLD.");
+      for (const row of linked) await require("../mos/onboarding/tradeMachineService").loadVerifiedAcquisition(row, row.acquisitionId);
+    }
+    const fullyTraded = trades.length > 0 && position.invoiceAmount === 0 && position.credited === 0;
+    if (!fullyTraded && (!(position.received > 0) || position.invoiceAmount <= position.credited)) {
       throw Object.assign(new Error("SOLD requires recorded sale funds. A fully credited or zero-value invoice is not a collected machine sale."), {
         name: "IXIFinancialSoldReceiptRequiredError", details: position,
       });

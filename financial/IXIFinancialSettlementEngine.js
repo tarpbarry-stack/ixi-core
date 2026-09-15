@@ -351,7 +351,9 @@ function rebuildCanonicalSettlement({
   );
   const acquisition = object(acquisitionDoc?.assetAcquisition);
   const invoiceId = clean(sale.financialDocumentId),
-    salePrice = money(sale?.totals?.total ?? record.projection?.salePrice);
+    invoiceTotal = money(sale?.totals?.total ?? record.projection?.salePrice),
+    tradeValue = money(array(sale.metadata?.trades).reduce((sum, row) => sum + num(row.allowance), 0)),
+    salePrice = money(invoiceTotal + tradeValue);
   const receipts = related.filter(
     (doc) =>
       typeOf(doc) === "payment" &&
@@ -440,7 +442,9 @@ function rebuildCanonicalSettlement({
     refunded,
     customerRefundLiability,
     netSalePrice,
-    buyerBalance: money(Math.max(0, salePrice - collected - credited)),
+    invoiceTotal,
+    tradeValue,
+    buyerBalance: money(Math.max(0, invoiceTotal - collected - credited)),
     acquisitionCost,
     makeReadyCost,
     postAcquisitionCosts,

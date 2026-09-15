@@ -37,7 +37,8 @@ async function bindSoldInventory({ existing = {}, next = {}, accessContext, comm
   const { businessDate } = require("./IXIFinancialSaleReturnService");
   businessDate(sale.sale?.saleDate);
   const price = Number(sale.sale?.machineSalePrice);
-  const invoiceTotal = Number(existing.totals?.total);
+  const tradeValue = (existing.metadata?.trades || []).reduce((sum, trade) => sum + Math.round(Number(trade.allowance) * 100), 0) / 100;
+  const invoiceTotal = Number(existing.totals?.total) + tradeValue;
   if (!Number.isFinite(invoiceTotal) || !Number.isFinite(price) || price <= 0 || price > invoiceTotal || Math.abs(Math.round(price * 100) - price * 100) > 0.000001) throw new Error("Record the actual machine sale price, excluding invoice additions, before completing SOLD.");
   const passportId = assetOf(existing);
   if (!passportId || clean(sale.context?.assetPassportId) !== passportId) throw new Error("The sold machine must match the original invoice's verified Passport reference.");
