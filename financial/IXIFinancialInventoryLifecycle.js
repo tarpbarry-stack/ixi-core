@@ -31,6 +31,32 @@ function totalOf(doc = {}) {
   return money(array(doc.lines).reduce((sum, line) => sum + Number(line.amount || 0), 0));
 }
 
+// Current closeouts store a machine-specific price. Earlier closeouts already
+// recorded it as the source invoice's commercial subtotal. Resolve that existing
+// fact only for a single matching machine and a reconciled commercial breakdown.
+function resolveMachineSalePrice(doc = {}, sale = {}, passportId = "") {
+  const explicit = money(sale.sale?.machineSalePrice);
+  if (explicit !== null && explicit >= 0) return { amount: explicit, source: "sold-record" };
+  const assetRoles = new Set(["asset", "machine", "equipment"]);
+  const assetIds = new Set([
+    ...array(doc.references),
+    ...array(doc.lines).flatMap(line => array(line.references))
+  ].filter(ref => assetRoles.has(ref.role)).map(ref => clean(ref.passportId)).filter(Boolean));
+  const saleAsset = clean(sale.context?.assetPassportId);
+  if (!passportId || assetIds.size !== 1 || !assetIds.has(passportId) || (saleAsset && saleAsset !== passportId)) {
+    return { amount: null, source: "" };
+  }
+  const breakdown = doc.metadata?.commercialBreakdown;
+  const fields = ["subtotal", "tax", "freight", "fees", "tradeAllowance", "total"];
+  const values = fields.map(field => cents(breakdown?.[field]));
+  if (values.some(value => value === null || value < 0)) return { amount: null, source: "" };
+  const [subtotal, tax, freight, fees, tradeAllowance, total] = values;
+  if (subtotal + tax + freight + fees - tradeAllowance !== total || cents(totalOf(doc)) !== total) {
+    return { amount: null, source: "" };
+  }
+  return { amount: subtotal / 100, source: "invoice-commercial-subtotal" };
+}
+
 function isRevenueCredit(doc = {}) {
   return doc.documentType === "credit" && doc.creditType === "revenue-credit";
 }
@@ -93,15 +119,14 @@ function projectInventory({ records = [], entityPassportId = "" } = {}) {
     const settlements = related.filter(item => item.documentType === "settlement");
     const settlement = settlements.sort((a, b) => clean(a.updatedAt || a.occurredAt).localeCompare(clean(b.updatedAt || b.occurredAt))).at(-1);
     const settlementClosed = ["closed", "settled"].includes(clean(settlement?.assetSettlement?.status || settlement?.financialState));
-    // Older closeouts used salePrice for the whole invoice, potentially
-    // including tax or freight. Never label that as the machine price.
-    const recordedSalePrice = money(sale.sale?.machineSalePrice);
+    const machinePrice = resolveMachineSalePrice(doc, sale, passportId);
+    const recordedSalePrice = machinePrice.amount;
     const summary = {
       saleId, passportId, entityPassportId: entity,
       objectId: clean(sale.context?.assetObjectId),
       listingId: clean(sale.context?.assetListingId),
       label: clean(sale.context?.assetLabel),
-      saleDate: effectiveDate, salePrice: recordedSalePrice,
+      saleDate: effectiveDate, salePrice: recordedSalePrice, salePriceSource: machinePrice.source,
       customerTotal, currency: clean(doc.currency || sale.sale?.currency || "USD"),
       buyerLabel: clean(sale.sale?.buyerLabel), buyerPassportId: clean(sale.sale?.buyerPassportId),
       soldByLabel: clean(sale.sale?.soldByLabel), soldByPassportId: clean(sale.sale?.soldByPassportId),

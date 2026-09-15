@@ -169,3 +169,60 @@ test("same-day return and resale keep the latest cycle sold and retain both sale
   assert.equal(result.current.IXIMACHINE1.documentId, "ifd_sale002");
   assert.equal(result.sales.length, 2);
 });
+
+
+test("legacy SOLD cards use the recorded single-machine invoice subtotal without altering history", () => {
+  const historical = invoice();
+  delete historical.metadata.assetSaleRecord.sale.machineSalePrice;
+  historical.metadata.commercialBreakdown = { subtotal: 10000, tax: 0, freight: 0, fees: 0, tradeAllowance: 0, deposit: 0, total: 10000 };
+  const before = JSON.stringify(historical);
+  const result = projectInventory({ records: [historical, receipt], entityPassportId: context.entityPassportId });
+  assert.equal(result.sales[0].salePrice, 10000);
+  assert.equal(result.sales[0].salePriceSource, "invoice-commercial-subtotal");
+  assert.equal(result.sales[0].customerTotal, 10000);
+  assert.equal(result.current.IXIMACHINE1.state, "sold");
+  assert.ok(!result.issues.some(issue => issue.code === "MACHINE_SALE_PRICE_NOT_RECORDED"));
+  assert.equal(JSON.stringify(historical), before);
+});
+
+test("legacy machine price excludes tax, freight and fees and is not reduced by deposits or trades", () => {
+  const historical = invoice();
+  delete historical.metadata.assetSaleRecord.sale.machineSalePrice;
+  historical.totals = { subtotal: 10000, total: 9250 };
+  historical.lines = [{ amount: 9250, references: refs }];
+  historical.metadata.assetSaleRecord.sale.salePrice = 9250;
+  historical.metadata.commercialBreakdown = { subtotal: 10000, tax: 600, freight: 500, fees: 150, tradeAllowance: 2000, deposit: 3000, total: 9250 };
+  const result = projectInventory({ records: [historical], entityPassportId: context.entityPassportId });
+  assert.equal(result.sales[0].salePrice, 10000);
+  assert.equal(result.sales[0].customerTotal, 9250);
+});
+
+test("an inconsistent, incomplete or multi-machine invoice cannot supply one machine's price", () => {
+  for (const change of [
+    doc => { doc.metadata.commercialBreakdown.total = 9999; },
+    doc => { doc.totals.total = 9999; },
+    doc => { delete doc.metadata.commercialBreakdown.tax; },
+    doc => { doc.references = [...refs, { role: "asset", passportId: "IXIMACHINE2" }]; },
+    doc => { doc.lines[0].references = [{ role: "asset", passportId: "IXIMACHINE2" }]; },
+    doc => { doc.metadata.assetSaleRecord.context.assetPassportId = "IXIMACHINE2"; }
+  ]) {
+    const historical = invoice();
+    delete historical.metadata.assetSaleRecord.sale.machineSalePrice;
+    historical.metadata.commercialBreakdown = { subtotal: 10000, tax: 0, freight: 0, fees: 0, tradeAllowance: 0, total: 10000 };
+    change(historical);
+    const result = projectInventory({ records: [historical], entityPassportId: context.entityPassportId });
+    assert.equal(result.sales[0].salePrice, null);
+    assert.ok(result.issues.some(issue => issue.code === "MACHINE_SALE_PRICE_NOT_RECORDED"));
+  }
+});
+
+test("an explicit machine sale price remains authoritative including an explicit zero", () => {
+  for (const amount of [0, 9500]) {
+    const current = invoice();
+    current.metadata.assetSaleRecord.sale.machineSalePrice = amount;
+    current.metadata.commercialBreakdown = { subtotal: 10000, tax: 0, freight: 0, fees: 0, tradeAllowance: 0, total: 10000 };
+    const result = projectInventory({ records: [current], entityPassportId: context.entityPassportId });
+    assert.equal(result.sales[0].salePrice, amount);
+    assert.equal(result.sales[0].salePriceSource, "sold-record");
+  }
+});
