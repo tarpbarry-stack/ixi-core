@@ -28,6 +28,13 @@ const {
 );
 
 const {
+  createAndAttachAosObject,
+  resumeAosCreation,
+  listAosCreationCommands,
+  acknowledgeAosCreation
+} = require("../provisioning/aosCreationCommandService");
+
+const {
   createImportJob,
   listImportJobs,
   getImportJob,
@@ -1208,6 +1215,43 @@ router.post(
 
 
 /* ---------- DURABLE OBJECT PROVISIONING ---------- */
+
+function creationAuthority(req) {
+  return {
+    principal: governedPrincipal(req, ["aos.create"]),
+    authorize: (object, capability) => assertMosObjectAuthority({
+      principal: req.ixiAuthorityPrincipal, object, capability
+    })
+  };
+}
+
+router.post("/objects/create", async (req, res) => {
+  try {
+    const commandId = requireGovernedCommandId(req, "AOS_CREATION_COMMAND_REQUIRED");
+    const result = await createAndAttachAosObject({ ...req.body, commandId }, creationAuthority(req));
+    return res.status(result.replayed ? 200 : 201).json({ ...result,
+      object: await objectWithEffectiveAuthority(req, result.object) });
+  } catch (error) { return sendMosError(res, error); }
+});
+
+router.get("/objects/creation-commands", async (req, res) => {
+  try {
+    return res.json({ ok: true, commands: await listAosCreationCommands(creationAuthority(req)) });
+  } catch (error) { return sendMosError(res, error); }
+});
+
+router.post("/objects/creation-commands/:commandId/resume", async (req, res) => {
+  try {
+    const result = await resumeAosCreation({ commandId: req.params.commandId, ...creationAuthority(req) });
+    return res.json({ ...result, object: await objectWithEffectiveAuthority(req, result.object) });
+  } catch (error) { return sendMosError(res, error); }
+});
+
+router.post("/objects/creation-commands/:commandId/acknowledge", async (req, res) => {
+  try {
+    return res.json(await acknowledgeAosCreation({ commandId: req.params.commandId, ...creationAuthority(req) }));
+  } catch (error) { return sendMosError(res, error); }
+});
 
 router.post(
   "/objects/provision",

@@ -112,7 +112,7 @@ test("a retry cannot undo an operator's subsequent Equipment removal", () => {
 test("invalid or ambiguous Equipment configuration fails before creating a machine", () => {
   const { input, equipment } = fixture("invalid-index");
   updateObject({ objectId: equipment.objectId, actorId: input.principalId,
-    metadata: { ...equipment.metadata, systemIndexPresentation: false } });
+    metadata: { ...equipment.metadata, systemAdapter: false } });
   const before = listObjects({ status: null });
   const passports = readPassportRecords();
   assert.throws(() => provisionSharetribeMachine(input), { code: "IXI_MACHINE_EQUIPMENT_INDEX_INVALID" });
@@ -124,6 +124,17 @@ test("invalid or ambiguous Equipment configuration fails before creating a machi
   assert.throws(() => provisionSharetribeMachine(input), { code: "IXI_MACHINE_EQUIPMENT_INDEX_INVALID" });
   assert.deepEqual(listObjects({ status: null }), duplicatedBefore);
   assert.deepEqual(readPassportRecords(), passports);
+});
+
+test("Equipment onboarding remains valid when its presentation flag is off", () => {
+  const { input, equipment } = fixture("presentation-independent-index");
+  updateObject({ objectId: equipment.objectId, actorId: input.principalId,
+    metadata: { ...equipment.metadata, systemIndexPresentation: false },
+    cardTemplateSlug: "aos-card-007" });
+  const result = provisionSharetribeMachine(input);
+  assert.equal(result.equipmentMembership.equipmentObjectId, equipment.objectId);
+  assert.equal(result.equipmentMembership.status, "member");
+  assert.equal(edges(input.entityId).filter(edge => edge.sourceObjectId === result.object.objectId).length, 1);
 });
 
 test("repair rejects foreign or mismatched identity without changing any membership", () => {
