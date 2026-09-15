@@ -60,6 +60,24 @@ test("parent authority and Passport failures leave no saved child", async () => 
   assert.deepEqual(census(), before);
 });
 
+test("new indexes cannot accept nonexistent classifications or unavailable customer definitions", () => {
+  const { createCustomerObjectType, archiveCustomerObjectType } = require("../objects/customerObjectTypeService");
+  const definition = createCustomerObjectType({ entityId: entity.entityId, label: "Retired definition", actorId: "owner" });
+  archiveCustomerObjectType({ entityId: entity.entityId, definitionId: definition.definitionId, actorId: "owner" });
+  const before = census();
+  for (const selection of [
+    { allowedObjectTypes: ["invented-technical-type"], allowedDefinitionIds: [] },
+    { allowedObjectTypes: [], allowedDefinitionIds: ["missing-definition"] },
+    { allowedObjectTypes: [], allowedDefinitionIds: [definition.definitionId] }
+  ]) {
+    assert.throws(() => objects.createObject({ entityId: entity.entityId, objectType: "system-index", displayName: "Invalid index",
+      metadata: { systemIndexMembershipPolicy: { ...policy, ...selection } } }));
+  }
+  assert.throws(() => objects.createObject({ entityId: entity.entityId, definitionId: definition.definitionId, displayName: "Invalid child" }),
+    { code: "OBJECT_CREATION_DEFINITION_INACTIVE" });
+  assert.deepEqual(census(), before);
+});
+
 test("customer definition is resolved before creation, including its required fields", async () => {
   const { createCustomerObjectType } = require("../objects/customerObjectTypeService");
   const definition = createCustomerObjectType({ entityId: entity.entityId, label: "Customer defined crew",

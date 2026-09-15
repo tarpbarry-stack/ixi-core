@@ -419,6 +419,10 @@ function buildObjectForCreation({
       definitionKey
     });
 
+  if (definition && definition.status !== "active") {
+    throw new MosError("OBJECT_CREATION_DEFINITION_INACTIVE", "Choose an active customer definition before saving.", null, 409);
+  }
+
   let normalizedType = null;
   let legacyTemplate = null;
 
@@ -627,9 +631,22 @@ function buildObjectForCreation({
       1
   });
 
-  if (isExplicitAosSystemIndexObject(object) && !getAosSystemIndexMembershipPolicy(object)) {
-    throw new MosError("AOS_SYSTEM_INDEX_MEMBERSHIP_POLICY_REQUIRED",
+  if (isExplicitAosSystemIndexObject(object)) {
+    const policy = getAosSystemIndexMembershipPolicy(object);
+    if (!policy) throw new MosError("AOS_SYSTEM_INDEX_MEMBERSHIP_POLICY_REQUIRED",
       "Choose what the new index accepts before saving.", null, 409);
+    for (const type of policy.allowedObjectTypes) {
+      if (getObjectTemplate(type).objectType !== type) {
+        throw new MosError("AOS_SYSTEM_INDEX_MEMBER_TYPE_INVALID", "Choose a supported classification or a customer definition.",
+          { objectType: type }, 409);
+      }
+    }
+    for (const definitionId of policy.allowedDefinitionIds) {
+      const memberDefinition = resolveDefinitionForCreate({ entityId: object.entityId, definitionId });
+      if (memberDefinition.status !== "active") {
+        throw new MosError("OBJECT_CREATION_DEFINITION_INACTIVE", "The new index must use active customer definitions.", null, 409);
+      }
+    }
   }
   return { object, objects };
 }
