@@ -749,6 +749,7 @@ function listObjects({
 
 function updateObject({
   objectId,
+  objectType = undefined,
 
   expectedRevision = undefined,
   commandId = null,
@@ -853,6 +854,24 @@ function updateObject({
     }
   }
 
+  let nextObjectType = current.objectType;
+  if (objectType !== undefined && objectType !== current.objectType) {
+    const supported = Object.values(MOS_OBJECT_TYPES).filter(type =>
+      ![MOS_OBJECT_TYPES.GENERIC, MOS_OBJECT_TYPES.ENTITY, MOS_OBJECT_TYPES.SYSTEM_INDEX].includes(type)
+    );
+    if (current.objectType !== MOS_OBJECT_TYPES.GENERIC || current.definitionId ||
+      isExplicitAosSystemIndexObject(current) || !supported.includes(objectType)) {
+      throw new MosError("OBJECT_CLASSIFICATION_CHANGE_PROHIBITED",
+        "Only an unclassified ordinary Object can receive an explicit supported classification.",
+        { objectId, currentObjectType: current.objectType, requestedObjectType: objectType }, 409);
+    }
+    if (expectedRevision === undefined || expectedRevision === null || !cleanText(commandId)) {
+      throw new MosError("OBJECT_CLASSIFICATION_COMMAND_REQUIRED",
+        "Classification requires a revision and an auditable commandId.", { objectId }, 428);
+    }
+    nextObjectType = objectType;
+  }
+
   let definition = null;
 
   if (current.definitionId) {
@@ -953,6 +972,7 @@ function updateObject({
 
   const updated = validateSystemIndexMembershipPolicy({
     ...current,
+    objectType: nextObjectType,
 
     displayName:
       nextDisplayName,
@@ -1067,6 +1087,9 @@ function updateObject({
     commandId,
 
     payload: {
+      ...(nextObjectType !== current.objectType ? {
+        classification: { previousObjectType: current.objectType, objectType: nextObjectType }
+      } : {}),
       displayName:
         updated.displayName,
 

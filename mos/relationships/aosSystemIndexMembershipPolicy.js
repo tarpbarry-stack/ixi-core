@@ -9,9 +9,6 @@ const AOS_SYSTEM_INDEX_MEMBERSHIP_POLICY_SCHEMA =
 const OWNED_EQUIPMENT_ADAPTER_ID =
   "ixi-owned-equipment";
 
-const SYSTEM_INDEX_TEMPLATE_ID =
-  "ixi-system-index-v1";
-
 const OWNED_EQUIPMENT_MEMBERSHIP_POLICY = Object.freeze({
   schema: AOS_SYSTEM_INDEX_MEMBERSHIP_POLICY_SCHEMA,
   enabled: true,
@@ -36,21 +33,15 @@ function normalizedList(values) {
 
 function isExplicitAosSystemIndexObject(object = {}) {
   const metadata = safeObject(object?.metadata);
-  const templateId = cleanText(
-    object?.cardTemplateSlug ||
-    object?.templateId ||
-    metadata.templateId ||
-    metadata.cardTemplateId
-  );
 
+  // These persisted fields declare structure. Card selection, presentation
+  // flags and the presence of an adapter are not declarations of structure.
+  // Retain the explicit legacy role fields so existing roots remain roots.
   return (
     metadata.systemIndex === true ||
     metadata.isSystemIndex === true ||
-    metadata.systemIndexPresentation === true ||
-    metadata.systemAdapter === true ||
     metadata.rootContainer === true ||
     cleanText(metadata.hierarchyRole).toLowerCase() === "index" ||
-    templateId === SYSTEM_INDEX_TEMPLATE_ID ||
     cleanText(object?.objectType).toLowerCase() === "system-index"
   );
 }
@@ -198,6 +189,10 @@ function evaluateAosRailMembership({ sourceObject, targetObject } = {}) {
     policy.allowedDefinitionIds.includes(sourceDefinitionId)
   );
 
+  if (!matchesType && !matchesDefinition && sourceType === "generic" && !sourceDefinitionId) {
+    return { allowed: false, code: "AOS_OBJECT_MEMBERSHIP_CLASSIFICATION_REQUIRED", reason: "member-classification-required", policy };
+  }
+
   return matchesType || matchesDefinition
     ? {
         allowed: true,
@@ -225,7 +220,9 @@ function assertAosRailMembershipAllowed({ sourceObject, targetObject } = {}) {
     AOS_SYSTEM_INDEX_MEMBERSHIP_DISABLED:
       "The target System Index does not accept operational membership writes.",
     AOS_SYSTEM_INDEX_MEMBER_REJECTED:
-      "The Object does not match the target System Index membership policy."
+      "The Object does not match the target System Index membership policy.",
+    AOS_OBJECT_MEMBERSHIP_CLASSIFICATION_REQUIRED:
+      "The Object needs an explicit classification before its membership can be validated."
   };
 
   throw new MosError(

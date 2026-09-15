@@ -55,6 +55,8 @@ const {
   withAuthorityPolicyReadScope
 } = require("../../authority/IXIAuthorityPolicyResolver");
 
+const { buildAosMembershipReview } = require("../relationships/aosMembershipReview");
+
 function buildProjectionMap(
   projections = []
 ) {
@@ -350,6 +352,8 @@ async function loadAosEnvironmentWithinAuthorityScope({
         )
     ).map(object => authorizedObjectById.get(object.objectId));
 
+  const membershipReview = buildAosMembershipReview(relationships, discoverableObjects);
+
   const projections =
     rebuildEntityProjections(
       entity.entityId
@@ -410,7 +414,12 @@ async function loadAosEnvironmentWithinAuthorityScope({
     entity,
 
     objects:
-      authorizedObjects,
+      authorizedObjects.map(object => ({
+        ...object,
+        ...(membershipReview[object.objectId]
+          ? { membershipReview: membershipReview[object.objectId] }
+          : {})
+      })),
 
     relationships,
 

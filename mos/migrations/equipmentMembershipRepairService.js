@@ -39,8 +39,7 @@ function equipmentIndexForEntity(objects, entityId) {
     cleanText(object?.objectType) === "system-index" &&
     cleanText(object?.metadata?.adapterId) === EQUIPMENT_ADAPTER_ID &&
     object?.metadata?.systemIndex === true &&
-    object?.metadata?.systemAdapter === true &&
-    object?.metadata?.systemIndexPresentation === true
+    object?.metadata?.systemAdapter === true
   );
 
   if (matches.length !== 1) {

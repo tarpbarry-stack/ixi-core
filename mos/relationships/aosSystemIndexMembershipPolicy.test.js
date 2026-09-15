@@ -22,7 +22,8 @@ const {
 } = require("./relationshipService");
 const {
   AOS_SYSTEM_INDEX_MEMBERSHIP_POLICY_SCHEMA,
-  evaluateAosRailMembership
+  evaluateAosRailMembership,
+  isExplicitAosSystemIndexObject
 } = require("./aosSystemIndexMembershipPolicy");
 const { EDGE_BEHAVIOR_IDS } = require("./edgeBehaviorRegistry");
 
@@ -65,6 +66,39 @@ function policy({ allowedObjectTypes = [], allowedDefinitionIds = [] } = {}) {
     allowedDefinitionIds
   };
 }
+
+test("changing only card appearance preserves structure and existing membership", () => {
+  const member = createTypedObject("person", "Customer chosen name");
+  const parent = createTypedObject("container", "Customer chosen container");
+  const edge = membership(member, parent, "appearance-member").relationship;
+  const appearances = [
+    { cardTemplateSlug: "ixi-system-index-v1" },
+    { cardTemplateSlug: "aos-card-007", metadata: { systemIndexPresentation: true } },
+    { cardTemplateSlug: "aos-card-018", metadata: { systemAdapter: true } },
+    { metadata: { templateId: "ixi-system-index-v1", cardTemplateId: "ixi-system-index-v1" } }
+  ];
+  for (const appearance of appearances) {
+    const updated = updateObject({ objectId: member.objectId, actorId: "policy-owner", ...appearance });
+    assert.equal(updated.objectId, member.objectId);
+    assert.deepEqual(updated.identities, member.identities);
+    assert.equal(isExplicitAosSystemIndexObject(updated), false);
+    assert.equal(evaluateAosRailMembership({ sourceObject: updated, targetObject: parent }).allowed, true);
+    const retried = membership(updated, parent, "appearance-member");
+    assert.equal(retried.relationship.relationshipId, edge.relationshipId);
+    assert.equal(retried.changed, false);
+  }
+});
+
+test("explicit legacy structural declarations remain roots without presentation hints", () => {
+  for (const metadata of [
+    { systemIndex: true }, { isSystemIndex: true },
+    { hierarchyRole: "index" }, { rootContainer: true }
+  ]) {
+    const root = { objectType: "generic", metadata };
+    assert.equal(isExplicitAosSystemIndexObject(root), true);
+    assert.equal(evaluateAosRailMembership({ sourceObject: root, targetObject: {} }).allowed, false);
+  }
+});
 
 test("System Index membership is governed by technical type and definition identity", () => {
   const location = createTypedObject("location", "Customer Label A");

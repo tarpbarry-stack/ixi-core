@@ -130,6 +130,18 @@ async function evaluateResolvedMosObjectAuthority({ principal, identity, capabil
   }
 
 
+  // A tenant-scoped owner grant cannot authorize another Entity's Object.
+  // Apply this before either direct grants or Passport policy evaluation.
+  if (principal.strictAuthorization === true &&
+    (!clean(principal.entityId) || clean(principal.entityId) !== clean(identity?.object?.entityId))) {
+    return {
+      enforced: true,
+      allowed: false,
+      reason: "object-entity-mismatch",
+      objectId: clean(identity?.object?.objectId)
+    };
+  }
+
   if (!identity.passportId) {
     if (principal.strictAuthorization === true) {
       return {

@@ -73,7 +73,6 @@ function ensureCanonicalSystemIndexes({ entityId, actorId }) {
         cleanText(metadata.systemIndexKey) === definition.key &&
         metadata.systemIndex === true &&
         metadata.systemAdapter === true &&
-        metadata.systemIndexPresentation === true &&
         JSON.stringify(metadata.systemIndexMembershipPolicy || null) ===
           JSON.stringify(definition.membershipPolicy);
 
@@ -88,7 +87,6 @@ function ensureCanonicalSystemIndexes({ entityId, actorId }) {
               systemAdapter: true,
               systemIndexKey: definition.key,
               adapterId: definition.adapterId,
-              systemIndexPresentation: true,
               canonicalMosContainer: false,
               systemIndexMembershipPolicy: definition.membershipPolicy
             }

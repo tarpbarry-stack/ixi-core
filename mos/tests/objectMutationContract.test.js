@@ -123,3 +123,39 @@ test("the HTTP boundary requires idempotency and matching revision headers", () 
   assert.match(source, /record\.status\s*===\s*"completed"/);
   assert.match(source, /replayed: true/);
 });
+
+test("explicit legacy classification preserves the Object and records its prior type", () => {
+  const entity = createEntity({ displayName: "Classification Entity", actorId: "classification-owner" });
+  const object = createObject({ entityId: entity.entityId, objectType: "generic", displayName: "Customer label",
+    fields: { customerField: "preserved" }, actorId: "classification-owner" });
+  const updated = updateObject({ objectId: object.objectId, objectType: "person", expectedRevision: 1,
+    commandId: "classify-existing", actorId: "classification-owner" });
+  assert.equal(updated.objectId, object.objectId);
+  assert.equal(updated.objectType, "person");
+  assert.deepEqual(updated.identities, object.identities);
+  assert.deepEqual(updated.fields, object.fields);
+  assert.deepEqual(updated.metadata, object.metadata);
+  assert.deepEqual(getObject(object.objectId), updated);
+  const event = listEvents({ entityId: entity.entityId, objectId: object.objectId, eventType: "object.updated" })[0];
+  assert.deepEqual(event.payload.classification, { previousObjectType: "generic", objectType: "person" });
+  assert.throws(() => updateObject({ objectId: object.objectId, objectType: "location", expectedRevision: 2,
+    commandId: "reclassify-prohibited" }), { code: "OBJECT_CLASSIFICATION_CHANGE_PROHIBITED" });
+  assert.deepEqual(getObject(object.objectId), updated);
+});
+
+test("classification rejects structural roots, unsupported types, and missing concurrency evidence", () => {
+  const entity = createEntity({ displayName: "Classification Guards", actorId: "classification-owner" });
+  const root = createObject({ entityId: entity.entityId, objectType: "generic", displayName: "Root",
+    metadata: { rootContainer: true } });
+  const ordinary = createObject({ entityId: entity.entityId, objectType: "generic", displayName: "Ordinary" });
+  assert.throws(() => updateObject({ objectId: root.objectId, objectType: "person", expectedRevision: 1,
+    commandId: "root-must-stay-root" }), { code: "OBJECT_CLASSIFICATION_CHANGE_PROHIBITED" });
+  for (const objectType of ["system-index", "entity", "unknown", null]) {
+    assert.throws(() => updateObject({ objectId: ordinary.objectId, objectType, expectedRevision: 1,
+      commandId: "invalid-type" }), { code: "OBJECT_CLASSIFICATION_CHANGE_PROHIBITED" });
+  }
+  assert.throws(() => updateObject({ objectId: ordinary.objectId, objectType: "person" }),
+    { code: "OBJECT_CLASSIFICATION_COMMAND_REQUIRED" });
+  assert.deepEqual(getObject(root.objectId), root);
+  assert.deepEqual(getObject(ordinary.objectId), ordinary);
+});
