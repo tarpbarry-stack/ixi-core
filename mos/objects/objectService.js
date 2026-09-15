@@ -42,6 +42,7 @@ const {
 
 const {
   isExplicitAosSystemIndexObject,
+  getAosSystemIndexMembershipPolicy,
   assertValidAosSystemIndexMembershipPolicy
 } = require("../relationships/aosSystemIndexMembershipPolicy");
 
@@ -352,7 +353,7 @@ function resolveDefinitionForCreate({
 }
 
 
-function createObject({
+function buildObjectForCreation({
   entityId,
 
   definitionId = null,
@@ -626,8 +627,31 @@ function createObject({
       1
   });
 
-  objects[objectId] =
-    object;
+  if (isExplicitAosSystemIndexObject(object) && !getAosSystemIndexMembershipPolicy(object)) {
+    throw new MosError("AOS_SYSTEM_INDEX_MEMBERSHIP_POLICY_REQUIRED",
+      "Choose what the new index accepts before saving.", null, 409);
+  }
+  return { object, objects };
+}
+
+function prepareObjectForCreation(input) {
+  return buildObjectForCreation(input).object;
+}
+
+function createObject(input, { reservedObjectId = "" } = {}) {
+  const { object, objects } = buildObjectForCreation(input);
+  // A creation coordinator may reserve one ID in its durable Save intent.
+  // A stale worker must never replace an Object already written by a retry.
+  if (reservedObjectId) {
+    if (objects[reservedObjectId]) {
+      throw new MosError("OBJECT_CREATION_ALREADY_EXISTS", "The intended Object already exists. Resume its saved request.",
+        { objectId: reservedObjectId }, 409);
+    }
+    object.objectId = reservedObjectId;
+  }
+  const { objectId } = object;
+  const actorId = input.actorId || null;
+  objects[objectId] = object;
 
   writeObjects(
     objects
@@ -1371,6 +1395,7 @@ function restoreObject({
 
 
 module.exports = {
+  prepareObjectForCreation,
   createObject,
   getObject,
   listObjects,

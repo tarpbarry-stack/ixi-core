@@ -146,7 +146,9 @@ test("explicit legacy classification preserves the Object and records its prior 
 test("classification rejects structural roots, unsupported types, and missing concurrency evidence", () => {
   const entity = createEntity({ displayName: "Classification Guards", actorId: "classification-owner" });
   const root = createObject({ entityId: entity.entityId, objectType: "generic", displayName: "Root",
-    metadata: { rootContainer: true } });
+    metadata: { rootContainer: true, systemIndexMembershipPolicy: {
+      schema: "aos.system-index-membership.v1", enabled: true, defaultWorkspaceHome: false,
+      allowedObjectTypes: ["person"], allowedDefinitionIds: [] } } });
   const ordinary = createObject({ entityId: entity.entityId, objectType: "generic", displayName: "Ordinary" });
   assert.throws(() => updateObject({ objectId: root.objectId, objectType: "person", expectedRevision: 1,
     commandId: "root-must-stay-root" }), { code: "OBJECT_CLASSIFICATION_CHANGE_PROHIBITED" });

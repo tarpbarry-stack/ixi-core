@@ -75,6 +75,8 @@ test("IX Core never classifies a System Index from customer wording and never re
     entityId,
     objectType: "system-index",
     displayName: "EQUIPMENT",
+    metadata: { systemIndexMembershipPolicy: { schema: "aos.system-index-membership.v1", enabled: true,
+      defaultWorkspaceHome: false, allowedObjectTypes: ["person"], allowedDefinitionIds: [] } },
     actorId
   });
 

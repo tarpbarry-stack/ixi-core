@@ -14,6 +14,8 @@ process.env.IXI_MOS_DATA_ROOT = path.join(testRoot, "mos");
 
 const { createEntity } = require("../entities/entityService");
 const { createObject, updateObject } = require("../objects/objectService");
+const { MOS_PATHS } = require("../storage/mosPaths");
+const { readJsonFile, writeJsonFileAtomic } = require("../storage/jsonStore");
 const {
   createCustomerObjectType
 } = require("../objects/customerObjectTypeService");
@@ -140,9 +142,12 @@ test("System Indexes are root projections and can never be nested", () => {
 
 test("unconfigured System Indexes fail closed while ordinary containers stay composable", () => {
   const machine = createTypedObject("machine", "Machine");
-  const unconfiguredIndex = createTypedObject("system-index", "Unconfigured", {
-    systemIndex: true
-  });
+  // Load a legacy root as stored before configuration became mandatory.
+  const unconfiguredIndex = { ...createTypedObject("generic", "Unconfigured"),
+    objectType: "system-index", metadata: { systemIndex: true } };
+  const stored = readJsonFile(MOS_PATHS.objects, {});
+  stored[unconfiguredIndex.objectId] = unconfiguredIndex;
+  writeJsonFileAtomic(MOS_PATHS.objects, stored);
   const ordinaryContainer = createTypedObject("container", "Ordinary");
 
   assert.throws(
