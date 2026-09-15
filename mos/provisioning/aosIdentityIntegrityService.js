@@ -26,16 +26,16 @@ const {
   MosError
 } = require("../errors/MosError");
 
+const {
+  OWNED_EQUIPMENT_MEMBERSHIP_POLICY
+} = require("../relationships/aosSystemIndexMembershipPolicy");
+
 const SYSTEM_INDEXES = Object.freeze([
   Object.freeze({
     key: "equipment",
     displayName: "EQUIPMENT",
-    adapterId: "ixi-owned-equipment"
-  }),
-  Object.freeze({
-    key: "for-sale",
-    displayName: "FOR SALE",
-    adapterId: "ixi-for-sale"
+    adapterId: "ixi-owned-equipment",
+    membershipPolicy: OWNED_EQUIPMENT_MEMBERSHIP_POLICY
   })
 ]);
 
@@ -73,7 +73,9 @@ function ensureCanonicalSystemIndexes({ entityId, actorId }) {
         cleanText(metadata.systemIndexKey) === definition.key &&
         metadata.systemIndex === true &&
         metadata.systemAdapter === true &&
-        metadata.systemIndexPresentation === true;
+        metadata.systemIndexPresentation === true &&
+        JSON.stringify(metadata.systemIndexMembershipPolicy || null) ===
+          JSON.stringify(definition.membershipPolicy);
 
       return isCanonical
         ? found
@@ -87,7 +89,8 @@ function ensureCanonicalSystemIndexes({ entityId, actorId }) {
               systemIndexKey: definition.key,
               adapterId: definition.adapterId,
               systemIndexPresentation: true,
-              canonicalMosContainer: false
+              canonicalMosContainer: false,
+              systemIndexMembershipPolicy: definition.membershipPolicy
             }
           });
     }
@@ -106,7 +109,8 @@ function ensureCanonicalSystemIndexes({ entityId, actorId }) {
         systemIndexKey: definition.key,
         adapterId: definition.adapterId,
         systemIndexPresentation: true,
-        canonicalMosContainer: false
+        canonicalMosContainer: false,
+        systemIndexMembershipPolicy: definition.membershipPolicy
       }
     }).object;
   });

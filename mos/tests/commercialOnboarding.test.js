@@ -93,14 +93,14 @@ test("commercial onboarding creates canonical owner and system-index Passports w
     object => object.objectType === "system-index"
   );
 
-  assert.equal(systemIndexes.length, 2);
+  assert.equal(systemIndexes.length, 1);
   assert.deepEqual(
     systemIndexes.map(object => object.metadata.systemIndexKey).sort(),
-    ["equipment", "for-sale"]
+    ["equipment"]
   );
-  assert.equal(readPassportRecords().length, 4);
+  assert.equal(readPassportRecords().length, 3);
   assert.equal(first.identityIntegrity.ok, true);
-  assert.equal(first.identityIntegrity.activeObjectCount, 3);
+  assert.equal(first.identityIntegrity.activeObjectCount, 2);
   assert.equal(
     activeObjects.every(object =>
       object.metadata.transactEligible === true &&
@@ -147,7 +147,7 @@ test("replaying onboarding returns the same durable identities without duplicate
   assert.equal(account.membership.personObjectId, first.person.objectId);
   assert.equal(
     listObjects({ entityId: first.entity.entityId, status: "active" }).length,
-    3
+    2
   );
   assert.equal(
     listObjects({ entityId: first.entity.entityId, status: "active" })

@@ -40,6 +40,35 @@ const {
   appendEvent
 } = require("../events/eventService");
 
+const {
+  isExplicitAosSystemIndexObject,
+  assertValidAosSystemIndexMembershipPolicy
+} = require("../relationships/aosSystemIndexMembershipPolicy");
+
+
+function validateSystemIndexMembershipPolicy(object) {
+  if (!isExplicitAosSystemIndexObject(object)) return object;
+
+  const metadata = normalizePlainObject(object?.metadata, {});
+  if (!Object.prototype.hasOwnProperty.call(
+    metadata,
+    "systemIndexMembershipPolicy"
+  )) {
+    return object;
+  }
+
+  return {
+    ...object,
+    metadata: {
+      ...metadata,
+      systemIndexMembershipPolicy:
+        assertValidAosSystemIndexMembershipPolicy(
+          metadata.systemIndexMembershipPolicy
+        )
+    }
+  };
+}
+
 
 function readObjects() {
   return readJsonFile(
@@ -475,7 +504,7 @@ function createObject({
           null
         );
 
-  const object = {
+  const object = validateSystemIndexMembershipPolicy({
     objectId,
 
     entityId:
@@ -595,7 +624,7 @@ function createObject({
      */
     revision:
       1
-  };
+  });
 
   objects[objectId] =
     object;
@@ -922,7 +951,7 @@ function updateObject({
   const timestamp =
     nowIso();
 
-  const updated = {
+  const updated = validateSystemIndexMembershipPolicy({
     ...current,
 
     displayName:
@@ -1014,7 +1043,7 @@ function updateObject({
 
     updatedAt:
       timestamp
-  };
+  });
 
   objects[objectId] =
     updated;

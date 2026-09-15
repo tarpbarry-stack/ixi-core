@@ -47,6 +47,11 @@ const {
 } = require("../relationships/relationshipIdentityEvidenceService");
 
 const {
+  evaluateAosRailMembership,
+  isExplicitAosSystemIndexObject
+} = require("../relationships/aosSystemIndexMembershipPolicy");
+
+const {
   withAuthorityPolicyReadScope
 } = require("../../authority/IXIAuthorityPolicyResolver");
 
@@ -65,33 +70,6 @@ function buildProjectionMap(
   });
 
   return map;
-}
-
-const SYSTEM_INDEX_TEMPLATE_ID =
-  "ixi-system-index-v1";
-
-function isSystemIndexObject(object = {}) {
-  const metadata =
-    object?.metadata &&
-    typeof object.metadata === "object"
-      ? object.metadata
-      : {};
-
-  const templateId = cleanText(
-    object?.cardTemplateSlug ||
-    object?.templateId ||
-    metadata?.templateId ||
-    metadata?.cardTemplateId
-  );
-
-  return (
-    metadata.systemIndex === true ||
-    metadata.isSystemIndex === true ||
-    metadata.systemIndexPresentation === true ||
-    metadata.systemAdapter === true ||
-    templateId === SYSTEM_INDEX_TEMPLATE_ID ||
-    cleanText(object?.objectType).toLowerCase() === "system-index"
-  );
 }
 
 function buildRailProjectionMap(relationships = [], objects = []) {
@@ -114,7 +92,10 @@ function buildRailProjectionMap(relationships = [], objects = []) {
     .filter(relationship => {
       if (relationship?.status !== "active") return false;
       if (relationship?.behaviorId === EDGE_BEHAVIOR_IDS.RAIL_MEMBERSHIP) {
-        return true;
+        return evaluateAosRailMembership({
+          sourceObject: objectsById.get(cleanText(relationship?.sourceObjectId)),
+          targetObject: objectsById.get(cleanText(relationship?.targetObjectId))
+        }).allowed;
       }
       if (cleanText(relationship?.behaviorId)) return false;
 
@@ -136,8 +117,11 @@ function buildRailProjectionMap(relationships = [], objects = []) {
        * record must never project one System Index inside another.
        */
       if (
-        isSystemIndexObject(sourceObject) &&
-        isSystemIndexObject(targetObject)
+        isExplicitAosSystemIndexObject(sourceObject) ||
+        !evaluateAosRailMembership({
+          sourceObject,
+          targetObject
+        }).allowed
       ) {
         return false;
       }
