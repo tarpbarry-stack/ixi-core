@@ -69,6 +69,36 @@ function isActive(doc = {}) {
   return !inactive.has(clean(doc.financialState || doc.status).toLowerCase());
 }
 
+// Older closeout forms defaulted to the entry day. Recover the business date
+// only when the original invoice and fully collected canonical receipts agree.
+// Explicit operator dates and the original audit record remain untouched.
+function resolveSoldBusinessDate(invoice = {}, documents = []) {
+  const sale = invoice.metadata?.assetSaleRecord || {};
+  const stored = date(sale.sale?.saleDate);
+  const fallback = { date: stored, source: clean(sale.sale?.saleDateSource) || "sold-record" };
+  const invoiceDate = date(invoice.occurredAt);
+  const valid = day => /^\d{4}-\d{2}-\d{2}$/.test(day) && Number.isFinite(Date.parse(day)) && new Date(day).toISOString().slice(0, 10) === day;
+  if (sale.sale?.saleDateSource || !valid(stored) || !valid(invoiceDate) || invoiceDate >= stored ||
+      stored !== date(sale.audit?.closedAt) || !entityOf(invoice) || !clean(invoice.currency)) return fallback;
+  const invoiceCents = cents(totalOf(invoice));
+  if (!(invoiceCents > 0)) return fallback;
+  const receipts = new Map();
+  for (const record of array(documents)) {
+    const doc = documentOf(record);
+    if (clean(doc.sourceFinancialDocumentId) !== clean(invoice.financialDocumentId) ||
+        !clean(doc.financialDocumentId) || entityOf(record) !== entityOf(invoice) ||
+        clean(doc.currency) !== clean(invoice.currency) || doc.documentType !== "payment" ||
+        doc.paymentDirection !== "inflow" || !["paid", "posted", "collected", "closed"].includes(doc.financialState) ||
+        !valid(date(doc.occurredAt)) || date(doc.occurredAt) > invoiceDate || !(cents(totalOf(doc)) > 0)) continue;
+    receipts.set(doc.financialDocumentId, doc);
+  }
+  const received = [...receipts.values()];
+  const receivedCents = received.reduce((sum, doc) => sum + cents(totalOf(doc)), 0);
+  const lastReceiptDate = received.map(doc => date(doc.occurredAt)).sort().at(-1);
+  return receivedCents >= invoiceCents && lastReceiptDate === invoiceDate
+    ? { date: invoiceDate, source: "invoice-and-collection" } : fallback;
+}
+
 function projectInventory({ records = [], entityPassportId = "" } = {}) {
   const entity = clean(entityPassportId);
   if (!entity) throw new Error("Inventory requires an authenticated Entity Passport.");
@@ -97,7 +127,8 @@ function projectInventory({ records = [], entityPassportId = "" } = {}) {
     const sale = doc.metadata?.assetSaleRecord;
     if (doc.documentType !== "invoice" || sale?.status !== "sold" || doc.metadata?.assetSale !== true) continue;
     const saleId = clean(doc.financialDocumentId);
-    const effectiveDate = date(sale.sale?.saleDate);
+    const businessDate = resolveSoldBusinessDate(doc, documents);
+    const effectiveDate = businessDate.date;
     if (!passportId || !effectiveDate || !saleId || clean(sale.identity?.financialInvoiceId || sale.identity?.saleId) !== saleId) {
       issues.push({ documentId: saleId, passportId, code: "INCOMPLETE_SALE_IDENTITY", message: "The recorded sale needs its machine, invoice lineage, and original sale date reconciled." });
       if (passportId) holds.set(passportId, { state: "sold", documentId: saleId, reconciliationRequired: true });
@@ -126,7 +157,8 @@ function projectInventory({ records = [], entityPassportId = "" } = {}) {
       objectId: clean(sale.context?.assetObjectId),
       listingId: clean(sale.context?.assetListingId),
       label: clean(sale.context?.assetLabel),
-      saleDate: effectiveDate, salePrice: recordedSalePrice, salePriceSource: machinePrice.source,
+      saleDate: effectiveDate, saleDateSource: businessDate.source, recordedSaleDate: date(sale.sale?.saleDate),
+      salePrice: recordedSalePrice, salePriceSource: machinePrice.source,
       customerTotal, currency: clean(doc.currency || sale.sale?.currency || "USD"),
       buyerLabel: clean(sale.sale?.buyerLabel), buyerPassportId: clean(sale.sale?.buyerPassportId),
       soldByLabel: clean(sale.sale?.soldByLabel), soldByPassportId: clean(sale.sale?.soldByPassportId),
@@ -191,4 +223,4 @@ function querySoldInventory(projection, query = {}) {
   return { ...projection, sales: sales.slice((page - 1) * pageSize, page * pageSize), total, page, pageSize };
 }
 
-module.exports = { documentOf, entityOf, assetOf, totalOf, isActive, isRevenueCredit, isCustomerRefund, projectInventory, querySoldInventory };
+module.exports = { documentOf, entityOf, assetOf, totalOf, isActive, isRevenueCredit, isCustomerRefund, resolveSoldBusinessDate, projectInventory, querySoldInventory };
