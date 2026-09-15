@@ -130,3 +130,15 @@ test("IX Core commission math supports percentage fixed and bounties", () => {
     [2000, 500, 1000],
   );
 });
+
+
+test("customer credits reserve refund cash without erasing prior owner distributions", () => {
+  const { sale, financialDocument, docs } = fixture();
+  financialDocument.assetSettlement.priorDistributions = [{ amount: 10000 }];
+  docs.push({ financialDocumentId: "credit", documentType: "credit", creditType: "revenue-credit", financialState: "incurred", sourceFinancialDocumentId: "invoice", totals: { total: 5000 }, references: refs });
+  const result = rebuildCanonicalSettlement({ financialDocument, saleInvoice: sale, documents: docs });
+  const projection = result.assetSettlement.projection;
+  assert.equal(projection.customerRefundLiability, 5000);
+  assert.equal(projection.priorDistributions, 10000);
+  assert.equal(projection.netSalePrice, 95000);
+});

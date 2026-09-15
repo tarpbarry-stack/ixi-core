@@ -367,6 +367,11 @@ function rebuildCanonicalSettlement({
   );
   const collected = money(receipts.reduce((s, x) => s + amountOf(x), 0)),
     credited = money(credits.reduce((s, x) => s + amountOf(x), 0));
+  const creditIds = new Set(credits.map(doc => doc.financialDocumentId));
+  const refunded = money(related.filter(doc => active(doc) && doc.documentType === "payment" &&
+    doc.metadata?.customerRefund === true && creditIds.has(doc.sourceFinancialDocumentId)).reduce((sum, doc) => sum + amountOf(doc), 0));
+  const customerRefundLiability = money(Math.max(0, Math.min(collected, credited) - refunded));
+  const netSalePrice = money(salePrice - credited);
   const ledger = expenseLedger(related, assetPassportId, assetObjectId),
     canonicalCosts = money(
       ledger
@@ -390,7 +395,7 @@ function rebuildCanonicalSettlement({
     );
   const sellingCosts = money(record.projection?.sellingCosts),
     profitBeforeCommission = money(
-      salePrice - sellingCosts - netEconomicInvestment,
+      netSalePrice - sellingCosts - netEconomicInvestment,
     );
   const order = related.find(
     (doc) =>
@@ -415,12 +420,12 @@ function rebuildCanonicalSettlement({
     thirdPartyDisbursements = total(record.disbursements),
     priorDistributions = total(record.priorDistributions),
     economicProfit = money(
-      salePrice - sellingCosts - commissionTotal - netEconomicInvestment,
+      netSalePrice - sellingCosts - commissionTotal - netEconomicInvestment,
     ),
     cashAvailableBeforeOwners = money(
       Math.max(
         0,
-        collected -
+        collected - refunded - customerRefundLiability -
           sellingCosts -
           commissionTotal -
           lienPayoffs -
@@ -432,6 +437,9 @@ function rebuildCanonicalSettlement({
     salePrice,
     collected,
     credited,
+    refunded,
+    customerRefundLiability,
+    netSalePrice,
     buyerBalance: money(Math.max(0, salePrice - collected - credited)),
     acquisitionCost,
     makeReadyCost,

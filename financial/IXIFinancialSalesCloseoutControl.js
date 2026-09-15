@@ -126,6 +126,11 @@ async function assertInvoiceCollectionPatchAvailable({
         },
       );
     }
+    if (!(position.received > 0) || position.invoiceAmount <= position.credited) {
+      throw Object.assign(new Error("SOLD requires recorded sale funds. A fully credited or zero-value invoice is not a collected machine sale."), {
+        name: "IXIFinancialSoldReceiptRequiredError", details: position,
+      });
+    }
     if (clean(sale.status).toLowerCase() !== "sold") {
       throw Object.assign(new Error("SOLD closeout requires a canonical sold record."), {
         name: "IXIFinancialSoldRecordRequiredError",
@@ -147,6 +152,9 @@ async function assertInvoiceCollectionPatchAvailable({
 
 async function assertCollectedAssetSaleInvoice({ invoice = {}, entityPassportId = "" } = {}) {
   const metadata = object(invoice.metadata);
+  if (array(metadata.inventoryLifecycle?.events).some(event => event.type === "return-to-private")) {
+    throw new Error("This sale was returned. Resolve its existing settlement obligations through recorded corrections.");
+  }
   if (metadata.assetSale !== true || clean(metadata?.assetSaleRecord?.status).toLowerCase() !== "sold") {
     throw Object.assign(new Error("Settlement requires a completed SOLD closeout."), {
       name: "IXIFinancialSoldCloseoutRequiredError",

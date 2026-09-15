@@ -1360,6 +1360,10 @@ function createFinancialLifecycleSnapshot({
           type
         )
       ) {
+        if (document.creditType === "revenue-credit") {
+          revenue -= getCreditEffect(document);
+          return;
+        }
         credits +=
           getCreditEffect(
             document
