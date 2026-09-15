@@ -204,6 +204,42 @@ function treasuryPk(entityPassportId) {
   return `TREASURY#${clean(entityPassportId)}`;
 }
 
+function createSaleBalanceTransactionItems({ record = {}, previousRecord = null, updatedAt = nowIso() } = {}) {
+  const doc = record.financialDocument || {};
+  const controls = [doc.metadata?.saleBalanceControl, doc.metadata?.saleCashRefundControl, doc.metadata?.saleTaxCreditControl].filter(Boolean);
+  if (!controls.length) return [];
+  // Monetary return records are append-only. This counter participates in
+  // the same transaction as the credit/refund and prevents concurrent excess.
+  if (previousRecord) throw new Error("Sale credits and refunds require a new linked correction; existing monetary records are immutable.");
+  return controls.map(control => {
+  const amountCents = Number(control.amountCents ?? Math.round(Number(doc.totals?.total || 0) * 100));
+  const limitCents = Number(control.limitCents), baselineCents = Number(control.baselineCents || 0);
+  if (!Number.isSafeInteger(amountCents) || amountCents <= 0 || !Number.isSafeInteger(limitCents) || !Number.isSafeInteger(baselineCents)) throw new Error("Invalid sale balance control.");
+  return { Update: { TableName: TABLE_NAME,
+    Key: { PK: `SALE-BALANCE#${clean(record.server?.entityPassportId)}#${clean(control.sourceId)}`, SK: clean(control.kind) },
+    UpdateExpression: "SET #used = if_not_exists(#used, :baseline) + :amount, updatedAt = :updatedAt",
+    ConditionExpression: "(attribute_not_exists(#used) AND :baseline <= :remaining) OR #used <= :remaining",
+    ExpressionAttributeNames: { "#used": "usedCents" },
+    ExpressionAttributeValues: { ":baseline": baselineCents, ":amount": amountCents, ":remaining": limitCents - amountCents, ":updatedAt": updatedAt }
+  } };
+  });
+}
+
+function createInventoryTransactionItems({ record = {}, previousRecord = null } = {}) {
+  const document = record.financialDocument || {};
+  const change = document.metadata?.inventoryMutation;
+  if (!change || change.commandId === previousRecord?.financialDocument?.metadata?.inventoryMutation?.commandId) return [];
+  if (!change.passportId || !change.commandId || !["sold", "owned"].includes(change.state)) throw new Error("Invalid server inventory mutation.");
+  const saleId = clean(document.financialDocumentId);
+  return [{ Put: { TableName: TABLE_NAME,
+    Item: { PK: `INVENTORY-LOCK#${clean(record.server?.entityPassportId)}#${change.passportId}`, SK: "CURRENT",
+      entityType: "inventory-sale-control", saleId, state: change.state, commandId: change.commandId,
+      effectiveDate: change.effectiveDate, updatedAt: change.recordedAt },
+    ConditionExpression: "attribute_not_exists(PK) OR saleId = :previous",
+    ExpressionAttributeValues: { ":previous": clean(change.previousSaleId) }
+  } }];
+}
+
 function treasuryAccountSk(accountId) {
   return `ACCOUNT#${clean(accountId)}`;
 }
@@ -651,6 +687,8 @@ async function createDocumentRecord({
 
   const transactItems = [
     ...await buildPayableBalanceTransactionItems(source),
+    ...createSaleBalanceTransactionItems({ record: source, updatedAt: timestamp }),
+    ...createInventoryTransactionItems({ record: source }),
     {
       Put: {
         TableName:
@@ -873,6 +911,7 @@ async function createDocumentRecord({
     })
   );
 
+  require("./IXIFinancialInventoryService").invalidateInventory(source.server?.entityPassportId);
   return source;
 }
 
@@ -1008,6 +1047,8 @@ async function replaceDocumentRecord({
 
   const transactItems = [
     ...await buildPayableBalanceTransactionItems(source, previousRecord),
+    ...createSaleBalanceTransactionItems({ record: source, previousRecord, updatedAt: timestamp }),
+    ...createInventoryTransactionItems({ record: source, previousRecord }),
     {
       Put: {
         TableName:
@@ -1294,6 +1335,7 @@ async function replaceDocumentRecord({
     })
   );
 
+  require("./IXIFinancialInventoryService").invalidateInventory(source.server?.entityPassportId);
   return source;
 }
 
@@ -1731,5 +1773,7 @@ module.exports = {
   activeTimeEmployeeKey,
   createActiveTimeLockPut,
   createActiveTimeLockDelete,
-  createTreasuryTransactionItems
+  createTreasuryTransactionItems,
+  createSaleBalanceTransactionItems,
+  createInventoryTransactionItems
 };

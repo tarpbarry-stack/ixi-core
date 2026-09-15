@@ -493,6 +493,22 @@ router.get(
   }
 );
 
+// Signed server-only availability projection: no buyer, price, salesperson,
+// financial IDs, or settlement details leave this boundary.
+router.get("/aos/inventory-availability", async (req, res) => {
+  try {
+    if (!req.ixiRequestContext?.authenticated) throw new MosError("AUTH_REQUIRED", "Signed principal required.", null, 401);
+    const { entity, membership } = getAosAccountForUser(req.ixiRequestContext.principalId);
+    if (membership?.status !== "active" || membership?.entityId !== entity?.entityId) throw new MosError("MEMBERSHIP_REQUIRED", "Active company membership required.", null, 403);
+    const entityPassportId = membership.entityPassportId || entity.passportId;
+    if (!entityPassportId) return res.json({ ok: true, current: {} });
+    const { loadInventory } = require("../../financial/IXIFinancialInventoryService");
+    const inventory = await loadInventory(entityPassportId);
+    res.set("Cache-Control", "private, no-store");
+    return res.json({ ok: true, current: Object.fromEntries(Object.entries(inventory.current).map(([passportId, state]) => [passportId, { state: state.state, forcePrivate: state.forcePrivate === true }])) });
+  } catch (error) { return sendMosError(res, error); }
+});
+
 router.get(
   "/aos/work-bootstrap",
   async (req, res) => {
