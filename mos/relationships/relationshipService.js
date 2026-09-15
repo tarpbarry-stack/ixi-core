@@ -6,6 +6,9 @@ const { cleanText, normalizeKey, nowIso } = require("../util/normalize");
 const { MosError } = require("../errors/MosError");
 const { appendEvent } = require("../events/eventService");
 const { getEdgeBehavior } = require("./edgeBehaviorRegistry");
+const {
+  assertAosRailMembershipAllowed
+} = require("./aosSystemIndexMembershipPolicy");
 
 function readRelationships() {
   return readJsonFile(MOS_PATHS.relationships, {});
@@ -283,6 +286,13 @@ function createObjectRelationship({
       { behaviorId: technicalBehavior.behaviorId },
       401
     );
+  }
+
+  if (technicalBehavior?.behaviorId === "aos.rail-membership.v1") {
+    assertAosRailMembershipAllowed({
+      sourceObject,
+      targetObject
+    });
   }
 
   const relationshipsBefore = readRelationships();

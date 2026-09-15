@@ -296,7 +296,7 @@ function ensureCommercialOnboarding({
   /*
    * Bootstrap is also the authenticated, fail-closed repair boundary for
    * records created before Passport-at-birth became mandatory. It creates
-   * the two IXI-owned system indexes canonically and refuses to return an
+   * the IXI-owned Equipment System Index canonically and refuses to return an
    * Entity containing any active record whose identity cannot be verified.
    */
   const identityIntegrity = enforceEntityPassportIntegrity({

@@ -95,8 +95,8 @@ test("Post Free adopts an existing listing Passport into the canonical Machine i
     true
   );
 
-  /* Entity + owner Person + Equipment + For Sale + reused Machine Passport. */
-  assert.equal(readPassportRecords().length, 5);
+  /* Entity + owner Person + Equipment + reused Machine Passport. */
+  assert.equal(readPassportRecords().length, 4);
 });
 
 test("replaying the same listing returns the same Machine and Passport", () => {
