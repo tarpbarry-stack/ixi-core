@@ -25,6 +25,7 @@
 const express = require("express");
 
 const providerService = require("./IXIFinancialProviderService");
+const { assertGenericSaleMutation, bindSoldInventory } = require("./IXIFinancialSaleWriteControl");
 
 const {
   resolveFinancialAccessContextFromRequest,
@@ -90,6 +91,7 @@ const { getFinancialGLProjection } = require("./IXIFinancialGLService");
 const { createDesktopAccountingProjection } = require("./IXIFinancialDesktopAccountingProjection");
 
 const router = express.Router();
+router.use("/inventory", require("./IXIFinancialInventoryRoutes"));
 
 /* =========================================================
    HELPERS
@@ -819,6 +821,8 @@ router.post("/documents", async (req, res) => {
   const context = getRequestContext(req);
 
   const financialDocument = req.body?.financialDocument || req.body?.document;
+  try { assertGenericSaleMutation({ next: financialDocument, mode: "create" }); }
+  catch (error) { return res.status(409).json({ ok: false, errors: [{ message: error.message }] }); }
 
   const directType = clean(financialDocument?.documentType).toLowerCase(),
     treasuryMovement = clean(
@@ -1391,6 +1395,8 @@ router.patch("/documents/:financialDocumentId", async (req, res) => {
 
     financialDocumentId: req.params.financialDocumentId,
   };
+  try { assertGenericSaleMutation({ existing: existing?.financialDocument, next: mergedDocument }); }
+  catch (error) { return res.status(409).json({ ok: false, errors: [{ message: error.message }] }); }
 
   if (clean(mergedDocument.documentType).toLowerCase() === "sales-order") {
     const priorOrder = safeObject(existing?.financialDocument?.salesOrder);
@@ -1556,6 +1562,11 @@ router.patch("/documents/:financialDocumentId", async (req, res) => {
     billPatchAction,
     accessContext.actorPassportId,
   );
+  try {
+    const metadata = await bindSoldInventory({ existing: existing?.financialDocument, next: mergedDocument,
+      accessContext, commandId: clean(req.body?.commandId) });
+    if (metadata && mergedDocument.metadata?.assetSaleRecord?.status === "sold") boundPatch = { ...boundPatch, metadata };
+  } catch (error) { return res.status(409).json({ ok: false, errors: [{ message: error.message }] }); }
 
   boundPatch = bindPurchaseOrderActorEvidence(
     boundPatch,
@@ -1638,6 +1649,10 @@ router.put("/documents/:financialDocumentId", async (req, res) => {
 
     financialDocumentId: req.params.financialDocumentId,
   };
+  try {
+    const prior = await getFinancialStorageProvider().getFinancialDocumentRecord(req.params.financialDocumentId);
+    assertGenericSaleMutation({ existing: prior?.financialDocument, next: financialDocument, mode: "replace" });
+  } catch (error) { return res.status(409).json({ ok: false, errors: [{ message: error.message }] }); }
 
   if (
     ["treasury-account", "treasury-reconciliation"].includes(

@@ -1404,6 +1404,7 @@ async function executeCreateFinancialDocumentCommand(input = {}, options = {}) {
 
       input: command.input,
     });
+    require("./IXIFinancialSaleWriteControl").assertGenericSaleMutation({ next: financialDocument, mode: "create" });
 
     if (clean(financialDocument?.documentType).toLowerCase() === "settlement") {
       const sourceResult = await providerService.getDocument({

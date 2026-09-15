@@ -1,3 +1,4 @@
+const { loadInventory } = require("../../financial/IXIFinancialInventoryService");
 const {
   ensureAosAccount,
   getAosAccountForUser
@@ -16,7 +17,7 @@ const {
 } = require("../relationships/edgeBehaviorRegistry");
 
 const {
-  rebuildEntityProjections
+  rebuildEntityProjections, projectVisibleInventory
 } = require("../projections/projectionService");
 
 const {
@@ -39,7 +40,7 @@ const {
 } = require("../security/mosMembershipAuthorityService");
 
 const {
-  resolveCanonicalObjectIdentity
+  resolveCanonicalObjectIdentity, normalizedPassportIds
 } = require("../identity/canonicalObjectAdmissionService");
 
 const {
@@ -294,12 +295,20 @@ async function loadAosEnvironmentWithinAuthorityScope({
       strictAuthorization
     });
 
-  const objects =
+  const allObjects =
     listObjects({
       entityId:
         entity.entityId,
       status: "active"
     });
+
+  const inventoryEntityPassportId = cleanText(effectiveAuthorityPrincipal?.entityPassportId || membership?.entityPassportId || entity?.passportId);
+  const inventory = inventoryEntityPassportId ? await loadInventory(inventoryEntityPassportId) : null;
+  const objects = allObjects.flatMap(object => {
+    const state = normalizedPassportIds(object).map(passportId => inventory?.current?.[passportId]).find(Boolean);
+    if (state?.state === "sold") return [];
+    return [{ ...object, ...(state ? { inventoryLifecycle: state } : {}), ...(state?.forcePrivate ? { machineAccess: "private", fields: { ...object.fields, machineAccess: "private" } } : {}) }];
+  });
 
   const discoverableObjects =
     effectiveAuthorityPrincipal
@@ -354,10 +363,9 @@ async function loadAosEnvironmentWithinAuthorityScope({
 
   const membershipReview = buildAosMembershipReview(relationships, discoverableObjects);
 
-  const projections =
-    rebuildEntityProjections(
-      entity.entityId
-    );
+  const projections = objects.length < allObjects.length
+    ? projectVisibleInventory({ entityId: entity.entityId, visibleObjects: discoverableObjects })
+    : rebuildEntityProjections(entity.entityId);
 
   /*
    * SECURITY:

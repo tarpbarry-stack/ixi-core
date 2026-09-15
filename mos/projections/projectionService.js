@@ -1296,7 +1296,19 @@ function getBranchSummary(
 }
 
 
+// Read projection for an already-authorized inventory view. Durable edges,
+// placements, and the canonical projection store are never changed here.
+function projectVisibleInventory({ entityId, visibleObjects = [] }) {
+  const objects = Object.fromEntries(visibleObjects.map(object => [object.objectId, object]));
+  const definitionCatalog = buildDefinitionCatalog({ definitions: readDefinitions(), entityId });
+  const childrenByContainer = buildChildrenIndex(objects);
+  return visibleObjects.filter(object => object.capabilities?.canContain === true).map(object => calculateContainerProjection({
+    objects, containerId: object.objectId, childrenByContainer, definitionCatalog
+  }));
+}
+
 module.exports = {
+  projectVisibleInventory,
   rebuildEntityProjections,
   getContainerProjection,
   getBranchSummary

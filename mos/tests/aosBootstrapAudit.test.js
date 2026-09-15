@@ -22,6 +22,8 @@ process.env.IXI_PASSPORT_DATA_FILE = path.join(testRoot, "passports.json");
 const {
   ensureCommercialOnboarding
 } = require("../onboarding/aosCommercialOnboardingService");
+// This isolated company has no financial records. Keep the HTTP/identity test independent of AWS.
+require("../../financial/IXIFinancialProviderService").listDocumentsByPassport = async () => ({ ok: true, data: { documents: [] } });
 const {
   loadAosEnvironment
 } = require("../accounts/aosEnvironmentService");

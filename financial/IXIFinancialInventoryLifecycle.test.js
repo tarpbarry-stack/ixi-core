@@ -1,0 +1,171 @@
+"use strict";
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const { projectInventory, querySoldInventory } = require("./IXIFinancialInventoryLifecycle");
+const { planAdjustment, planRefund, planReturn } = require("./IXIFinancialSaleReturnService");
+const { validateFinancialDocument } = require("./IXIFinancialValidationBridge");
+const { createFinancialLifecycleSnapshot } = require("./IXIFinancialLifecycleEngine");
+const { createSaleBalanceTransactionItems } = require("./IXIFinancialDynamoStore");
+
+const context = { entityPassportId: "IXIENTITY1", actorPassportId: "IXIACTOR01" };
+const refs = [{ role: "entity", passportId: context.entityPassportId }, { role: "asset", passportId: "IXIMACHINE1" }];
+const invoice = () => ({ financialDocumentId: "ifd_sale001", documentType: "invoice", documentNumber: "INV-100", financialState: "collected", currency: "USD",
+  occurredAt: "2026-02-01", references: refs, totals: { total: 10000 },
+  lines: [{ amount: 10000, direction: "inflow", currency: "USD" }],
+  metadata: { assetSale: true, assetSaleRecord: { identity: { saleId: "ifd_sale001", financialInvoiceId: "ifd_sale001" }, status: "sold",
+    context: { assetPassportId: "IXIMACHINE1", entityPassportId: context.entityPassportId, assetLabel: "2018 VOLVO A25G" },
+    sale: { saleDate: "2026-02-01", salePrice: 10000, machineSalePrice: 9500, buyerLabel: "Buyer A", soldByLabel: "Dealer" },
+    audit: { closedAt: "2026-09-15T12:00:00Z", createdByLabel: "Bookkeeper" } } } });
+const receipt = { financialDocumentId: "ifd_receipt1", documentType: "payment", financialState: "paid", paymentDirection: "inflow", sourceFinancialDocumentId: "ifd_sale001",
+  currency: "USD", occurredAt: "2026-02-01", references: refs, totals: { total: 10000 }, lines: [{ amount: 10000, direction: "inflow", currency: "USD" }] };
+const acquisition = { financialDocumentId: "ifd_acq001", documentType: "asset-acquisition", financialState: "incurred", occurredAt: "2026-01-01", references: refs, totals: { total: 7000 } };
+const base = () => [invoice(), receipt, acquisition];
+
+test("a collected sale leaves owned inventory before settlement and retains original dates and salesperson", () => {
+  const result = projectInventory({ records: base(), entityPassportId: context.entityPassportId });
+  assert.equal(result.current.IXIMACHINE1.state, "sold");
+  assert.equal(result.sales[0].settlementStatus, "open");
+  assert.equal(result.sales[0].salePrice, 9500);
+  assert.equal(result.sales[0].saleDate, "2026-02-01");
+  assert.equal(result.sales[0].soldByLabel, "Dealer");
+  assert.equal(result.sales[0].recordedByLabel, "Bookkeeper");
+});
+
+test("other companies cannot enter this inventory projection", () => {
+  const result = projectInventory({ records: base(), entityPassportId: "IXIOTHER01" });
+  assert.deepEqual(result.sales, []);
+  assert.deepEqual(result.current, {});
+});
+
+test("historical transactions entered later are ordered by effective business date", () => {
+  const reacquisition = { ...acquisition, financialDocumentId: "ifd_acq002", occurredAt: "2026-03-01" };
+  const result = projectInventory({ records: [...base(), reacquisition], entityPassportId: context.entityPassportId });
+  assert.equal(result.current.IXIMACHINE1.state, "owned");
+  assert.equal(result.sales.length, 1);
+});
+
+test("customer price adjustment reduces revenue, not acquisition cost, and leaves the machine sold", () => {
+  const plan = planAdjustment({ invoice: invoice(), documents: base(), accessContext: context,
+    body: { commandId: "adjustment-001", kind: "price-adjustment", effectiveDate: "2026-02-02", amount: 1000, reason: "Repair allowance" } });
+  const check = validateFinancialDocument(plan.document);
+  assert.equal(check.ok, true, JSON.stringify(check));
+  const result = projectInventory({ records: [...base(), plan.document], entityPassportId: context.entityPassportId });
+  assert.equal(result.current.IXIMACHINE1.state, "sold");
+  assert.equal(result.sales[0].refundDue, 1000);
+  assert.equal(result.sales[0].amountReceived, 10000);
+  assert.equal(plan.document.creditType, "revenue-credit");
+  const snapshot = createFinancialLifecycleSnapshot({ documents: [...base(), plan.document] });
+  assert.equal(snapshot.revenue, 9000);
+});
+
+test("refund records the actual cash event without returning the machine", () => {
+  const adjustment = planAdjustment({ invoice: invoice(), documents: base(), accessContext: context,
+    body: { commandId: "adjustment-002", kind: "price-adjustment", effectiveDate: "2026-02-02", amount: 1000, reason: "Repair allowance" } });
+  const refund = planRefund({ invoice: invoice(), documents: [...base(), adjustment.document], accessContext: context,
+    body: { commandId: "refund-0001", creditId: adjustment.document.financialDocumentId, effectiveDate: "2026-02-03", amount: 1000, paymentMethod: "wire", reference: "WIRE-100" } });
+  const result = projectInventory({ records: [...base(), adjustment.document, refund.document], entityPassportId: context.entityPassportId });
+  assert.equal(result.current.IXIMACHINE1.state, "sold");
+  assert.equal(result.sales[0].refundedAmount, 1000);
+  assert.equal(result.sales[0].refundDue, 0);
+  const snapshot = createFinancialLifecycleSnapshot({ documents: [...base(), adjustment.document, refund.document] });
+  assert.equal(snapshot.collected, 9000);
+  assert.equal(refund.document.paymentKind, "refund");
+});
+
+test("return requires a full linked return credit, actual possession confirmation and current revision", () => {
+  const adjustment = planAdjustment({ invoice: invoice(), documents: base(), accessContext: context,
+    body: { commandId: "return-credit-01", kind: "return", effectiveDate: "2026-02-02", amount: 10000, reason: "Sale cancelled" } });
+  const options = { invoice: invoice(), record: { server: { revision: 7 } }, documents: [...base(), adjustment.document], accessContext: context,
+    body: { commandId: "return-private-01", expectedRevision: 7, creditId: adjustment.document.financialDocumentId, effectiveDate: "2026-02-03", reason: "Machine received at yard", machineReturned: true } };
+  assert.throws(() => planReturn({ ...options, body: { ...options.body, machineReturned: false } }), /Confirm/);
+  assert.throws(() => planReturn({ ...options, body: { ...options.body, expectedRevision: 6 } }), /changed/);
+  const planned = planReturn(options);
+  const returnedInvoice = { ...invoice(), ...planned.patch };
+  const result = projectInventory({ records: [returnedInvoice, receipt, acquisition, adjustment.document], entityPassportId: context.entityPassportId });
+  assert.equal(result.current.IXIMACHINE1.state, "owned");
+  assert.equal(result.current.IXIMACHINE1.forcePrivate, true);
+  assert.equal(result.sales[0].status, "returned");
+  assert.equal(result.sales[0].refundDue, 10000);
+  assert.deepEqual(returnedInvoice.metadata.assetSaleRecord, invoice().metadata.assetSaleRecord);
+  assert.equal(planReturn({ ...options, invoice: returnedInvoice }).replay.commandId, options.body.commandId);
+});
+
+test("excess credits, insufficient return credits and invalid dates are rejected", () => {
+  const body = { commandId: "adjustment-003", kind: "return", effectiveDate: "2026-02-02", amount: 10000, reason: "Return" };
+  const args = { invoice: invoice(), documents: base(), accessContext: context };
+  assert.throws(() => planAdjustment({ ...args, body: { ...body, amount: 11000 } }), /exceeds/);
+  assert.throws(() => planAdjustment({ ...args, body: { ...body, amount: 9000 } }), /remaining invoice/);
+  assert.throws(() => planAdjustment({ ...args, body: { ...body, effectiveDate: "2026-02-30" } }), /valid/);
+});
+
+test("Dynamo persists credit limits in the document transaction and forbids overwriting them", () => {
+  const plan = planAdjustment({ invoice: invoice(), documents: base(), accessContext: context,
+    body: { commandId: "adjustment-004", kind: "price-adjustment", effectiveDate: "2026-02-02", amount: 1000, reason: "Allowance" } });
+  const record = { financialDocument: plan.document, server: { entityPassportId: context.entityPassportId } };
+  const items = createSaleBalanceTransactionItems({ record });
+  assert.equal(items[0].Update.ExpressionAttributeValues[":remaining"], 900000);
+  assert.match(items[0].Update.ConditionExpression, /#used <= :remaining/);
+  assert.throws(() => createSaleBalanceTransactionItems({ record, previousRecord: record }), /immutable/);
+});
+
+test("sold search and pagination keep dates, buyer and settlement filters together", () => {
+  const projection = projectInventory({ records: base(), entityPassportId: context.entityPassportId });
+  assert.equal(querySoldInventory(projection, { q: "buyer a", from: "2026-01-01", settlement: "open" }).total, 1);
+  assert.equal(querySoldInventory(projection, { q: "other" }).total, 0);
+  assert.equal(querySoldInventory(projection, { from: "2026-03-01" }).total, 0);
+});
+
+
+test("entering an older acquisition later cannot undo a sale on the same business day", () => {
+  const lateEntry = { ...acquisition, occurredAt: "2026-02-01", createdAt: "2026-09-20T12:00:00Z" };
+  const result = projectInventory({ records: [invoice(), receipt, lateEntry], entityPassportId: context.entityPassportId });
+  assert.equal(result.current.IXIMACHINE1.state, "sold");
+});
+
+test("customer tax credits retain tax separately and refunds reject fractional cents", () => {
+  const taxed = { ...invoice(), totals: { total: 10000, tax: 500 } };
+  assert.throws(() => planAdjustment({ invoice: taxed, documents: [taxed, receipt], accessContext: context,
+    body: { commandId: "tax-credit-test", kind: "price-adjustment", effectiveDate: "2026-02-02", amount: 1000, reason: "Price allowance" } }), /Specify the tax/);
+  const credit = planAdjustment({ invoice: taxed, documents: [taxed, receipt], accessContext: context,
+    body: { commandId: "tax-credit-test", kind: "return", effectiveDate: "2026-02-02", amount: 10000, reason: "Full machine return" } }).document;
+  assert.equal(credit.totals.tax, 500);
+  assert.equal(credit.totals.subtotal, 9500);
+  assert.equal(credit.metadata.saleTaxCreditControl.limitCents, 50000);
+  assert.throws(() => planRefund({ invoice: taxed, documents: [taxed, receipt, credit], accessContext: context,
+    body: { commandId: "fractional-refund", creditId: credit.financialDocumentId, amount: 1.001, effectiveDate: "2026-02-03", paymentMethod: "wire", reference: "test" } }), /decimal/);
+});
+
+test("an incomplete historical SOLD record is held out of available inventory for reconciliation", () => {
+  const incomplete = invoice();
+  delete incomplete.metadata.assetSaleRecord.identity;
+  const result = projectInventory({ records: [incomplete, acquisition], entityPassportId: context.entityPassportId });
+  assert.equal(result.current.IXIMACHINE1.state, "sold");
+  assert.equal(result.current.IXIMACHINE1.reconciliationRequired, true);
+  assert.equal(result.issues[0].code, "INCOMPLETE_SALE_IDENTITY");
+});
+
+test("historical invoice totals are not presented as verified machine sale prices", () => {
+  const historical = invoice();
+  delete historical.metadata.assetSaleRecord.sale.machineSalePrice;
+  const result = projectInventory({ records: [historical, receipt], entityPassportId: context.entityPassportId });
+  assert.equal(result.sales[0].salePrice, null);
+  assert.equal(result.sales[0].customerTotal, 10000);
+  assert.ok(result.issues.some(issue => issue.code === "MACHINE_SALE_PRICE_NOT_RECORDED"));
+});
+
+test("same-day return and resale keep the latest cycle sold and retain both sale records", async () => {
+  const { bindSoldInventory } = require("./IXIFinancialSaleWriteControl");
+  const returned = invoice();
+  returned.metadata.inventoryLifecycle = { events: [{ type: "return-to-private", effectiveDate: "2026-02-01", sequence: 2, recordedAt: "2026-09-16T10:00:00Z" }] };
+  const projection = projectInventory({ records: [returned, receipt, acquisition], entityPassportId: context.entityPassportId });
+  const next = invoice();
+  next.financialDocumentId = "ifd_sale002";
+  next.metadata.assetSaleRecord.identity = { saleId: next.financialDocumentId, financialInvoiceId: next.financialDocumentId };
+  const existing = { ...next, metadata: {} };
+  next.metadata = await bindSoldInventory({ existing, next, accessContext: context, commandId: "same-day-resale", inventoryLoader: async () => projection });
+  assert.equal(next.metadata.inventoryMutation.sequence, 3);
+  const result = projectInventory({ records: [returned, receipt, acquisition, next], entityPassportId: context.entityPassportId });
+  assert.equal(result.current.IXIMACHINE1.state, "sold");
+  assert.equal(result.current.IXIMACHINE1.documentId, "ifd_sale002");
+  assert.equal(result.sales.length, 2);
+});
