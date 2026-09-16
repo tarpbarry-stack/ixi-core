@@ -152,3 +152,18 @@ test("source unbinding refuses to orphan a Passport", () => {
   );
   assert.equal(readPassportRecords().length, 1);
 });
+
+test('repeating a verified source binding changes neither timestamps nor the registry file', () => {
+  const { bindPassportSource } = require('./passportRegistry');
+  const record = { passportId: 'IXITEST009', entityId: 'ENT-1', sourceType: 'sharetribe-listing', sourceId: 'listing-1',
+    sources: [{ sourceType: 'aos-object', sourceId: 'object-1' }], updatedAt: '2026-09-01T00:00:00Z' };
+  writePassportRecords([record]);
+  const before = fs.readFileSync(process.env.IXI_PASSPORT_DATA_FILE, 'utf8');
+  const inode = fs.statSync(process.env.IXI_PASSPORT_DATA_FILE).ino;
+  assert.deepEqual(bindPassportSource({ passportId: record.passportId, sourceType: 'aos-object', sourceId: 'object-1', entityId: 'ENT-1' }), record);
+  assert.equal(fs.readFileSync(process.env.IXI_PASSPORT_DATA_FILE, 'utf8'), before);
+  assert.equal(fs.statSync(process.env.IXI_PASSPORT_DATA_FILE).ino, inode);
+  assert.throws(() => bindPassportSource({ passportId: record.passportId, sourceType: 'aos-object', sourceId: 'object-1', entityId: 'ENT-2' }), error => error.code === 'PASSPORT_ENTITY_MISMATCH');
+  writePassportRecords([{ ...record, entityId: null }]);
+  assert.equal(bindPassportSource({ passportId: record.passportId, sourceType: 'aos-object', sourceId: 'object-1', entityId: 'ENT-1' }).entityId, 'ENT-1');
+});

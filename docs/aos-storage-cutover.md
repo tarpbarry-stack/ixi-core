@@ -72,9 +72,8 @@ its retained history, or execute a separately reviewed reverse export.
 ## Operational controls
 
 - Snapshot the encrypted EBS volume on a schedule.
-- Set `IXI_MOS_BACKUP_S3_BUCKET` to a versioned, encrypted bucket and schedule
-  `npm run mos:storage:backup`; the command verifies both source and backup,
-  records a SHA-256 checksum, and uploads the verified copy to S3.
+- Use the installed `ixi-core-recovery.timer` and `/etc/ixi-recovery.env` for scheduled production recovery. `npm run mos:storage:backup` uses the same complete private recovery helper under the production lock; it requires the explicit `IXI_RECOVERY_BUCKET` and `IXI_RECOVERY_ACCOUNT_ID` configuration. It checks capacity, verifies SQLite plus matching Passports and runtime files, then downloads and hashes the exact uploaded S3 version. Successful runs remove their temporary local copies.
+- `node mos/storage/backupSqlite.js` is a local diagnostic export, not full disaster recovery. It atomically replaces one verified `latest-verified.sqlite` copy after integrity checks, retains the prior copy on failure, and refuses concurrent exports or an unrecognized existing destination. It does not delete unrelated historical files or upload to an unverified bucket.
 - Alert on `/live` or `/ready` returning 503. Alert separately on a checksum
   or deep-integrity failure from the controlled backup/release gate.
 - Treat `MOS_STORAGE_CONFLICT` as HTTP 409 and retry from a fresh canonical

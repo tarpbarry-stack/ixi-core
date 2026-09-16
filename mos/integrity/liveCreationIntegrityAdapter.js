@@ -1,378 +1,85 @@
 "use strict";
 
-/*
- * IXI AOS LIVE CREATION INTEGRITY ADAPTER
- *
- * Read-only canonical operational adapter.
- *
- * No customer business vocabulary is used
- * to establish scope, ownership or meaning.
- */
-
-const {
-  listObjects
-} = require(
-  "../objects/objectService"
-);
-
-const {
-  readPassportRecords
-} = require(
-  "../../passport/passportRegistry"
-);
-
-const {
-  MOS_PATHS
-} = require(
-  "../storage/mosPaths"
-);
-
-const {
-  readJsonFile
-} = require(
-  "../storage/jsonStore"
-);
-
-
-const PROVISIONING_CONTRACT =
-  "ixi-aos-object-provision-v1";
-
-const PROVISIONING_COMMAND_TYPE =
-  "aos-object-provision";
-
-
-function clean(value) {
-  return String(
-    value ?? ""
-  ).trim();
-}
-
-
-function safeObject(value) {
-  return (
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value)
-  )
-    ? value
-    : {};
-}
-
-
-function readAllObjects() {
-  return (
-    listObjects({}) ||
-    []
-  );
-}
-
+// Read canonical records, including retained tombstones. Reconciliation never
+// creates identity or infers tenant ownership from customer vocabulary.
+const { listObjects } = require("../objects/objectService");
+const { readPassportRecords, passportSources } = require("../../passport/passportRegistry");
+const { MOS_PATHS } = require("../storage/mosPaths");
+const { readJsonFile } = require("../storage/jsonStore");
+const { getPassportIdFromObject } = require("../../integrity/creationIntegrityService");
+const PROVISIONING_CONTRACT = "ixi-aos-object-provision-v1";
+const PROVISIONING_COMMAND_TYPE = "aos-object-provision";
+const clean = value => String(value ?? "").trim();
+const aosSources = passport => passportSources(passport).filter(source => source.sourceType === "aos-object");
+const readAllObjects = () => listObjects({ status: null }) || [];
+const isNewContractObject = object => clean(object?.metadata?.provisioning?.contractVersion) === PROVISIONING_CONTRACT;
 
 function readIdempotencyRecords() {
-  const store =
-    readJsonFile(
-      MOS_PATHS.idempotency,
-      {}
-    );
-
-  if (
-    !store ||
-    typeof store !== "object" ||
-    Array.isArray(store)
-  ) {
-    return [];
-  }
-
-  return Object.values(
-    store
-  );
+  const store = readJsonFile(MOS_PATHS.idempotency, {});
+  return store && typeof store === "object" && !Array.isArray(store) ? Object.values(store) : [];
 }
 
-
-function isNewContractObject(
-  object
-) {
-  return (
-    clean(
-      object?.metadata
-        ?.provisioning
-        ?.contractVersion
-    ) ===
-      PROVISIONING_CONTRACT
-  );
+function selectObjects(entityId, objects, passports) {
+  const boundIds = new Set(passports.flatMap(aosSources).map(source => source.sourceId));
+  return objects.filter(record => clean(record.entityId) === entityId &&
+    (isNewContractObject(record) || boundIds.has(clean(record.objectId))));
 }
 
-
-function loadObjects({
-  entityId
-}) {
-  const normalizedEntityId =
-    clean(entityId);
-
-  if (!normalizedEntityId) {
-    return [];
-  }
-
-  return readAllObjects()
-    .filter(
-      object =>
-        clean(
-          object?.entityId
-        ) ===
-          normalizedEntityId &&
-        isNewContractObject(
-          object
-        )
-    );
+function selectPassports(entityId, objects, passports) {
+  const objectIds = new Set(objects.map(record => clean(record.objectId)));
+  const referencedIds = new Set(objects.map(getPassportIdFromObject).filter(Boolean));
+  return passports.filter(passport => {
+    const sources = aosSources(passport);
+    // Follow all canonical source bindings, including reused listing Passports.
+    // Conflicting tenant/source evidence must enter the report, not disappear.
+    return referencedIds.has(clean(passport.passportId)) ||
+      sources.some(source => objectIds.has(source.sourceId)) ||
+      (sources.length > 0 && clean(passport.entityId || passport.metadata?.entityId) === entityId);
+  });
 }
 
-
-function loadPassports({
-  entityId
-}) {
-  const normalizedEntityId =
-    clean(entityId);
-
-  if (!normalizedEntityId) {
-    return [];
-  }
-
-  const objects =
-    loadObjects({
-      entityId:
-        normalizedEntityId
-    });
-
-  const objectIds =
-    new Set(
-      objects
-        .map(
-          object =>
-            clean(
-              object.objectId
-            )
-        )
-        .filter(Boolean)
-    );
-
-  return (
-    readPassportRecords() ||
-    []
-  ).filter(
-    passport => {
-      if (
-        clean(
-          passport?.sourceType
-        ) !==
-          "aos-object"
-      ) {
-        return false;
-      }
-
-      const passportEntityId =
-        clean(
-          passport?.entityId
-        );
-
-      const sourceObjectId =
-        clean(
-          passport?.sourceId
-        );
-
-      /*
-       * Two legitimate paths into scope:
-       *
-       * 1. New Passport explicitly belongs
-       *    to the authenticated Entity.
-       *
-       * 2. Historical Passport has no
-       *    entityId but its canonical source
-       *    Object belongs to this Entity.
-       *
-       * A wrong entityId on an in-scope
-       * source Object remains visible so
-       * reconciliation reports the mismatch.
-       */
-      return (
-        passportEntityId ===
-          normalizedEntityId ||
-        objectIds.has(
-          sourceObjectId
-        )
-      );
-    }
-  );
+function loadObjects({ entityId }) {
+  const id = clean(entityId);
+  return id ? selectObjects(id, readAllObjects(), readPassportRecords()) : [];
 }
 
-
-function loadProvisioningRecords({
-  entityId
-}) {
-  const normalizedEntityId =
-    clean(entityId);
-
-  if (!normalizedEntityId) {
-    return [];
-  }
-
-  return readIdempotencyRecords()
-    .filter(
-      record =>
-        clean(
-          record?.entityId
-        ) ===
-          normalizedEntityId &&
-        clean(
-          record?.commandType
-        ) ===
-          PROVISIONING_COMMAND_TYPE
-    );
+function loadPassports({ entityId }) {
+  const id = clean(entityId);
+  if (!id) return [];
+  const passports = readPassportRecords();
+  return selectPassports(id, selectObjects(id, readAllObjects(), passports), passports);
 }
 
+function loadProvisioningRecords({ entityId }) {
+  const id = clean(entityId);
+  return id ? readIdempotencyRecords().filter(record => clean(record.entityId) === id &&
+    clean(record.commandType) === PROVISIONING_COMMAND_TYPE) : [];
+}
 
 function listIntegrityEntityIds() {
-  const entityIds =
-    new Set();
-
-  /*
-   * Permanent new-contract Objects.
-   */
-  for (
-    const object of
-      readAllObjects()
-  ) {
-    if (
-      !isNewContractObject(
-        object
-      )
-    ) {
-      continue;
-    }
-
-    const entityId =
-      clean(
-        object?.entityId
-      );
-
-    if (entityId) {
-      entityIds.add(
-        entityId
-      );
-    }
-  }
-
-  /*
-   * New tenant-aware AOS Passports.
-   *
-   * This keeps a tenant visible even if
-   * its source Object later disappears.
-   */
-  for (
-    const passport of
-      readPassportRecords() ||
-      []
-  ) {
-    if (
-      clean(
-        passport?.sourceType
-      ) !==
-        "aos-object"
-    ) {
-      continue;
-    }
-
-    const entityId =
-      clean(
-        passport?.entityId
-      );
-
-    if (entityId) {
-      entityIds.add(
-        entityId
-      );
-    }
-  }
-
-  /*
-   * Provisioning provenance.
-   *
-   * This keeps a tenant visible even if
-   * Object/Passport persistence is damaged.
-   */
-  for (
-    const record of
-      readIdempotencyRecords()
-  ) {
-    if (
-      clean(
-        record?.commandType
-      ) !==
-        PROVISIONING_COMMAND_TYPE
-    ) {
-      continue;
-    }
-
-    const entityId =
-      clean(
-        record?.entityId
-      );
-
-    if (entityId) {
-      entityIds.add(
-        entityId
-      );
-    }
-  }
-
-  return [
-    ...entityIds
-  ].sort();
+  const passports = readPassportRecords();
+  const boundIds = new Set(passports.flatMap(aosSources).map(source => source.sourceId));
+  return [...new Set([
+    ...readAllObjects().filter(record => isNewContractObject(record) || boundIds.has(clean(record.objectId)))
+      .map(record => clean(record.entityId)),
+    ...passports.filter(passport => aosSources(passport).length)
+      .map(passport => clean(passport.entityId || passport.metadata?.entityId)),
+    ...readIdempotencyRecords().filter(record => clean(record.commandType) === PROVISIONING_COMMAND_TYPE)
+      .map(record => clean(record.entityId))
+  ].filter(Boolean))].sort();
 }
 
-
-function describeLiveCreationIntegrityScope({
-  entityId
-}) {
+function describeLiveCreationIntegrityScope({ entityId }) {
+  const objects = loadObjects({ entityId });
   return {
-    entityId:
-      clean(entityId),
-
-    contractVersion:
-      PROVISIONING_CONTRACT,
-
-    objectCount:
-      loadObjects({
-        entityId
-      }).length,
-
-    passportCount:
-      loadPassports({
-        entityId
-      }).length,
-
-    provisioningRecordCount:
-      loadProvisioningRecords({
-        entityId
-      }).length,
-
-    legacyObjectsExcluded:
-      true,
-
-    readOnly:
-      true
+    entityId: clean(entityId), contractVersion: PROVISIONING_CONTRACT,
+    objectCount: objects.length, passportCount: loadPassports({ entityId }).length,
+    provisioningRecordCount: loadProvisioningRecords({ entityId }).length,
+    legacyObjectsExcluded: false, unboundLegacyObjectsExcluded: true,
+    retainedObjectsIncluded: true, readOnly: true
   };
 }
 
-
-module.exports = {
-  PROVISIONING_CONTRACT,
-
-  isNewContractObject,
-
-  loadObjects,
-  loadPassports,
-  loadProvisioningRecords,
-
-  listIntegrityEntityIds,
-
-  describeLiveCreationIntegrityScope
-};
+module.exports = { PROVISIONING_CONTRACT, isNewContractObject, loadObjects, loadPassports,
+  loadProvisioningRecords, listIntegrityEntityIds, describeLiveCreationIntegrityScope,
+  selectObjects, selectPassports };

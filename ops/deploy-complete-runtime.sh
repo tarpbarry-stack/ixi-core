@@ -16,16 +16,76 @@ flock -n 9 || { echo "Another IX-Core release holds the deployment lock." >&2; e
 test -f "$APP/index.js"
 test -f "$APP/passport/passports.json"
 test -f "$IXI_MOS_SQLITE_PATH"
-STAGE="$(mktemp -d /var/tmp/ixi-complete-release-XXXXXXXX)"
-chown ubuntu:ubuntu "$STAGE"
+STOPPED=0
+INSTALLED=0
+DEPENDENCIES=0
+SUCCESS=0
+TIMER_ACTIVE=0
+ROLLBACK="$BACKUP_ROOT/source-before-$IXI_CORE_SHA-$(date -u +%Y%m%dT%H%M%SZ)"
 run_pm2() { sudo -u ubuntu -H pm2 "$@"; }
+STAGE="$(mktemp -d /var/tmp/ixi-complete-release-XXXXXXXX)"
+finish() {
+  local status=$? rollback_ok=1
+  trap - EXIT INT TERM
+  set +e
+  if [[ "$SUCCESS" -ne 1 && "$INSTALLED" -eq 1 ]]; then
+    run_pm2 stop "${ACTIVE[@]}" >/dev/null || rollback_ok=0
+    if [[ -f "$ROLLBACK/rollback.json" ]]; then
+      python3 "$STAGE/ops/install-runtime-release.py" rollback --app "$APP" --backup "$ROLLBACK" || rollback_ok=0
+      if [[ "$DEPENDENCIES" -ge 1 ]]; then
+        if [[ -d "$APP/node_modules" ]]; then mv "$APP/node_modules" "$STAGE/failed-node_modules" || rollback_ok=0; fi
+        mv "$ROLLBACK/node_modules" "$APP/node_modules" || rollback_ok=0
+      fi
+      node "$APP/ops/runtime-release.js" verify "$APP" "$STAGE/previous-release.json" || rollback_ok=0
+    else
+      rollback_ok=0
+    fi
+  fi
+  if [[ "$STOPPED" -eq 1 && "$SUCCESS" -ne 1 && "$rollback_ok" -eq 1 ]]; then
+    run_pm2 restart "${ACTIVE[@]}" >/dev/null || rollback_ok=0
+    local healthy=0
+    for attempt in {1..15}; do
+      if curl --max-time 3 -fsS http://127.0.0.1:4100/live >/dev/null &&
+         curl --max-time 5 -fsS http://127.0.0.1:4100/ready >/dev/null; then healthy=1; break; fi
+      sleep 2
+    done
+    [[ "$healthy" -eq 1 ]] || rollback_ok=0
+  fi
+  if [[ "$TIMER_ACTIVE" -eq 1 && "$rollback_ok" -eq 1 ]]; then
+    systemctl start ixi-aos-creation-integrity.timer || status=1
+  fi
+  if [[ "$status" -ne 0 ]]; then
+    printf 'Release %s failed; rollback verified=%s\n' "$IXI_CORE_SHA" "$rollback_ok" > "$BACKUP_ROOT/last-release-failure.log"
+    if [[ -f "$STAGE/test-results.log" ]]; then tail -c 65536 "$STAGE/test-results.log" >> "$BACKUP_ROOT/last-release-failure.log"; fi
+    echo "Release failed; bounded diagnostics: $BACKUP_ROOT/last-release-failure.log" >&2
+  fi
+  if [[ "$rollback_ok" -eq 1 ]]; then
+    # These exact directories were created by this invocation. Failed rollback
+    # retains both; verified rollback has already restored its source/dependencies.
+    if [[ "$SUCCESS" -ne 1 && "$INSTALLED" -eq 1 ]]; then rm -rf -- "$ROLLBACK" || status=1; fi
+    rm -rf -- "$STAGE" || status=1
+  else
+    status=1
+    echo "Rollback is unverified; preserve $ROLLBACK and $STAGE for recovery." >&2
+  fi
+  exit "$status"
+}
+trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+chown ubuntu:ubuntu "$STAGE"
+node "$APP/ops/runtime-release.js" verify "$APP" "$APP/.ixi-release.json"
+cp "$APP/.ixi-release.json" "$STAGE/previous-release.json"
+PREVIOUS_COMMIT="$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).commit' "$STAGE/previous-release.json")"
 run_stage() { sudo -u ubuntu -H bash -c 'cd "$1"; shift; exec "$@"' _ "$STAGE" "$@"; }
 run_stage git init -q
 run_stage git remote add origin https://github.com/tarpbarry-stack/ixi-core.git
 run_stage git fetch -q --depth=1 origin "$IXI_CORE_SHA"
 run_stage git checkout -q --detach FETCH_HEAD
 test "$(run_stage git rev-parse HEAD)" = "$IXI_CORE_SHA"
-run_stage npm ci --no-audit --no-fund
+python3 "$STAGE/ops/release-maintenance.py" capacity --phase dependencies --app "$APP" \
+  --database "$IXI_MOS_SQLITE_PATH" --root "$BACKUP_ROOT"
+run_stage npm ci --no-audit --no-fund --cache "$STAGE/npm-cache"
 if ! run_stage npm test > "$STAGE/test-results.log" 2>&1; then
   tail -100 "$STAGE/test-results.log"
   exit 1
@@ -53,30 +113,9 @@ PY
 test "${#ACTIVE[@]}" -ge 1
 TIMER_ACTIVE=0
 if systemctl is-active --quiet ixi-aos-creation-integrity.timer; then TIMER_ACTIVE=1; fi
-STOPPED=0
-INSTALLED=0
-DEPENDENCIES=0
-SUCCESS=0
-ROLLBACK="$BACKUP_ROOT/source-before-$IXI_CORE_SHA-$(date -u +%Y%m%dT%H%M%SZ)"
-finish() {
-  local status=$?
-  trap - EXIT
-  if [[ "$SUCCESS" -ne 1 && "$INSTALLED" -eq 1 && -f "$ROLLBACK/rollback.json" ]]; then
-    run_pm2 stop "${ACTIVE[@]}" >/dev/null || true
-    python3 "$STAGE/ops/install-runtime-release.py" rollback --app "$APP" --backup "$ROLLBACK" || status=1
-    if [[ "$DEPENDENCIES" -eq 1 ]]; then
-      if [[ -d "$APP/node_modules" ]]; then mv "$APP/node_modules" "$STAGE/failed-node_modules"; fi
-      mv "$ROLLBACK/node_modules" "$APP/node_modules"
-    fi
-  fi
-  if [[ "$STOPPED" -eq 1 && "$SUCCESS" -ne 1 ]]; then
-    run_pm2 restart "${ACTIVE[@]}" >/dev/null || status=1
-  fi
-  if [[ "$TIMER_ACTIVE" -eq 1 ]]; then systemctl start ixi-aos-creation-integrity.timer || status=1; fi
-  if [[ "$status" -ne 0 ]]; then echo "Release failed; inspect the workflow and retained rollback set: $ROLLBACK" >&2; fi
-  exit "$status"
-}
-trap finish EXIT
+# Recapture the budget immediately before any writer/service interruption.
+python3 "$STAGE/ops/release-maintenance.py" capacity --app "$APP" \
+  --database "$IXI_MOS_SQLITE_PATH" --root "$BACKUP_ROOT"
 if [[ "$TIMER_ACTIVE" -eq 1 ]]; then
   systemctl stop ixi-aos-creation-integrity.timer
 fi
@@ -103,6 +142,7 @@ python3 "$STAGE/ops/install-runtime-release.py" install --stage "$STAGE" --app "
 mv "$APP/node_modules" "$ROLLBACK/node_modules"
 DEPENDENCIES=1
 mv "$STAGE/node_modules" "$APP/node_modules"
+DEPENDENCIES=2
 node "$APP/ops/runtime-release.js" verify "$APP" "$APP/.ixi-release.json"
 run_pm2 restart "${ACTIVE[@]}" >/dev/null
 healthy=0
@@ -133,6 +173,8 @@ for key in ['objects.json','relationships.json']:
 print(json.dumps({'identityAndRelationshipsUnchanged':True,'activeObjects':after['activeObjects'],'passports':after['passports']}))
 PY
 SUCCESS=1
+python3 "$APP/ops/release-maintenance.py" seal --root "$BACKUP_ROOT" --rollback "$ROLLBACK" --commit "$IXI_CORE_SHA"
+python3 "$APP/ops/release-maintenance.py" prune --app "$APP" --root "$BACKUP_ROOT" --rollback "$ROLLBACK" --previous-commit "$PREVIOUS_COMMIT"
 install -m 0644 "$APP/ops/systemd/ixi-core-recovery.service" /etc/systemd/system/ixi-core-recovery.service
 install -m 0644 "$APP/ops/systemd/ixi-core-recovery.timer" /etc/systemd/system/ixi-core-recovery.timer
 NODE_BIN="$(command -v node)"

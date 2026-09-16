@@ -34,8 +34,24 @@ async function main() {
     process.stdout.write(JSON.stringify({ ok: true, bucket, private: true, versioned: true }) + "\n");
     return;
   }
+  const verifyIndex = process.argv.indexOf("--verify-receipt");
+  if (verifyIndex !== -1) {
+    const receipt = JSON.parse(fs.readFileSync(process.argv[verifyIndex + 1], "utf8"));
+    if (receipt.ok !== true || receipt.bucket !== bucket || !receipt.key?.startsWith("recovery/") ||
+        !receipt.versionId || !/^[a-f0-9]{64}$/.test(receipt.sha256 || "")) throw new Error("Invalid recovery receipt");
+    const readback = await client.send(new GetObjectCommand({ ...parameters, Key: receipt.key, VersionId: receipt.versionId }));
+    const actual = crypto.createHash("sha256");
+    let bytes = 0;
+    for await (const chunk of readback.Body) { actual.update(chunk); bytes += chunk.length; }
+    if (actual.digest("hex") !== receipt.sha256) throw new Error("Recovery receipt readback checksum mismatch");
+    process.stdout.write(JSON.stringify({ ok: true, versionId: receipt.versionId, bytes, downloadVerified: true }) + "\n");
+    return;
+  }
   const parent = process.env.IXI_RECOVERY_LOCAL_ROOT || "/var/backups/ixi-core-releases";
   fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
+  const capacity = spawnSync("python3", [path.join(__dirname, "release-maintenance.py"), "capacity",
+    "--app", app, "--database", database, "--root", parent], { encoding: "utf8", timeout: 30000 });
+  if (capacity.status !== 0) throw new Error(capacity.stdout || capacity.stderr || "Recovery capacity check failed");
   const working = fs.mkdtempSync(path.join(parent, "verified-recovery-"));
   let output;
   let retained = false;

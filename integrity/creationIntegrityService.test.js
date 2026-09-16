@@ -130,3 +130,38 @@ test("entity scope excludes another tenant", () => {
   assert.equal(report.status, "healthy");
   assert.equal(report.summary.objectsChecked, 1);
 });
+test("listing Passport keeps its existing identity through all AOS source bindings", () => {
+  const fixture = healthyFixture();
+  fixture.passports[0] = { passportId: 'PASS-1', entityId: 'ENT-1', sourceType: 'sharetribe-listing',
+    sourceId: 'listing-1', sources: [{ sourceType: 'aos-object', sourceId: 'OBJ-1' }] };
+  const before = JSON.stringify(fixture);
+  assert.equal(reconcileCreationIntegrity(fixture).status, 'healthy');
+  assert.equal(JSON.stringify(fixture), before, 'reconciliation must be read-only');
+  fixture.passports[0].sources = [];
+  assert.ok(reconcileCreationIntegrity(fixture).findings.some(x => x.code === 'OBJECT_PASSPORT_SOURCE_MISMATCH'));
+});
+
+test("retained tombstones remain linked but cannot become a second active owner", () => {
+  const fixture = healthyFixture();
+  fixture.objects.push({ ...structuredClone(fixture.objects[0]), objectId: 'OBJ-OLD', status: 'soft-deleted' });
+  fixture.passports[0].sources = [{ sourceType: 'aos-object', sourceId: 'OBJ-OLD' }];
+  const report = reconcileCreationIntegrity(fixture);
+  assert.equal(report.status, 'healthy');
+  assert.equal(report.summary.retainedObjectsChecked, 1);
+  fixture.objects[1].status = 'active';
+  assert.ok(reconcileCreationIntegrity(fixture).findings.some(x => x.code === 'PASSPORT_LINKED_TO_MULTIPLE_OBJECTS'));
+  fixture.objects[1].status = 'soft-deleted';
+  fixture.objects[1].identities = [{ identityType: 'ixi-passport', passportId: 'WRONG' }];
+  assert.ok(reconcileCreationIntegrity(fixture).findings.some(x => x.code === 'PASSPORT_OBJECT_LINK_MISMATCH'));
+});
+
+test("secondary AOS bindings expose orphan and wrong-tenant defects", () => {
+  const fixture = healthyFixture();
+  fixture.passports[0] = { passportId: 'PASS-1', entityId: 'ENT-2', sourceType: 'sharetribe-listing', sourceId: 'listing-1',
+    sources: [{ sourceType: 'aos-object', sourceId: 'OBJ-1' }, { sourceType: 'aos-object', sourceId: 'MISSING' }] };
+  const codes = reconcileCreationIntegrity(fixture).findings.map(x => x.code);
+  assert.ok(codes.includes('PASSPORT_ENTITY_ID_MISMATCH'));
+  assert.ok(codes.includes('ORPHAN_AOS_PASSPORT'));
+  fixture.passports = [];
+  assert.ok(reconcileCreationIntegrity(fixture).findings.some(x => x.code === 'OBJECT_PASSPORT_RECORD_MISSING'));
+});

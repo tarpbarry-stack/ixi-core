@@ -29,7 +29,7 @@ For every permanent AOS Object:
 
 ## Live `/var/www/ix-core` adapter
 
-The GitHub `ixi-core` repository is not the complete running MOS tree. Mount this package into the live service using adapters over the canonical live stores/services.
+The canonical adapter is `mos/integrity/liveCreationIntegrityAdapter.js` in the complete `ixi-core` runtime. It is already mounted through the authenticated MOS router. Release it through the paired complete-runtime workflow; the old `live/` overlays are retired.
 
 ```js
 const {
@@ -64,11 +64,11 @@ Mount it **below** the existing internal HMAC authentication and tenant-boundary
 
 ### `loadObjects({ entityId })`
 
-Return the canonical permanent MOS Objects for only the authenticated Entity. Do not return browser drafts.
+Return permanent new-contract Objects and Objects reached by persisted AOS Passport bindings for the authenticated Entity. Include retained archived/soft-deleted records as identity evidence; these cannot count as a second active owner. Exclude unbound legacy records and browser drafts.
 
 ### `loadPassports({ entityId })`
 
-Return Passport records associated with the authenticated Entity. Legacy Sharetribe Passports may be present; the reconciler only applies orphan-source checks when `sourceType === "aos-object"`.
+Return Passports referenced by the scoped Objects or their AOS bindings, including reused Sharetribe Passports whose AOS binding is in `sources`. Check every primary and secondary AOS source. Wrong-tenant and broken binding evidence must remain visible. A retained tombstone is not a missing Object, and real missing source IDs still fail.
 
 ### `loadProvisioningRecords({ entityId })`
 
@@ -109,11 +109,10 @@ Do not infer customer business meaning from object names, container names, label
 
 ## Production rollout
 
-1. Copy `integrity/` into `/var/www/ix-core/integrity/`.
-2. Implement the three live adapters using the existing MOS Object, Passport and provisioning-ledger services.
-3. Mount the router below HMAC authentication + tenant boundary.
-4. Run `node --test integrity/creationIntegrityService.test.js`.
-5. Restart IX-Core on port 4100.
-6. Call `/mos/v1/aos/creation-integrity/health` through the authenticated signed gateway.
-7. Resolve every critical finding before treating the tenant as integrity-green.
-8. Schedule reconciliation in operations/monitoring after the live route is proven.
+1. Run `npm test`, including integrity and maintenance safety tests.
+2. Pin the exact backend commit in the frontend's `config/ixi-core-release.json` and pass `scripts/verify-aos-stabilization.mjs` against that checkout.
+3. Use `deploy-ixi-core-production.yml` to install the complete verified source manifest after private recovery and capacity checks.
+4. Verify the installed source, unchanged canonical data, bounded health probes and the scheduled integrity report.
+5. Complete the required authenticated AOS/TRAN$ACT browser gate before claiming deployed business-flow verification.
+
+Never copy feature-specific files into a running release. `ops/deploy-live-aos-integrity.sh` is retired.
