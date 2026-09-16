@@ -1,86 +1,79 @@
 #!/usr/bin/env node
-"use strict";
+'use strict';
+// Local diagnostic export only. Scheduled production recovery uses the complete
+// private, versioned runtime recovery helper and its shared deployment lock.
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+const Database = require('better-sqlite3');
 
-const crypto = require("crypto");
-const fs = require("fs");
-const path = require("path");
-const Database = require("better-sqlite3");
-const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
-
-function timestampId() {
-  return new Date().toISOString().replaceAll(/[:.]/g, "-");
-}
-
-function checksum(filePath) {
-  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+async function checksum(file) {
+  const hash = crypto.createHash('sha256');
+  for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+  return hash.digest('hex');
 }
 
 async function main() {
-  const sourcePath = path.resolve(String(process.env.IXI_MOS_SQLITE_PATH || "").trim());
+  const sourcePath = path.resolve(String(process.env.IXI_MOS_SQLITE_PATH || '').trim());
   if (!process.env.IXI_MOS_SQLITE_PATH || !fs.existsSync(sourcePath)) {
-    throw new Error("IXI_MOS_SQLITE_PATH must identify an existing database.");
+    throw new Error('IXI_MOS_SQLITE_PATH must identify an existing database.');
   }
-
-  const backupRoot = path.resolve(
-    process.env.IXI_MOS_BACKUP_ROOT || path.join(path.dirname(sourcePath), "backups")
-  );
+  if (process.env.IXI_MOS_BACKUP_S3_BUCKET) {
+    throw new Error('Remote recovery must use ops/backup-to-s3.js with the verified private recovery configuration.');
+  }
+  const backupRoot = path.resolve(process.env.IXI_MOS_BACKUP_ROOT || path.join(path.dirname(sourcePath), 'backups'));
   fs.mkdirSync(backupRoot, { recursive: true, mode: 0o700 });
-  const destinationPath = path.join(backupRoot, `ixi-aos-${timestampId()}.sqlite`);
-  const source = new Database(sourcePath, { readonly: true, fileMustExist: true });
-
+  const destinationPath = path.join(backupRoot, 'latest-verified.sqlite');
+  const receiptPath = path.join(backupRoot, 'latest-verified.json');
+  if (fs.existsSync(destinationPath) && (fs.realpathSync(destinationPath) === fs.realpathSync(sourcePath) ||
+      fs.lstatSync(destinationPath).isSymbolicLink())) throw new Error('Diagnostic export cannot replace its source or follow a redirected target');
+  const stat = fs.statfsSync(backupRoot);
+  const required = fs.statSync(sourcePath).size + 64 * 1024 * 1024;
+  if (stat.bavail * stat.bsize < required || stat.ffree < 100) throw new Error('Insufficient capacity for a verified local SQLite export');
+  const lockPath = path.join(backupRoot, '.snapshot.lock');
+  const lock = fs.openSync(lockPath, 'wx', 0o600);
+  let working;
   try {
-    const sourceIntegrity = source.prepare("PRAGMA quick_check;").get()?.quick_check;
-    if (sourceIntegrity !== "ok") {
-      throw new Error(`Source database integrity failed: ${sourceIntegrity || "unknown"}`);
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, sourcePath }));
+    if (fs.existsSync(destinationPath)) {
+      if (!fs.existsSync(receiptPath) || fs.lstatSync(receiptPath).isSymbolicLink() ||
+          JSON.parse(fs.readFileSync(receiptPath, 'utf8')).checksum !== await checksum(destinationPath)) {
+        throw new Error('Existing local export does not match its receipt; preserve it for review');
+      }
     }
-    await source.backup(destinationPath);
+    working = fs.mkdtempSync(path.join(backupRoot, '.snapshot-'));
+    const candidate = path.join(working, 'snapshot.sqlite');
+    const source = new Database(sourcePath, { readonly: true, fileMustExist: true });
+    try {
+      if (source.prepare('PRAGMA quick_check;').get()?.quick_check !== 'ok') throw new Error('Source database integrity failed');
+      await source.backup(candidate);
+    } finally { source.close(); }
+    fs.chmodSync(candidate, 0o600);
+    const copy = new Database(candidate, { readonly: true, fileMustExist: true });
+    let integrity;
+    try { integrity = copy.prepare('PRAGMA quick_check;').get()?.quick_check; }
+    finally { copy.close(); }
+    if (integrity !== 'ok') throw new Error('Backup database integrity failed');
+    const report = { ok: true, sourcePath, destinationPath, checksum: await checksum(candidate), integrity,
+      bytes: fs.statSync(candidate).size, createdAt: new Date().toISOString(), s3: null, retainedLocalSnapshots: 1 };
+    const candidateReceipt = path.join(working, 'receipt.json');
+    fs.writeFileSync(candidateReceipt, JSON.stringify(report, null, 2), { mode: 0o600 });
+    for (const file of [candidate, candidateReceipt]) {
+      const fd = fs.openSync(file, 'r');
+      try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    }
+    fs.renameSync(candidate, destinationPath);
+    fs.renameSync(candidateReceipt, receiptPath);
+    const directory = fs.openSync(backupRoot, 'r');
+    try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+    process.stdout.write(JSON.stringify(report, null, 2) + '\n');
   } finally {
-    source.close();
+    if (working) fs.rmSync(working, { recursive: true, force: true });
+    fs.closeSync(lock);
+    fs.unlinkSync(lockPath);
   }
-
-  fs.chmodSync(destinationPath, 0o600);
-  const copy = new Database(destinationPath, { readonly: true, fileMustExist: true });
-  const backupIntegrity = copy.prepare("PRAGMA quick_check;").get()?.quick_check;
-  copy.close();
-  if (backupIntegrity !== "ok") {
-    throw new Error(`Backup database integrity failed: ${backupIntegrity || "unknown"}`);
-  }
-
-  const digest = checksum(destinationPath);
-  const bucket = String(process.env.IXI_MOS_BACKUP_S3_BUCKET || "").trim();
-  let s3 = null;
-
-  if (bucket) {
-    const region = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-2";
-    const prefix = String(process.env.IXI_MOS_BACKUP_S3_PREFIX || "aos-storage").replace(/^\/+|\/+$/g, "");
-    const key = `${prefix}/${path.basename(destinationPath)}`;
-    const client = new S3Client({ region });
-    await client.send(new PutObjectCommand({
-      Bucket: bucket,
-      Key: key,
-      Body: fs.createReadStream(destinationPath),
-      ContentType: "application/vnd.sqlite3",
-      Metadata: { sha256: digest }
-    }));
-    s3 = { bucket, key, region };
-  }
-
-  process.stdout.write(`${JSON.stringify({
-    ok: true,
-    sourcePath,
-    destinationPath,
-    checksum: digest,
-    integrity: backupIntegrity,
-    bytes: fs.statSync(destinationPath).size,
-    s3
-  }, null, 2)}\n`);
 }
-
 main().catch(error => {
-  process.stderr.write(`${JSON.stringify({
-    ok: false,
-    code: error?.code || "MOS_BACKUP_FAILED",
-    error: error?.message || String(error)
-  }, null, 2)}\n`);
+  process.stderr.write(JSON.stringify({ ok: false, code: error?.code || 'MOS_BACKUP_FAILED', error: error.message }) + '\n');
   process.exitCode = 1;
 });

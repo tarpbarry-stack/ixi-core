@@ -233,7 +233,7 @@ function mutatePassportRecords(mutator) {
   return withPassportRegistryLock(() => {
     const records = readPassportRecords();
     const mutation = mutator(records);
-    writePassportRecordsUnlocked(mutation.records);
+    if (mutation.changed !== false) writePassportRecordsUnlocked(mutation.records);
     return mutation.result;
   });
 }
@@ -324,10 +324,13 @@ function bindPassportSource({
     }
 
     const sources = passportSources(current);
-    if (!sources.some(source =>
-      source.sourceType === normalizedSourceType &&
-      source.sourceId === normalizedSourceId
-    )) {
+    const alreadyBound = sources.some(source =>
+      source.sourceType === normalizedSourceType && source.sourceId === normalizedSourceId
+    );
+    if (alreadyBound && (currentEntityId || !normalizedEntityId)) {
+      return { records, result: current, changed: false };
+    }
+    if (!alreadyBound) {
       sources.push({
         sourceType: normalizedSourceType,
         sourceId: normalizedSourceId

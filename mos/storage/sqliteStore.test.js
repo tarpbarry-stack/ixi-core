@@ -167,6 +167,25 @@ test("SQLite backup is integrity-checked and recoverable", () => {
   });
   assert.deepEqual(recovered.read(files.collectionPath, {}), { recoverable: true });
   recovered.close();
+
+  const repeat = () => spawnSync(process.execPath, [path.join(__dirname, "backupSqlite.js")], {
+    encoding: "utf8", env: { ...process.env, IXI_MOS_SQLITE_PATH: files.databasePath,
+      IXI_MOS_BACKUP_ROOT: backupRoot, IXI_MOS_BACKUP_S3_BUCKET: "" }
+  });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const next = repeat();
+    assert.equal(next.status, 0, next.stderr);
+    assert.equal(JSON.parse(next.stdout).destinationPath, report.destinationPath);
+  }
+  assert.deepEqual(fs.readdirSync(backupRoot).sort(), ["latest-verified.json", "latest-verified.sqlite"]);
+  const before = fs.readFileSync(report.destinationPath);
+  fs.writeFileSync(path.join(backupRoot, ".snapshot.lock"), "active exporter");
+  assert.notEqual(repeat().status, 0);
+  assert.deepEqual(fs.readFileSync(report.destinationPath), before);
+  fs.unlinkSync(path.join(backupRoot, ".snapshot.lock"));
+  fs.writeFileSync(path.join(backupRoot, "latest-verified.json"), JSON.stringify({ checksum: "mismatch" }));
+  assert.notEqual(repeat().status, 0);
+  assert.deepEqual(fs.readFileSync(report.destinationPath), before);
 });
 
 test("routine storage health is lightweight and deep integrity is explicit", () => {

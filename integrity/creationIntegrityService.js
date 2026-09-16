@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("crypto");
+const { passportSources } = require("../passport/passportRegistry");
 
 const CONTRACT_VERSION = "ixi-aos-creation-integrity-v1";
 const clean = value => String(value ?? "").trim();
@@ -27,9 +28,18 @@ function getPassportId(record = {}) {
   return clean(record.passportId || record.id);
 }
 
+function getPassportSourceObjectIds(record = {}) {
+  return passportSources(record).filter(source => source.sourceType === "aos-object")
+    .map(source => source.sourceId);
+}
+
 function getPassportSourceObjectId(record = {}) {
-  if (clean(record.sourceType) !== "aos-object") return "";
-  return clean(record.sourceId);
+  const ids = getPassportSourceObjectIds(record);
+  return ids.length === 1 ? ids[0] : "";
+}
+
+function isRetiredObject(record = {}) {
+  return ["soft-deleted", "archived"].includes(clean(record.status));
 }
 
 function getProvisioningCommandId(record = {}) {
@@ -147,48 +157,14 @@ function reconcileCreationIntegrity({
         .filter(Boolean)
     );
 
-  const scopedPassports =
-    array(passports).filter(
-      item => {
-        if (!resolvedEntityId) {
-          return true;
-        }
-
-        const passportEntity =
-          clean(
-            item?.entityId ||
-            item?.metadata?.entityId
-          );
-
-        const sourceObjectId =
-          getPassportSourceObjectId(
-            item
-          );
-
-        /*
-         * Canonical source ownership wins
-         * for reconciliation visibility.
-         *
-         * A wrong Passport.entityId must
-         * produce an explicit mismatch,
-         * not disappear from the report.
-         */
-        if (
-          sourceObjectId &&
-          scopedObjectIds.has(
-            sourceObjectId
-          )
-        ) {
-          return true;
-        }
-
-        return (
-          !passportEntity ||
-          passportEntity ===
-            resolvedEntityId
-        );
-      }
-    );
+  const referencedPassportIds = new Set(scopedObjects.map(getPassportIdFromObject).filter(Boolean));
+  const scopedPassports = array(passports).filter(item => {
+    if (!resolvedEntityId) return true;
+    return referencedPassportIds.has(getPassportId(item)) ||
+      getPassportSourceObjectIds(item).some(id => scopedObjectIds.has(id)) ||
+      !clean(item?.entityId || item?.metadata?.entityId) ||
+      clean(item?.entityId || item?.metadata?.entityId) === resolvedEntityId;
+  });
   const scopedProvisioning = array(provisioningRecords).filter(item => {
     const recordEntityId = clean(item?.entityId || item?.metadata?.entityId);
     return !resolvedEntityId || !recordEntityId || recordEntityId === resolvedEntityId;
@@ -217,9 +193,11 @@ function reconcileCreationIntegrity({
       findings.push(createFinding("OBJECT_PASSPORT_MISSING", "critical", { objectId }));
       continue;
     }
-    const owners = objectsByPassport.get(passportId) || [];
-    owners.push(objectId);
-    objectsByPassport.set(passportId, owners);
+    if (!isRetiredObject(item)) {
+      const owners = objectsByPassport.get(passportId) || [];
+      owners.push(objectId);
+      objectsByPassport.set(passportId, owners);
+    }
   }
 
   for (const item of scopedPassports) {
@@ -233,101 +211,36 @@ function reconcileCreationIntegrity({
     }
     passportById.set(passportId, item);
 
-    const sourceObjectId =
-      getPassportSourceObjectId(
-        item
-      );
-
-    const passportEntityId =
-      clean(
-        item?.entityId ||
-        item?.metadata?.entityId
-      );
-
-    const linkedObject =
-      sourceObjectId
-        ? objectById.get(
-            sourceObjectId
-          )
-        : null;
-
-    const expectedEntityId =
-      clean(
-        linkedObject?.entityId
-      ) ||
-      resolvedEntityId;
-
-    if (
-      passportEntityId &&
-      expectedEntityId &&
-      passportEntityId !==
-        expectedEntityId
-    ) {
-      findings.push(
-        createFinding(
-          "PASSPORT_ENTITY_ID_MISMATCH",
-          "critical",
-          {
-            passportId,
-
-            sourceObjectId:
-              sourceObjectId ||
-              null,
-
-            expectedEntityId,
-
-            actualEntityId:
-              passportEntityId
-          }
-        )
-      );
+    const sourceObjectIds = getPassportSourceObjectIds(item);
+    const passportEntityId = clean(item?.entityId || item?.metadata?.entityId);
+    // Keep the supplied tenant as the boundary even when a source is missing.
+    const expectedEntities = new Set([resolvedEntityId,
+      ...sourceObjectIds.map(id => clean(objectById.get(id)?.entityId)),
+      ...scopedObjects.filter(record => getPassportIdFromObject(record) === passportId)
+        .map(record => clean(record.entityId))].filter(Boolean));
+    for (const expectedEntityId of expectedEntities) {
+      if (passportEntityId && passportEntityId !== expectedEntityId) {
+        findings.push(createFinding("PASSPORT_ENTITY_ID_MISMATCH", "critical", {
+          passportId, sourceObjectId: sourceObjectIds[0] || null,
+          expectedEntityId, actualEntityId: passportEntityId
+        }));
+      }
     }
-
-    if (
-      !passportEntityId &&
-      passportRequiresEntityId({
-        passport:
-          item,
-
-        enforcementAt:
-          passportEntityEnforcementAt
-      })
-    ) {
-      findings.push(
-        createFinding(
-          "PASSPORT_ENTITY_ID_MISSING",
-          "critical",
-          {
-            passportId,
-
-            sourceObjectId:
-              sourceObjectId ||
-              null,
-
-            expectedEntityId:
-              expectedEntityId ||
-              null,
-
-            createdAt:
-              clean(
-                item?.createdAt
-              ) ||
-              null,
-
-            enforcementAt:
-              clean(
-                passportEntityEnforcementAt
-              ) ||
-              null
-          }
-        )
-      );
+    if (!passportEntityId && passportRequiresEntityId({ passport: item, enforcementAt: passportEntityEnforcementAt })) {
+      findings.push(createFinding("PASSPORT_ENTITY_ID_MISSING", "critical", {
+        passportId, sourceObjectId: sourceObjectIds[0] || null,
+        expectedEntityId: resolvedEntityId || null,
+        createdAt: clean(item.createdAt) || null, enforcementAt: clean(passportEntityEnforcementAt) || null
+      }));
     }
-
-    if (sourceObjectId) {
+    for (const sourceObjectId of sourceObjectIds) {
       const linked = passportsBySourceObject.get(sourceObjectId) || [];
       linked.push(passportId);
       passportsBySourceObject.set(sourceObjectId, linked);
+    }
+    const liveSources = sourceObjectIds.filter(id => objectById.has(id) && !isRetiredObject(objectById.get(id)));
+    if (liveSources.length > 1) {
+      findings.push(createFinding("PASSPORT_LINKED_TO_MULTIPLE_OBJECTS", "critical", { passportId, objectIds: liveSources }));
     }
   }
 
@@ -353,24 +266,27 @@ function reconcileCreationIntegrity({
       findings.push(createFinding("OBJECT_PASSPORT_RECORD_MISSING", "critical", { objectId, passportId }));
       continue;
     }
-    const sourceObjectId = getPassportSourceObjectId(passport);
-    if (sourceObjectId && sourceObjectId !== objectId) {
-      findings.push(createFinding("OBJECT_PASSPORT_SOURCE_MISMATCH", "critical", { objectId, passportId, passportSourceObjectId: sourceObjectId }));
+    const sourceObjectIds = getPassportSourceObjectIds(passport);
+    if (!sourceObjectIds.includes(objectId)) {
+      findings.push(createFinding("OBJECT_PASSPORT_SOURCE_MISMATCH", "critical", {
+        objectId, passportId, passportSourceObjectId: sourceObjectIds[0] || null
+      }));
     }
   }
 
   for (const item of scopedPassports) {
     const passportId = getPassportId(item);
-    const sourceObjectId = getPassportSourceObjectId(item);
-    if (!passportId || !sourceObjectId) continue;
-    const linkedObject = objectById.get(sourceObjectId);
-    if (!linkedObject) {
-      findings.push(createFinding("ORPHAN_AOS_PASSPORT", "critical", { passportId, sourceObjectId }));
-      continue;
-    }
-    const objectPassportId = getPassportIdFromObject(linkedObject);
-    if (objectPassportId !== passportId) {
-      findings.push(createFinding("PASSPORT_OBJECT_LINK_MISMATCH", "critical", { passportId, sourceObjectId, objectPassportId }));
+    if (!passportId) continue;
+    for (const sourceObjectId of getPassportSourceObjectIds(item)) {
+      const linkedObject = objectById.get(sourceObjectId);
+      if (!linkedObject) {
+        findings.push(createFinding("ORPHAN_AOS_PASSPORT", "critical", { passportId, sourceObjectId }));
+        continue;
+      }
+      const objectPassportId = getPassportIdFromObject(linkedObject);
+      if (objectPassportId !== passportId) {
+        findings.push(createFinding("PASSPORT_OBJECT_LINK_MISMATCH", "critical", { passportId, sourceObjectId, objectPassportId }));
+      }
     }
   }
 
@@ -412,6 +328,7 @@ function reconcileCreationIntegrity({
     status: criticalCount > 0 ? "failed" : highCount > 0 ? "attention" : "healthy",
     summary: {
       objectsChecked: scopedObjects.length,
+      retainedObjectsChecked: scopedObjects.filter(isRetiredObject).length,
       passportsChecked: scopedPassports.length,
       provisioningRecordsChecked: scopedProvisioning.length,
       findings: findings.length,
@@ -439,6 +356,7 @@ module.exports = {
   getPassportIdFromObject,
   getPassportId,
   getPassportSourceObjectId,
+  getPassportSourceObjectIds,
   getProvisioningCommandId,
   reconcileCreationIntegrity,
   assertCreationIntegrity
