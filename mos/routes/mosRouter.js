@@ -445,6 +445,9 @@ router.use(
 );
 
 
+// Sales Desk inherits signature, tenant and active-membership enforcement.
+router.use("/sales-desk", require("../../sales/IXISalesDeskRoutes"));
+
 /* ---------- AOS ENVIRONMENT ---------- */
 
 router.get(
