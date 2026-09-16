@@ -9,7 +9,8 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(),"sales-desk-"));
 process.env.IXI_MOS_STORAGE_PROVIDER = "sqlite";
 process.env.IXI_MOS_DATA_ROOT = path.join(root,"mos");
 process.env.IXI_PASSPORT_DATA_FILE = path.join(root,"passports.json");
-const { ensureAosAccount } = require("../mos/accounts/aosAccountService");
+const { ensureAosAccount,bindOwnerMembershipIdentity } = require("../mos/accounts/aosAccountService");
+const { provisionAosObject } = require("../mos/provisioning/aosObjectProvisioningService");
 const { MOS_PATHS } = require("../mos/storage/mosPaths");
 const { readJsonFile,writeJsonFileAtomic } = require("../mos/storage/jsonStore");
 const { listObjects } = require("../mos/objects/objectService");
@@ -18,6 +19,8 @@ const service = require("./IXISalesDeskService");
 const repo = require("./IXISalesDeskRepository");
 const a = ensureAosAccount({ownerUserId:"owner-a",displayName:"Company A"});
 const b = ensureAosAccount({ownerUserId:"owner-b",displayName:"Company B"});
+const ownerPerson = provisionAosObject({commandId:"owner-person-before-sales",entityId:a.entity.entityId,objectType:"person",displayName:"Company Owner",actorId:"owner-a"});
+bindOwnerMembershipIdentity({accountId:a.account.accountId,ownerUserId:"owner-a",personObjectId:ownerPerson.identity.objectId,personPassportId:ownerPerson.identity.passportId});
 const context = entity => ({authenticated:true,principalId:entity.account.ownerUserId,entityId:entity.entity.entityId});
 const actor = service.authorize(context(a)), other = service.authorize(context(b));
 const command = (kind,record,revision) => ({kind,record,revision,commandId:crypto.randomUUID()});
@@ -35,6 +38,17 @@ test("access rejects anonymous, cross-company, inactive and expressly denied own
   memberships[original.membershipId]=original;writeJsonFileAtomic(MOS_PATHS.memberships,memberships);
 });
 let contact;
+test("legacy accounts cannot accidentally create customers as their owner identity",()=>{
+  assert.throws(()=>service.save(other,command("contacts",{name:"Prospective customer"})),e=>e.code==="SALES_OWNER_SETUP_REQUIRED");
+  assert.equal(listObjects({entityId:other.entityId}).length,0);
+});
+test("explicit write denial takes precedence over owner role",()=>{
+  const memberships=readJsonFile(MOS_PATHS.memberships,{}),original={...memberships[a.membership.membershipId]};
+  memberships[original.membershipId]={...original,directDenies:["sales-desk.write"]};writeJsonFileAtomic(MOS_PATHS.memberships,memberships);
+  assert.equal(service.authorize(context(a)).canWrite,false);
+  assert.throws(()=>service.authorize(context(a),"write"),e=>e.code==="SALES_WRITE_DENIED");
+  memberships[original.membershipId]=original;writeJsonFileAtomic(MOS_PATHS.memberships,memberships);
+});
 test("contact save is durable and retry-safe with exactly one canonical identity",()=>{
   const objectsBefore=listObjects({entityId:actor.entityId}).length;
   const input=command("contacts",{name:"Buyer One",email:"buyer@example.test",phone:"555-123-4567"});
