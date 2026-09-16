@@ -18,7 +18,7 @@ function text(value,max=250,required=false) {
   if (result.length > max || (required && !result)) fail("SALES_INPUT_INVALID",`Complete the required fields within ${max} characters.`);
   return result;
 }
-function authorize(context) {
+function authorize(context, operation = "read") {
   if (!context?.authenticated || !context.principalId || !context.entityId) fail("SALES_AUTH_REQUIRED","Sign in to open Sales Desk.",401);
   const { principal, membership } = resolveMosMembershipPrincipal(context);
   const account = getAosAccountForUser(context.principalId);
@@ -26,7 +26,8 @@ function authorize(context) {
   if (membership.role !== "owner" || account.entity?.entityId !== context.entityId || denied.includes("*") || denied.includes("sales-desk.access")) {
     fail("SALES_ACCESS_DENIED","Sales Desk currently requires active company-owner access.",403);
   }
-  return { entityId: context.entityId, actorId: context.principalId, company: account.entity.displayName, role: "owner" };
+  if (operation === "write" && denied.includes("sales-desk.write")) fail("SALES_WRITE_DENIED","Your company membership does not permit Sales Desk changes.",403);
+  return { entityId: context.entityId, actorId: context.principalId, company: account.entity.displayName, role: "owner", ownerPersonObjectId:clean(membership.personObjectId), canWrite:!denied.includes("sales-desk.write") };
 }
 function kindOf(kind) { if (!KINDS.has(kind)) fail("SALES_KIND_INVALID","Unknown sales record."); return kind; }
 function getRecord(actor,kind,id) {
@@ -71,6 +72,10 @@ function save(actor, input) {
         identity = resolveCanonicalObjectIdentity({ objectId:object.objectId, entityId:actor.entityId });
       }
       if (!identity) {
+        // A legacy owner's singleton-person fallback must never silently turn
+        // a newly created customer into the owner or make that owner ambiguous.
+        const owner = actor.ownerPersonObjectId ? getObject(actor.ownerPersonObjectId) : null;
+        if (!owner || owner.entityId !== actor.entityId || owner.objectType !== "person" || owner.status !== "active") fail("SALES_OWNER_SETUP_REQUIRED","Complete your owner identity setup in AOS before creating new people. You can still link an existing IXI person.",409);
         // Saving is the explicit identity-creation boundary. Reading/searching
         // contacts and moving a machine on the board never provision anything.
         const result = provisionAosObject({ commandId:`sales-contact-${actor.entityId}-${commandId}`,entityId:actor.entityId,objectType:"person",displayName:name,fields:{},actorId:actor.actorId });

@@ -6,10 +6,10 @@ const { sendMosError } = require("../mos/routes/httpHelpers");
 const router = express.Router();
 router.use((req,res,next) => {
   res.setHeader("Cache-Control","private, no-store");
-  try { req.salesActor = service.authorize(req.ixiRequestContext); next(); }
+  try { req.salesActor = service.authorize(req.ixiRequestContext,req.method === "POST" ? "write" : "read"); next(); }
   catch(error) { sendMosError(res,error); }
 });
-router.get("/context",(req,res) => res.json({ok:true,context:req.salesActor,capabilities:{ read:true,write:true,financialAuthority:"existing-transact-policy" }}));
+router.get("/context",(req,res) => res.json({ok:true,context:req.salesActor,capabilities:{ read:true,write:req.salesActor.canWrite,financialAuthority:"existing-transact-policy" }}));
 router.get("/bootstrap",(req,res) => {
   try {
     const actor=req.salesActor;
