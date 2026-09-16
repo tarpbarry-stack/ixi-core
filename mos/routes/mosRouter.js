@@ -1296,6 +1296,20 @@ router.post(
   }
 );
 
+const tradeMachines = require("../onboarding/tradeMachineService");
+for (const [action, operation] of Object.entries({ list: tradeMachines.listTradeMachines, reserve: tradeMachines.reserveTradeMachine, "create-rejected": tradeMachines.rejectTradeListingCreate, complete: tradeMachines.completeTradeMachine, acquired: tradeMachines.confirmTradeAcquisition })) {
+  router.post(`/aos/trades/${action}`, async (req, res) => {
+    try {
+      const principal = governedPrincipal(req, [action === "list" ? "aos.view" : "aos.create"]);
+      // Match the existing signed Financial gateway's active-owner boundary.
+      const account = getAosAccountForUser(principal.principalId);
+      if (account.entity?.entityId !== principal.entityId || account.membership?.role !== "owner" || account.membership?.status !== "active") throw new MosError("TRADE_FINANCIAL_ACCESS_DENIED", "Trade financial details require the active Entity owner.", null, 403);
+      const result = await operation({ ...req.body, entityId: principal.entityId, principalId: principal.principalId });
+      return res.json(action === "list" ? { rows: result } : result);
+    } catch (error) { return sendMosError(res, error); }
+  });
+}
+
 router.post(
   "/aos/machines/sharetribe-listing",
   async (req, res) => {

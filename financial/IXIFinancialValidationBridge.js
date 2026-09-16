@@ -1667,7 +1667,7 @@ function validateFinancialDocument(document = {}) {
       errors.push(
         "asset acquisition purchase date is required and must be valid.",
       );
-    if (purchasePrice === null || !(purchasePrice > 0))
+    if (purchasePrice === null || !(purchasePrice > 0 || (record.trade && purchasePrice === 0)))
       errors.push(
         "asset acquisition purchase price must be greater than zero.",
       );

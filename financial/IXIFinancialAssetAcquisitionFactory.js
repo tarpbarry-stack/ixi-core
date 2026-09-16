@@ -101,7 +101,7 @@ function createAssetAcquisitionDocument({
   attachments = [],
   metadata = {},
 } = {}) {
-  const documentId = clean(financialDocumentId) || randomId("ifd");
+  const documentId = require("./IXIFinancialTradeContract").tradeAcquisitionId(assetAcquisition) || clean(financialDocumentId) || randomId("ifd");
   const currencyCode = normalizeCurrency(currency);
   const supplied = safeObject(assetAcquisition);
   const acquisitionRecord = safeObject(

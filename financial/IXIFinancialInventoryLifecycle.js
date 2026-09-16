@@ -178,7 +178,11 @@ function projectInventory({ records = [], entityPassportId = "" } = {}) {
     sales.push(summary);
     // A questionable historical closeout stays excluded from available stock;
     // it is reported for reconciliation instead of being silently put back.
-    if (receivedCents <= 0 || legacyCredits.length) issues.push({ documentId: saleId, passportId,
+    // Itemized all-trade SOLD writes verify the incoming acquisitions at closeout.
+    // Their recorded noncash consideration must not be presented as missing cash.
+    const tradeCents = array(doc.metadata?.trades).reduce((sum, trade) => sum + (cents(trade.allowance) || 0), 0);
+    const fullyTraded = customerTotal === 0 && tradeCents > 0 && cents(sale.collection?.tradeValue) === tradeCents;
+    if ((receivedCents <= 0 && !fullyTraded) || legacyCredits.length) issues.push({ documentId: saleId, passportId,
       code: "COLLECTION_RECONCILIATION_REQUIRED", message: "Check receipts and legacy credits for this recorded sale." });
     if (!summary.soldByLabel) issues.push({ documentId: saleId, passportId, code: "SALESPERSON_NOT_RECORDED", message: "The historical salesperson has not been recorded." });
     if (recordedSalePrice === null) issues.push({ documentId: saleId, passportId, code: "MACHINE_SALE_PRICE_NOT_RECORDED", message: "Verify the historical machine sale price separately from the invoice total." });

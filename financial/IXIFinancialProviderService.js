@@ -309,6 +309,7 @@ async function createDocument(
 
 
   try {
+    await require("./IXIFinancialTradeContract").assertFinancialTradeLinks(request.financialDocument, id => provider.getFinancialDocumentRecord(id));
     const validation =
       validateFinancialDocument(
         request.financialDocument
@@ -508,6 +509,7 @@ async function replaceDocument(
 
 
   try {
+    await require("./IXIFinancialTradeContract").assertFinancialTradeLinks(request.financialDocument, id => provider.getFinancialDocumentRecord(id));
     const validation =
       validateFinancialDocument(
         request.financialDocument
@@ -552,6 +554,16 @@ async function replaceDocument(
           financialDocumentId
         );
 
+
+    const previous = beforeRecord?.financialDocument;
+    if (previous?.documentType === "invoice" && previous.metadata?.trades?.length) {
+      const nextTrades = validation.normalized.metadata?.trades || [];
+      if (previous.financialState !== "draft" && JSON.stringify(previous.metadata.trades) !== JSON.stringify(nextTrades)) throw new Error("Issued trade invoice details are immutable. Use a recorded correction.");
+      if (!nextTrades.length) {
+        const source = await provider.getFinancialDocumentRecord(validation.normalized.sourceFinancialDocumentId);
+        if (source?.financialDocument?.salesOrder?.trades?.length) throw new Error("Remove trades from the draft sales order before updating its invoice.");
+      }
+    }
 
     const result =
       await provider
@@ -760,6 +772,13 @@ async function patchDocument(
           .financialDocumentId
     };
 
+
+    if (mergedDocument.documentType === "sales-order" && Array.isArray(mergedDocument.salesOrder?.trades)) {
+      const order = require("./IXIFinancialTradeContract").normalizeSalesTrades(mergedDocument.salesOrder);
+      require("../mos/onboarding/tradeMachineService").verifiedOrderTrades(order);
+      mergedDocument.salesOrder = order;
+      mergedDocument.totals = { ...mergedDocument.totals, ...order.totals, customerTotal: order.totals.total, total: order.totals.subtotal };
+    }
 
     return await replaceDocument({
       financialDocument:

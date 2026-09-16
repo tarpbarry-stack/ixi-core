@@ -24,6 +24,7 @@ function packageSnapshot(order = {}) {
     brand: object(order.brand),
     customer: object(order.customer),
     asset: object(order.asset),
+    ...(array(order.trades).length ? { trades: order.trades } : {}),
     commercial: object(order.commercial),
     totals: object(order.totals),
     termsDocument: object(order.termsDocument)
@@ -44,6 +45,7 @@ function publicOrder(order = {}) {
     brand: order.brand,
     customer: order.customer,
     asset: order.asset,
+    trades: order.trades,
     commercial: order.commercial,
     totals: order.totals,
     termsDocument: order.termsDocument,
@@ -232,6 +234,9 @@ function invoiceInput(order = {}, salesOrderId = "", references = []) {
       salesOrderNumber: clean(order?.identity?.number),
       signedPackageHash: clean(order?.signing?.signedPackageHash),
       commercialBreakdown: object(order?.totals),
+      trades: array(order.trades),
+      tradeContext: { ...object(order.context), dealId: clean(order.identity?.dealId) },
+      dealId: clean(order?.identity?.dealId),
       customer: object(order?.customer),
       asset: object(order?.asset),
       brand: object(order?.brand)

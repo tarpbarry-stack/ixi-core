@@ -37,6 +37,43 @@ test("other companies cannot enter this inventory projection", () => {
   assert.deepEqual(result.current, {});
 });
 
+test("trade sales retain historical machine price and dates while cash stays separate", () => {
+  const doc = invoice();
+  doc.totals.total = 85000;
+  doc.lines[0].amount = 85000;
+  doc.metadata.trades = [{ allowance: 20619 }, { allowance: 20619 }];
+  doc.metadata.commercialBreakdown = { subtotal: 126238, tax: 0, freight: 0, fees: 0, tradeAllowance: 41238, total: 85000 };
+  delete doc.metadata.assetSaleRecord.sale.machineSalePrice;
+  doc.metadata.assetSaleRecord.sale.saleDate = "2026-09-15";
+  doc.metadata.assetSaleRecord.collection = { tradeValue: 41238 };
+  const cash = { ...receipt, totals: { total: 85000 } };
+  const before = structuredClone(doc);
+  const result = projectInventory({ records: [doc, cash, acquisition], entityPassportId: context.entityPassportId });
+  assert.equal(result.sales[0].salePrice, 126238);
+  assert.equal(result.sales[0].customerTotal, 85000);
+  assert.equal(result.sales[0].amountReceived, 85000);
+  assert.equal(result.sales[0].saleDate, "2026-02-01");
+  assert.equal(result.sales[0].recordedSaleDate, "2026-09-15");
+  assert.deepEqual(doc, before);
+});
+
+test("verified all-trade SOLD does not invent cash or a missing-receipt warning", () => {
+  const doc = invoice();
+  doc.totals.total = 0;
+  doc.lines[0].amount = 0;
+  doc.metadata.trades = [{ allowance: 10000 }];
+  doc.metadata.assetSaleRecord.sale.machineSalePrice = 10000;
+  doc.metadata.assetSaleRecord.collection = { invoiceTotal: 0, amountReceived: 0, tradeValue: 10000 };
+  const result = projectInventory({ records: [doc, acquisition], entityPassportId: context.entityPassportId });
+  assert.equal(result.current.IXIMACHINE1.state, "sold");
+  assert.equal(result.sales[0].amountReceived, 0);
+  assert.equal(result.sales[0].salePrice, 10000);
+  assert.equal(result.issues.some(issue => issue.code === "COLLECTION_RECONCILIATION_REQUIRED"), false);
+  delete doc.metadata.assetSaleRecord.collection;
+  const incomplete = projectInventory({ records: [doc], entityPassportId: context.entityPassportId });
+  assert.equal(incomplete.issues.some(issue => issue.code === "COLLECTION_RECONCILIATION_REQUIRED"), true);
+});
+
 test("historical transactions entered later are ordered by effective business date", () => {
   const reacquisition = { ...acquisition, financialDocumentId: "ifd_acq002", occurredAt: "2026-03-01" };
   const result = projectInventory({ records: [...base(), reacquisition], entityPassportId: context.entityPassportId });

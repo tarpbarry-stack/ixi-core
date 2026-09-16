@@ -142,3 +142,14 @@ test("customer credits reserve refund cash without erasing prior owner distribut
   assert.equal(projection.priorDistributions, 10000);
   assert.equal(projection.netSalePrice, 95000);
 });
+
+test("trade sale earns gross consideration while settlement only distributes actual cash", () => {
+  const f = fixture();
+  f.sale.totals.total = 85000;
+  f.sale.metadata.trades = [{ allowance: 20619 }, { allowance: 20619 }];
+  f.docs.find(doc => doc.financialDocumentId === "paid").totals.total = 85000;
+  const result = rebuildCanonicalSettlement({ financialDocument: f.financialDocument, saleInvoice: f.sale, documents: f.docs }).assetSettlement;
+  assert.equal(result.projection.salePrice, 126238);
+  assert.equal(result.projection.collected, 85000);
+  assert.equal(result.projection.buyerBalance, 0);
+});

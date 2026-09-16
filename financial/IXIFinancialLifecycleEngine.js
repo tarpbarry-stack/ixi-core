@@ -1047,7 +1047,7 @@ function getRevenueCommitmentEffect({ document, childIndex } = {}) {
     parentDocumentId: document?.financialDocumentId,
     childIndex,
     allowedTypes: ["invoice"]
-  });
+  }) + (childIndex.get(document?.financialDocumentId) || []).reduce((sum, child) => sum + (getRevenueEffect(child) > 0 ? require("./IXIFinancialTradeContract").tradeValue(child) : 0), 0);
   return {
     contractedRevenue: roundMoney(total),
     remainingContractedRevenue: roundMoney(Math.max(0, total - invoiced))
@@ -1188,7 +1188,7 @@ function getRevenueEffect(
       getFinancialDocumentTotal(
         document
       )
-    )
+    ) + require("./IXIFinancialTradeContract").tradeValue(document)
   );
 }
 
@@ -1410,7 +1410,8 @@ function createFinancialLifecycleSnapshot({
     Math.max(
       0,
       revenue -
-      collected
+      collected -
+      filtered.reduce((sum, document) => sum + (getRevenueEffect(document) > 0 ? require("./IXIFinancialTradeContract").tradeValue(document) : 0), 0)
     );
 
 
