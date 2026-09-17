@@ -104,6 +104,20 @@ function bindInternalTenantContext(
     );
   }
 
+  // Company discovery and invitation acceptance precede company selection.
+  // The HMAC-authenticated principal remains mandatory. Their Sales Desk
+  // handlers resolve active memberships or the scoped, verified invitation.
+  const method = clean(req.method).toUpperCase();
+  if ((method === "GET" && path === "/sales-desk/companies") ||
+      (method === "POST" && path === "/sales-desk/invitations/accept")) {
+    req.ixiRequestContext = {
+      authenticated: true, principalId, entityId: null,
+      requestId: clean(auth.requestId) || null,
+      source: "ixi-internal-signature"
+    };
+    return { enforced: true, principalId, entityId: null };
+  }
+
   /*
    * AOS environment bootstrap is the one
    * operation allowed before an Entity ID

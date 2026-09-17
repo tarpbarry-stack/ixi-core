@@ -76,3 +76,25 @@ test('buyer packages allow only deal machines and buyer-facing fields, with dura
   const record=service.save(sales,input).record;assert.equal(record.machines[0].internalNotes,undefined);assert.equal(record.machines[0].cost,undefined);assert.equal(record.assignedTo,'sam-user');assert.deepEqual(service.save(sales,input).record,record);
   assert.throws(()=>service.save(sales,command('packages',{...input.record,machines:[{key:'passport:OTHER',title:'Other'}]})),e=>e.code==='SALES_PACKAGE_MACHINE');assert.throws(()=>service.getRecord(viewer,'packages',record.id),e=>e.statusCode===404);
 });
+
+test('complete signed gateway admits company discovery and invitation acceptance before selection only',async()=>{
+  process.env.IXI_MOS_INTERNAL_AUTH_ENFORCE='true';process.env.IXI_MOS_INTERNAL_SECRET=crypto.randomUUID();
+  const express=require('express'),{createInternalAuthMiddleware,buildCanonicalRequest}=require('../mos/security/internalRequestAuthService'),{createInternalTenantBoundaryMiddleware}=require('../mos/security/internalTenantBoundaryService'),{createMosMembershipAuthorityMiddleware}=require('../mos/security/mosMembershipAuthorityService');
+  const app=express();app.use(express.json());const router=express.Router();router.use(createInternalAuthMiddleware(),createInternalTenantBoundaryMiddleware(),createMosMembershipAuthorityMiddleware());router.use('/sales-desk',require('./IXISalesDeskRoutes'));app.use('/mos/v1',router);
+  const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
+  const request=async(method,suffix,{principalId='owner-v2',entity='',body,valid=true}={})=>{
+    const targetPath='/mos/v1/sales-desk'+suffix,timestamp=String(Date.now()),requestId=crypto.randomUUID(),bodyString=body ? JSON.stringify(body) : '';
+    const signature=crypto.createHmac('sha256',process.env.IXI_MOS_INTERNAL_SECRET).update(buildCanonicalRequest({timestamp,requestId,method,targetPath,principalId,entityId:entity,bodyString})).digest('hex');
+    return fetch(`http://127.0.0.1:${server.address().port}${targetPath}`,{method,headers:{'Content-Type':'application/json','X-IXI-Internal-Signature-Version':'v1','X-IXI-Internal-Timestamp':timestamp,'X-IXI-Internal-Request-Id':requestId,'X-IXI-Internal-Principal-Id':principalId,'X-IXI-Internal-Entity-Id':entity,'X-IXI-Internal-Signature':valid ? signature : 'invalid'},...(body ? {body:bodyString} : {})});
+  };
+  try{
+    const response=await request('GET','/companies');assert.equal(response.status,200);assert.equal((await response.json()).companies[0].entityId,entityId);
+    assert.equal((await request('GET','/companies',{valid:false})).status,401);
+    assert.equal((await request('GET','/records/contacts')).status,401);
+    assert.equal((await request('POST','/commands',{body:{}})).status,401);
+    assert.equal((await request('GET','/invitations/accept')).status,401);
+    assert.equal((await request('GET','/bootstrap',{entity:entityId})).status,200);
+    const invitedPerson=person('Gateway user'),inv=invite(invitedPerson,'gateway@example.test');
+    const accepted=await request('POST','/invitations/accept',{principalId:'gateway-user',body:{entityId,id:inv.id,token:inv.token,email:'gateway@example.test',verifiedEmail:true}});assert.equal(accepted.status,200);assert.equal(access.authorize(context('gateway-user')).canFinancial,false);
+  }finally{await new Promise(resolve=>server.close(resolve));delete process.env.IXI_MOS_INTERNAL_AUTH_ENFORCE;delete process.env.IXI_MOS_INTERNAL_SECRET;}
+});
