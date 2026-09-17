@@ -9,6 +9,7 @@ const {
 const {
   provisionSharetribeMachine,
 } = require("./sharetribeMachineProvisioningService");
+const { ensureOwnedMachineEquipmentMembership } = require("./ownedMachineEquipmentMembershipService");
 const {
   resolveEntityPassport,
 } = require("../../identity/IXIPassportIdentityBridge");
@@ -231,15 +232,41 @@ function completeTradeMachine(input) {
     (row.listingId && row.listingId !== listing.listingId)
   )
     fail("Trade listing identity changed.");
-  const result = provisionSharetribeMachine({
-    entityId: input.entityId,
-    principalId: input.principalId,
-    commandId: `sharetribe-listing:${listing.listingId}`,
-    creationBoundary: "authenticated-listing-admission.v1",
-    listing,
-  });
+  let result;
+  try {
+    // Linking and retrying are identity reads. Listing edits and acquisition
+    // ownership updates must not replay the original provisioning payload.
+    result = resolveCanonicalObjectIdentity({
+      entityId: input.entityId,
+      objectId: row.objectId,
+      passportId: row.passportId,
+      aliases: [{ sourceType: "sharetribe-listing", sourceId: listing.listingId }],
+    });
+  } catch (error) {
+    // Only a genuinely unbound listing may cross the existing creation boundary.
+    // Conflicting, foreign, or incomplete bindings require explicit repair.
+    if (error.code !== "CANONICAL_ALIAS_NOT_FOUND" || row.objectId || row.passportId) throw error;
+    result = provisionSharetribeMachine({
+      entityId: input.entityId,
+      principalId: input.principalId,
+      commandId: `sharetribe-listing:${listing.listingId}`,
+      creationBoundary: "authenticated-listing-admission.v1",
+      listing,
+    });
+  }
+  if (result.object.objectType !== "machine")
+    fail("The selected listing must resolve to a canonical machine.");
   if (result.passport.passportId === input.outgoingPassportId)
     fail("A machine cannot be traded for itself.");
+  if (row.status === "acquired") {
+    ensureOwnedMachineEquipmentMembership({
+      entityId: input.entityId,
+      principalId: input.principalId,
+      listing,
+      objectId: result.object.objectId,
+      passportId: result.passport.passportId,
+    });
+  }
   let completed;
   updateJsonFile(storePath, {}, (store) => {
     const current = store[key];
