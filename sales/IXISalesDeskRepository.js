@@ -19,6 +19,10 @@ function database() {
         revision INTEGER NOT NULL, payload TEXT NOT NULL, search_text TEXT NOT NULL,
         updated_at TEXT NOT NULL, PRIMARY KEY(entity_id, kind, id)
       );
+      CREATE INDEX IF NOT EXISTS sales_desk_due ON sales_desk_records(entity_id,kind,json_extract(payload,'$.dueDate'));
+      CREATE INDEX IF NOT EXISTS sales_desk_start ON sales_desk_records(entity_id,kind,json_extract(payload,'$.startAt'));
+      CREATE UNIQUE INDEX IF NOT EXISTS sales_desk_inquiry_source ON sales_desk_records(entity_id,json_extract(payload,'$.sourceId')) WHERE kind='inquiries';
+      CREATE TABLE IF NOT EXISTS sales_desk_source_customers (entity_id TEXT NOT NULL, source_id TEXT NOT NULL, contact_id TEXT NOT NULL, PRIMARY KEY(entity_id,source_id));
       CREATE INDEX IF NOT EXISTS sales_desk_assignment ON sales_desk_records(entity_id,kind,json_extract(payload,'$.assignedTo'));
       CREATE INDEX IF NOT EXISTS sales_desk_contact_link ON sales_desk_records(entity_id,kind,json_extract(payload,'$.contactId'));
       CREATE INDEX IF NOT EXISTS sales_desk_deal_link ON sales_desk_records(entity_id,kind,json_extract(payload,'$.dealId'));
@@ -47,10 +51,10 @@ function get(entityId, kind, id) {
 }
 function visibility(actor, alias="r") {
   if (!actor || actor.canReadAll) return {sql:"1=1",args:[]};
-  const own=`((${alias}.kind<>'packages' AND json_extract(${alias}.payload,'$.assignedTo')=?) OR (${alias}.kind='boards' AND json_extract(${alias}.payload,'$.createdBy')=?))`;
+  const own=`((${alias}.kind NOT IN ('packages','inquiries') AND json_extract(${alias}.payload,'$.assignedTo')=?) OR (${alias}.kind='boards' AND json_extract(${alias}.payload,'$.createdBy')=?))`;
   const contact=`(${alias}.kind='contacts' AND EXISTS(SELECT 1 FROM sales_desk_records d WHERE d.entity_id=${alias}.entity_id AND d.kind IN ('deals','tasks') AND json_extract(d.payload,'$.contactId')=${alias}.id AND json_extract(d.payload,'$.assignedTo')=?))`;
   const note=`(${alias}.kind='notes' AND EXISTS(SELECT 1 FROM sales_desk_records p WHERE p.entity_id=${alias}.entity_id AND p.id=json_extract(${alias}.payload,'$.parentId') AND p.kind=json_extract(${alias}.payload,'$.parentKind') AND (json_extract(p.payload,'$.assignedTo')=? OR (p.kind='contacts' AND EXISTS(SELECT 1 FROM sales_desk_records d WHERE d.entity_id=p.entity_id AND d.kind IN ('deals','tasks') AND json_extract(d.payload,'$.contactId')=p.id AND json_extract(d.payload,'$.assignedTo')=?)))))`;
-  const packet=`(${alias}.kind='packages' AND EXISTS(SELECT 1 FROM sales_desk_records d WHERE d.entity_id=${alias}.entity_id AND d.kind='deals' AND d.id=json_extract(${alias}.payload,'$.dealId') AND json_extract(d.payload,'$.assignedTo')=?))`;
+  const packet=`(${alias}.kind IN ('packages','inquiries') AND EXISTS(SELECT 1 FROM sales_desk_records d WHERE d.entity_id=${alias}.entity_id AND d.kind='deals' AND d.id=json_extract(${alias}.payload,'$.dealId') AND json_extract(d.payload,'$.assignedTo')=?))`;
   return {sql:`(${own} OR ${contact} OR ${note} OR ${packet})`,args:Array(6).fill(actor.actorId)};
 }
 function visible(actor,kind,id) {
@@ -62,6 +66,8 @@ function list(entityId, kind, { query="",offset=0,limit=100,parentId="",contactI
   let where=`r.entity_id=? AND r.kind=? AND instr(r.search_text,?)>0 AND ${access.sql}`;
   for(const [field,value] of [["parentId",parentId],["contactId",contactId],["dealId",dealId]]) if(value){where+=` AND json_extract(r.payload,'$.${field}')=?`;args.push(value);}
   if(dueBefore){where+=" AND json_extract(r.payload,'$.dueDate')<>'' AND json_extract(r.payload,'$.dueDate')<=?";args.push(dueBefore);}
+  if(openOnly && kind==="tasks")where+=" AND coalesce(json_extract(r.payload,'$.canceled'),0)=0";
+  if(dueBefore && kind==="deals")where+=" AND coalesce(json_extract(r.payload,'$.actionCompleted'),0)=0 AND coalesce(json_extract(r.payload,'$.canceled'),0)=0";
   if(openOnly)where+=" AND coalesce(json_extract(r.payload,'$.completed'),0)=0 AND coalesce(json_extract(r.payload,'$.stage'),'') NOT IN ('lost','archived')";
   return {items:db.prepare(`SELECT r.payload FROM sales_desk_records r WHERE ${where} ORDER BY r.updated_at DESC,r.id LIMIT ? OFFSET ?`).all(...args,limit,offset).map(parse),total:db.prepare(`SELECT count(*) AS total FROM sales_desk_records r WHERE ${where}`).get(...args).total,offset,limit};
 }
@@ -108,4 +114,4 @@ function command({ entityId, actorId, commandId, input, canReadAll }, prepare) {
     return result;
   }).immediate();
 }
-module.exports = { database,get,list,history,command,summary,visible };
+module.exports = { database,get,list,history,command,summary,visible,visibility };
