@@ -153,3 +153,18 @@ test("trade sale earns gross consideration while settlement only distributes act
   assert.equal(result.projection.collected, 85000);
   assert.equal(result.projection.buyerBalance, 0);
 });
+
+test("an omitted-trade correction preserves gross sale proceeds without creating a customer refund", () => {
+  const f = fixture();
+  f.sale.totals.total = 75000;
+  f.docs.find(doc => doc.financialDocumentId === "paid").totals.total = 10000;
+  f.docs.push({ financialDocumentId: "trade-credit", documentType: "credit", creditType: "trade-credit", financialState: "incurred", sourceFinancialDocumentId: "invoice", totals: { total: 65000 }, references: refs });
+  const projection = rebuildCanonicalSettlement({ financialDocument: f.financialDocument, saleInvoice: f.sale, documents: f.docs }).assetSettlement.projection;
+  assert.equal(projection.salePrice, 75000);
+  assert.equal(projection.netSalePrice, 75000);
+  assert.equal(projection.tradeValue, 65000);
+  assert.equal(projection.collected, 10000);
+  assert.equal(projection.buyerBalance, 0);
+  assert.equal(projection.customerRefundLiability, 0);
+  assert.ok(projection.cashAvailableBeforeOwners <= 10000);
+});

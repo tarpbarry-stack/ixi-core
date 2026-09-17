@@ -5,7 +5,7 @@ const clean = value => String(value ?? "").trim();
 const equal = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
 function protectedMonetary(document = {}) {
-  return document.creditType === "revenue-credit" || document.metadata?.customerRefund === true ||
+  return ["revenue-credit", "trade-credit"].includes(document.creditType) || document.tradeCorrection || document.metadata?.tradeCredit === true || document.metadata?.tradeCorrectionControl || document.metadata?.customerRefund === true ||
     document.assetSaleAdjustment || document.metadata?.saleBalanceControl || document.metadata?.saleCashRefundControl;
 }
 

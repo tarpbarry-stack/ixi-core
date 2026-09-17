@@ -91,6 +91,7 @@ const { getFinancialGLProjection } = require("./IXIFinancialGLService");
 const { createDesktopAccountingProjection } = require("./IXIFinancialDesktopAccountingProjection");
 
 const router = express.Router();
+router.use("/sales-orders/:financialDocumentId/trade-corrections", require("./IXIFinancialTradeCorrectionRoutes"));
 router.use("/inventory", require("./IXIFinancialInventoryRoutes"));
 
 /* =========================================================

@@ -138,7 +138,9 @@ function projectInventory({ records = [], entityPassportId = "" } = {}) {
     const receipts = related.filter(item => item.documentType === "payment" && item.paymentDirection === "inflow" &&
       ["paid", "posted", "collected", "closed"].includes(item.financialState));
     const receivedCents = receipts.reduce((sum, item) => sum + (cents(totalOf(item)) || 0), 0);
-    const legacyCredits = related.filter(item => item.documentType === "credit" && !isRevenueCredit(item));
+    const correctedTrades = require("./IXIFinancialTradeCorrections").tradeCredits(saleId, related);
+    const correctedTradeCents = correctedTrades.reduce((sum, item) => sum + (cents(totalOf(item)) || 0), 0);
+    const legacyCredits = related.filter(item => item.documentType === "credit" && !isRevenueCredit(item) && !require("./IXIFinancialTradeCorrections").isTradeCredit(item));
     const credits = related.filter(isRevenueCredit);
     const creditCents = credits.reduce((sum, item) => sum + (cents(totalOf(item)) || 0), 0);
     const refunds = credits.flatMap(credit => (bySource.get(credit.financialDocumentId) || []).filter(item => isActive(item) && isCustomerRefund(item)));
@@ -166,6 +168,7 @@ function projectInventory({ records = [], entityPassportId = "" } = {}) {
       recordedByLabel: clean(sale.audit?.createdByLabel || sale.context?.actorLabel),
       recordedAt: clean(sale.audit?.closedAt || doc.metadata?.soldAt || doc.occurredAt),
       amountReceived: receivedCents / 100, creditedAmount: creditCents / 100,
+      tradeCreditAmount: correctedTradeCents / 100,
       refundedAmount: refundedCents / 100, refundDue: Math.max(0, Math.min(receivedCents, creditCents) - refundedCents) / 100,
       settlementStatus: settlementClosed && !returned && Math.round(Number(settlement?.assetSettlement?.projection?.credited || 0) * 100) === creditCents && Math.round(Number(settlement?.assetSettlement?.projection?.refunded || 0) * 100) === refundedCents ? "closed" : "open",
       settlementId: clean(settlement?.financialDocumentId),
@@ -180,8 +183,8 @@ function projectInventory({ records = [], entityPassportId = "" } = {}) {
     // it is reported for reconciliation instead of being silently put back.
     // Itemized all-trade SOLD writes verify the incoming acquisitions at closeout.
     // Their recorded noncash consideration must not be presented as missing cash.
-    const tradeCents = array(doc.metadata?.trades).reduce((sum, trade) => sum + (cents(trade.allowance) || 0), 0);
-    const fullyTraded = customerTotal === 0 && tradeCents > 0 && cents(sale.collection?.tradeValue) === tradeCents;
+    const tradeCents = array(doc.metadata?.trades).reduce((sum, trade) => sum + (cents(trade.allowance) || 0), 0) + correctedTradeCents;
+    const fullyTraded = cents(customerTotal) === correctedTradeCents && tradeCents > 0 && cents(sale.collection?.tradeValue) === tradeCents;
     if ((receivedCents <= 0 && !fullyTraded) || legacyCredits.length) issues.push({ documentId: saleId, passportId,
       code: "COLLECTION_RECONCILIATION_REQUIRED", message: "Check receipts and legacy credits for this recorded sale." });
     if (!summary.soldByLabel) issues.push({ documentId: saleId, passportId, code: "SALESPERSON_NOT_RECORDED", message: "The historical salesperson has not been recorded." });

@@ -211,7 +211,7 @@ function createSaleBalanceTransactionItems({ record = {}, previousRecord = null,
   // Monetary return records are append-only. This counter participates in
   // the same transaction as the credit/refund and prevents concurrent excess.
   if (previousRecord) throw new Error("Sale credits and refunds require a new linked correction; existing monetary records are immutable.");
-  return controls.map(control => {
+  const items = controls.map(control => {
   const amountCents = Number(control.amountCents ?? Math.round(Number(doc.totals?.total || 0) * 100));
   const limitCents = Number(control.limitCents), baselineCents = Number(control.baselineCents || 0);
   if (!Number.isSafeInteger(amountCents) || amountCents <= 0 || !Number.isSafeInteger(limitCents) || !Number.isSafeInteger(baselineCents)) throw new Error("Invalid sale balance control.");
@@ -223,6 +223,13 @@ function createSaleBalanceTransactionItems({ record = {}, previousRecord = null,
     ExpressionAttributeValues: { ":baseline": baselineCents, ":amount": amountCents, ":remaining": limitCents - amountCents, ":updatedAt": updatedAt }
   } };
   });
+  const invoiceGuard = doc.metadata?.tradeCorrectionControl;
+  if (invoiceGuard) {
+    if (!clean(invoiceGuard.invoiceId) || !Number.isInteger(invoiceGuard.revision) || invoiceGuard.revision < 1) throw new Error("A trade correction requires its verified invoice revision.");
+    items.push({ ConditionCheck: { TableName: TABLE_NAME, Key: { PK: documentPk(invoiceGuard.invoiceId), SK: "CURRENT" },
+      ConditionExpression: "#revision = :revision", ExpressionAttributeNames: { "#revision": "revision" }, ExpressionAttributeValues: { ":revision": invoiceGuard.revision } } });
+  }
+  return items;
 }
 
 function createInventoryTransactionItems({ record = {}, previousRecord = null } = {}) {
