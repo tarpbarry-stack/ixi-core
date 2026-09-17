@@ -8,7 +8,7 @@ const { provisionAosObject } = require("../mos/provisioning/aosObjectProvisionin
 const { getObject, listObjects } = require("../mos/objects/objectService");
 const { resolveCanonicalObjectIdentity } = require("../mos/identity/canonicalObjectAdmissionService");
 
-const KINDS = new Set(["contacts","deals","tasks","notes","boards","packages"]);
+const KINDS = new Set(["contacts","deals","tasks","notes","boards","packages","inquiries"]);
 const STAGES = ["inquiry","qualified","quoting","negotiating","handoff","lost","archived"];
 const clean = value => String(value ?? "").trim();
 function fail(code,message,status = 400) { throw new MosError(code,message,null,status); }
@@ -39,7 +39,8 @@ function listRecords(actor,kind,query) {
   return repo.list(actor.entityId,kind,{ actor,contactId:text(query?.contactId,100),dealId:text(query?.dealId,100),dueBefore:date(query?.dueBefore),openOnly:query?.openOnly==="true",query:text(query?.q,200),parentId:kind === "notes" ? text(query?.parentId,100) : "",offset:Math.min(1000000,Math.max(0,Number.parseInt(query?.offset,10)||0)),limit:Math.min(200,Math.max(1,Number.parseInt(query?.limit,10)||50)) });
 }
 function assignee(actor,value,old) {
-  const requested=clean(value.assignedTo || old?.assignedTo || actor.actorId);
+  const requested=clean(value.assignedTo === undefined ? old?.assignedTo ?? actor.actorId : value.assignedTo);
+  if(!requested){if(!actor.canAssign)fail("SALES_ASSIGNMENT_DENIED","Only a manager can leave work unassigned.",403);return "";}
   if (!actor.canAssign && requested!==actor.actorId && requested!==old?.assignedTo) fail("SALES_ASSIGNMENT_DENIED","Only a manager can assign another person's work.",403);
   if (!team(actor).some(member=>member.principalId===requested)) fail("SALES_ASSIGNEE_INVALID","Choose an active Sales Desk member.",400);
   return requested;
@@ -48,6 +49,7 @@ function save(actor, input) {
   if(!actor.canWrite)fail("SALES_WRITE_DENIED","Your seat is read-only.",403);
   if (!input || typeof input !== "object" || Array.isArray(input)) fail("SALES_INPUT_INVALID","A sales record is required.");
   const kind = kindOf(input.kind);
+  if(kind==="inquiries")fail("SALES_INQUIRY_IMMUTABLE","Original inquiries are preserved by the intake service.",403);
   const commandId = text(input.commandId,100,true);
   if (!/^[a-zA-Z0-9_-]{8,100}$/.test(commandId)) fail("SALES_COMMAND_REQUIRED","A valid save identifier is required.");
   const value = input.record;
@@ -123,6 +125,24 @@ function save(actor, input) {
       if (keys.length > 100) fail("SALES_BOARD_LIMIT","Save up to 100 machines on one board.");
       record = { id,assignedTo,title:text(value.title,100,true),keys:[...new Set(keys.map(key=>text(key,180,true)))] };
     }
+    if(["tasks","deals"].includes(kind)) {
+      const schedule=require("./IXISalesDeskSchedule");
+      Object.assign(record,schedule.normalize(value,old || {}));
+      record.canceled=value.canceled===undefined ? old?.canceled===true : value.canceled===true;
+      if(kind==="deals") {
+        record.waitingOn=text(value.waitingOn ?? old?.waitingOn ?? "",30);
+        if(!["","customer","approval"].includes(record.waitingOn))fail("SALES_WAITING_INVALID","Choose customer, approval, or active work.");
+        record.actionCompleted=value.actionCompleted===undefined ? old?.actionCompleted===true : value.actionCompleted===true;
+        record.actionOutcome=text(value.actionOutcome ?? old?.actionOutcome ?? "",2000);
+        record.actionCompletedAt=record.actionCompleted ? old?.actionCompletedAt || new Date().toISOString() : null;
+        record.source=old?.source || "manual";
+      }
+      const refs=value.machines ?? old?.machines ?? [];
+      if(kind==="tasks") {
+        if(!Array.isArray(refs) || refs.length>100)fail("SALES_MACHINE_LIMIT","Choose up to 100 machines.");
+        record.machines=refs.map(m=>({key:text(m.key,180,true),passportId:text(m.passportId,60),listingId:text(m.listingId,100),title:text(m.title,200,true)}));
+      }
+    }
     return { kind,record,expectedRevision:revision };
   });
 }
@@ -130,10 +150,10 @@ function related(actor,kind,id) {
   const record=getRecord(actor,kind,id);
   if(!["contacts","deals"].includes(kind))fail("SALES_KIND_INVALID","Choose a contact or deal.");
   const query=kind==="contacts" ? {contactId:id} : {dealId:id};
-  return {record,customer:kind==="deals" ? getRecord(actor,"contacts",record.contactId) : record,deals:kind==="contacts" ? listRecords(actor,"deals",{...query,limit:100}) : {items:[record],total:1},tasks:listRecords(actor,"tasks",{...query,limit:100}),packages:listRecords(actor,"packages",{...query,limit:100}),notes:listRecords(actor,"notes",{parentId:id,limit:100}),history:repo.history(actor.entityId,kind,id)};
+  return {record,customer:kind==="deals" ? getRecord(actor,"contacts",record.contactId) : record,deals:kind==="contacts" ? listRecords(actor,"deals",{...query,limit:100}) : {items:[record],total:1},tasks:listRecords(actor,"tasks",{...query,limit:100}),packages:listRecords(actor,"packages",{...query,limit:100}),inquiries:listRecords(actor,"inquiries",{...query,limit:100}),notes:listRecords(actor,"notes",{parentId:id,limit:100}),history:repo.history(actor.entityId,kind,id)};
 }
 function people(actor) {
   if(!actor.canReadAll)return [];
   return listObjects({entityId:actor.entityId,status:"active"}).filter(object=>object.objectType === "person").map(object=>({ objectId:object.objectId,name:object.displayName }));
 }
-module.exports = { authorize,save,listRecords,getRecord,people,related,STAGES,date,text };
+module.exports = { authorize,save,listRecords,getRecord,people,related,STAGES,date,text,assignee };
