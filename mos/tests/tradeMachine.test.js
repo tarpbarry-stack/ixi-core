@@ -87,6 +87,39 @@ test("one create reservation survives replay and changed payloads are rejected",
     0,
   );
 });
+test("an uploaded machine with changed listing details is linked without replaying creation", () => {
+  const request = { ...input("trade-existing-upload"), existingListingId: "uploaded-trade-listing" };
+  const listing = { listingId: request.existingListingId, displayName: "Uploaded loader", fields: request.machine,
+    value: 95000, currency: "USD", state: "draft", channel: "private" };
+  const original = provisionSharetribeMachine({ entityId, principalId,
+    commandId: `sharetribe-listing:${listing.listingId}`, creationBoundary: "upload", listing });
+  const changedListing = { ...listing, displayName: "Uploaded loader with photos", value: 90000,
+    fields: { ...listing.fields, description: "Description added in Launch", hours: "1200" } };
+  // Reproduce the production conflict independently of the trade operation.
+  assert.throws(() => provisionSharetribeMachine({ entityId, principalId,
+    commandId: `sharetribe-listing:${listing.listingId}`, creationBoundary: "authenticated-listing-admission.v1",
+    listing: changedListing }), /same provisioning commandId/);
+  const { getObject, listObjects } = require("../objects/objectService");
+  const before = { object: getObject(original.object.objectId), passports: readPassportRecords(),
+    objects: listObjects({ status: null }), relationships: listRelationships({ entityId, status: null }) };
+  assert.equal(service.reserveTradeMachine(request).createGranted, false);
+  const saved = service.completeTradeMachine({ ...request, listing: changedListing });
+  assert.equal(saved.row.objectId, original.object.objectId);
+  assert.equal(saved.row.passportId, original.passport.passportId);
+  assert.equal(saved.row.inventoryStatus, "pending");
+  assert.equal(service.completeTradeMachine({ ...request, listing: { ...changedListing, value: 88000 } }).row.passportId, saved.row.passportId);
+  assert.deepEqual({ object: getObject(original.object.objectId), passports: readPassportRecords(),
+    objects: listObjects({ status: null }), relationships: listRelationships({ entityId, status: null }) }, before);
+  const foreign = ensureCommercialOnboarding({ ownerUserId: "other-dealer", entityDisplayName: "Other dealer" });
+  const foreignListing = { ...listing, listingId: "foreign-trade-listing" };
+  provisionSharetribeMachine({ entityId: foreign.entity.entityId, principalId: "other-dealer",
+    commandId: "foreign-upload", creationBoundary: "upload", listing: foreignListing });
+  const foreignRequest = { ...input("trade-foreign-listing"), machine: request.machine, existingListingId: foreignListing.listingId };
+  service.reserveTradeMachine(foreignRequest);
+  const passportCount = readPassportRecords().length;
+  assert.throws(() => service.completeTradeMachine({ ...foreignRequest, listing: foreignListing }), /different Entity/);
+  assert.equal(readPassportRecords().length, passportCount);
+});
 test("two trades and additional trades retain distinct Passports and exact aggregate allowance", () => {
   const trades = ["trade-two", "trade-three", "trade-four"].map((id) => {
     const req = input(id);
@@ -171,6 +204,23 @@ test("acquisition confirmation rejects unverified documents and wrong machine li
     });
     assert.equal(acquired.row.status, "acquired");
     assert.equal(acquired.row.inventoryStatus, "pending");
+    const { getObject } = require("../objects/objectService");
+    const originalObject = getObject(row.objectId), passportCount = readPassportRecords().length;
+    const finalized = service.completeTradeMachine({ ...req, listing: {
+      listingId: row.listingId, displayName: "Trade after acquisition", fields: req.machine,
+      channel: "private", state: "draft", ownership: { role: "owner", status: "owned" },
+    } });
+    assert.equal(finalized.row.inventoryStatus, "complete");
+    assert.equal(finalized.row.passportId, row.passportId);
+    assert.equal(readPassportRecords().length, passportCount);
+    assert.deepEqual(getObject(row.objectId), originalObject);
+    const memberships = listRelationships({ entityId, sourceObjectId: row.objectId, status: "active" });
+    assert.equal(memberships.length, 1);
+    service.completeTradeMachine({ ...req, listing: {
+      listingId: row.listingId, displayName: "Trade after acquisition", fields: req.machine,
+      ownership: { role: "owner", status: "owned" },
+    } });
+    assert.deepEqual(listRelationships({ entityId, sourceObjectId: row.objectId, status: "active" }), memberships);
     await assert.rejects(
       service.confirmTradeAcquisition({ ...req, acquisitionId: "acq02" }),
       /already has/,
