@@ -8,7 +8,7 @@ const { provisionAosObject } = require("../mos/provisioning/aosObjectProvisionin
 const { getObject, listObjects } = require("../mos/objects/objectService");
 const { resolveCanonicalObjectIdentity } = require("../mos/identity/canonicalObjectAdmissionService");
 
-const KINDS = new Set(["contacts","deals","tasks","notes","boards"]);
+const KINDS = new Set(["contacts","deals","tasks","notes","boards","packages"]);
 const STAGES = ["inquiry","qualified","quoting","negotiating","handoff","lost","archived"];
 const clean = value => String(value ?? "").trim();
 function fail(code,message,status = 400) { throw new MosError(code,message,null,status); }
@@ -18,22 +18,12 @@ function text(value,max=250,required=false) {
   if (result.length > max || (required && !result)) fail("SALES_INPUT_INVALID",`Complete the required fields within ${max} characters.`);
   return result;
 }
-function authorize(context, operation = "read") {
-  if (!context?.authenticated || !context.principalId || !context.entityId) fail("SALES_AUTH_REQUIRED","Sign in to open Sales Desk.",401);
-  const { principal, membership } = resolveMosMembershipPrincipal(context);
-  const account = getAosAccountForUser(context.principalId);
-  const denied = principal.directDenies || [];
-  if (membership.role !== "owner" || account.entity?.entityId !== context.entityId || denied.includes("*") || denied.includes("sales-desk.access")) {
-    fail("SALES_ACCESS_DENIED","Sales Desk currently requires active company-owner access.",403);
-  }
-  if (operation === "write" && denied.includes("sales-desk.write")) fail("SALES_WRITE_DENIED","Your company membership does not permit Sales Desk changes.",403);
-  return { entityId: context.entityId, actorId: context.principalId, company: account.entity.displayName, role: "owner", ownerPersonObjectId:clean(membership.personObjectId), canWrite:!denied.includes("sales-desk.write") };
-}
+const { authorize,team } = require("./IXISalesDeskAccess");
 function kindOf(kind) { if (!KINDS.has(kind)) fail("SALES_KIND_INVALID","Unknown sales record."); return kind; }
 function getRecord(actor,kind,id) {
   kindOf(kind);
   const record = repo.get(actor.entityId,kind,clean(id));
-  if (!record) fail("SALES_NOT_FOUND","This sales record is unavailable.",404);
+  if (!record || !repo.visible(actor,kind,record.id)) fail("SALES_NOT_FOUND","This sales record is unavailable.",404);
   return record;
 }
 function date(value) {
@@ -44,9 +34,18 @@ function date(value) {
 }
 function listRecords(actor,kind,query) {
   kindOf(kind);
-  return repo.list(actor.entityId,kind,{ query:text(query?.q,200),parentId:kind === "notes" ? text(query?.parentId,100) : "",offset:Math.min(1000000,Math.max(0,Number.parseInt(query?.offset,10)||0)),limit:Math.min(200,Math.max(1,Number.parseInt(query?.limit,10)||50)) });
+  if(query?.contactId)getRecord(actor,"contacts",text(query.contactId,100));
+  if(query?.dealId)getRecord(actor,"deals",text(query.dealId,100));
+  return repo.list(actor.entityId,kind,{ actor,contactId:text(query?.contactId,100),dealId:text(query?.dealId,100),dueBefore:date(query?.dueBefore),openOnly:query?.openOnly==="true",query:text(query?.q,200),parentId:kind === "notes" ? text(query?.parentId,100) : "",offset:Math.min(1000000,Math.max(0,Number.parseInt(query?.offset,10)||0)),limit:Math.min(200,Math.max(1,Number.parseInt(query?.limit,10)||50)) });
+}
+function assignee(actor,value,old) {
+  const requested=clean(value.assignedTo || old?.assignedTo || actor.actorId);
+  if (!actor.canAssign && requested!==actor.actorId && requested!==old?.assignedTo) fail("SALES_ASSIGNMENT_DENIED","Only a manager can assign another person's work.",403);
+  if (!team(actor).some(member=>member.principalId===requested)) fail("SALES_ASSIGNEE_INVALID","Choose an active Sales Desk member.",400);
+  return requested;
 }
 function save(actor, input) {
+  if(!actor.canWrite)fail("SALES_WRITE_DENIED","Your seat is read-only.",403);
   if (!input || typeof input !== "object" || Array.isArray(input)) fail("SALES_INPUT_INVALID","A sales record is required.");
   const kind = kindOf(input.kind);
   const commandId = text(input.commandId,100,true);
@@ -59,6 +58,7 @@ function save(actor, input) {
     if (old && (!Number.isInteger(revision) || revision !== old.revision)) fail("SALES_REVISION_CONFLICT","This record changed in another session. Reload it before saving.",409);
     const id = old?.id || crypto.randomUUID();
     let record;
+    const assignedTo=["contacts","deals","tasks"].includes(kind) ? assignee(actor,value,old) : (old?.assignedTo || actor.actorId);
     if (kind === "contacts") {
       const name = text(value.name,150,true), email = text(value.email,254).toLowerCase(), phone = text(value.phone,60);
       if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fail("SALES_EMAIL_INVALID","Enter a valid email address.");
@@ -81,7 +81,7 @@ function save(actor, input) {
         const result = provisionAosObject({ commandId:`sales-contact-${actor.entityId}-${commandId}`,entityId:actor.entityId,objectType:"person",displayName:name,fields:{},actorId:actor.actorId });
         identity = result.identity;
       }
-      record = { id,name,email,phone,company:text(value.company,150),address:text(value.address,500),source:text(value.source,100),interest:text(value.interest,1000),preference:text(value.preference,40),objectId:identity.objectId,passportId:identity.passportId };
+      record = { id,assignedTo,name,email,phone,company:text(value.company,150),address:text(value.address,500),source:text(value.source,100),interest:text(value.interest,1000),preference:text(value.preference,40),category:text(value.category,40),budget:text(value.budget,100),timeframe:text(value.timeframe,150),objectId:identity.objectId,passportId:identity.passportId };
     } else if (kind === "deals") {
       const contact = getRecord(actor,"contacts",text(value.contactId,100,true));
       const stage = text(value.stage,30,true);
@@ -90,12 +90,18 @@ function save(actor, input) {
       if (machines.length > 100) fail("SALES_MACHINE_LIMIT","A deal can include up to 100 machines.");
       const refs = machines.map(machine => ({ key:text(machine.key,180,true),passportId:text(machine.passportId,60),listingId:text(machine.listingId,100),title:text(machine.title,200,true) }));
       if (new Set(refs.map(item=>item.key)).size !== refs.length) fail("SALES_DUPLICATE_MACHINE","A machine can appear only once in a deal.");
-      record = { id,title:text(value.title,150,true),contactId:contact.id,customerName:contact.name,customerPassportId:contact.passportId,stage,machines:refs,nextAction:text(value.nextAction,500),dueDate:date(value.dueDate),terms:text(value.terms,3000),lostReason:text(value.lostReason,500),assignedTo:actor.actorId };
+      const financialIds=value.financialDocumentIds ?? old?.financialDocumentIds ?? [];
+      if(!Array.isArray(financialIds) || financialIds.length>100)fail("SALES_FINANCIAL_LINK_INVALID","Choose up to 100 financial records.");
+      if(!actor.canFinancial && JSON.stringify(financialIds)!==JSON.stringify(old?.financialDocumentIds || []))fail("SALES_FINANCIAL_LINK_DENIED","Only the company owner can link financial records.",403);
+      record = { id,title:text(value.title,150,true),contactId:contact.id,customerName:contact.name,customerPassportId:contact.passportId,stage,machines:refs,nextAction:text(value.nextAction,500),dueDate:date(value.dueDate),terms:text(value.terms,3000),financialDocumentIds:[...new Set(financialIds.map(id=>text(id,150,true)))],lostReason:text(value.lostReason,500),assignedTo };
       if (stage === "lost" && !record.lostReason) fail("SALES_LOST_REASON","Record why this deal was lost.");
     } else if (kind === "tasks") {
       const dealId = text(value.dealId,100);
-      if (dealId) getRecord(actor,"deals",dealId);
-      record = { id,title:text(value.title,250,true),dueDate:date(value.dueDate),dealId,completed:value.completed === true,assignedTo:actor.actorId };
+      const deal=dealId ? getRecord(actor,"deals",dealId) : null;
+      const contactId=text(value.contactId || deal?.contactId,100);
+      if(contactId)getRecord(actor,"contacts",contactId);
+      if(deal && contactId!==deal.contactId)fail("SALES_TASK_CONTACT_MISMATCH","The follow-up customer must match its deal.");
+      record = { id,contactId,customerName:contactId ? getRecord(actor,"contacts",contactId).name : "",outcome:text(value.outcome,2000),title:text(value.title,250,true),dueDate:date(value.dueDate),dealId,completed:value.completed === true,completedAt:value.completed===true ? (old?.completedAt || new Date().toISOString()) : null,assignedTo };
       if (!record.dueDate) fail("SALES_TASK_DATE","Choose a follow-up date.");
     } else if (kind === "notes") {
       if (old) fail("SALES_NOTE_IMMUTABLE","Saved notes remain in history. Add a correction as a new note.",409);
@@ -103,15 +109,31 @@ function save(actor, input) {
       if (!["contacts","deals"].includes(parentKind)) fail("SALES_NOTE_PARENT","Attach the note to a contact or deal.");
       getRecord(actor,parentKind,parentId);
       record = { id,title:text(value.title,4000,true),parentKind,parentId };
+    } else if(kind==="packages") {
+      const deal=getRecord(actor,"deals",text(value.dealId,100,true));
+      const machines=Array.isArray(value.machines) ? value.machines : [];
+      if(!machines.length || machines.length>20)fail("SALES_PACKAGE_LIMIT","Select one to 20 machines for a buyer package.");
+      record={id,title:text(value.title,150,true),dealId:deal.id,contactId:deal.contactId,customerName:deal.customerName,assignedTo:deal.assignedTo,company:actor.company,message:text(value.message,1000),machines:machines.map(m=>{
+        if(!deal.machines.some(ref=>ref.key===m.key))fail("SALES_PACKAGE_MACHINE","Only this deal's machines can be included.");
+        const item=Object.fromEntries(["key","title","year","make","model","hours","price","serialNumber","location","passportId"].map(key=>[key,text(m[key],key==="title" ? 200 : 180)]));
+        const image=text(m.image,2000);if(image){let url;try{url=new URL(image);}catch{fail("SALES_PACKAGE_IMAGE","The machine photo URL is invalid.");}if(url.protocol!=="https:")fail("SALES_PACKAGE_IMAGE","Machine photos must use HTTPS.");}return {...item,image};
+      })};
     } else {
       const keys = Array.isArray(value.keys) ? value.keys : [];
       if (keys.length > 100) fail("SALES_BOARD_LIMIT","Save up to 100 machines on one board.");
-      record = { id,title:text(value.title,100,true),keys:[...new Set(keys.map(key=>text(key,180,true)))] };
+      record = { id,assignedTo,title:text(value.title,100,true),keys:[...new Set(keys.map(key=>text(key,180,true)))] };
     }
     return { kind,record,expectedRevision:revision };
   });
 }
+function related(actor,kind,id) {
+  const record=getRecord(actor,kind,id);
+  if(!["contacts","deals"].includes(kind))fail("SALES_KIND_INVALID","Choose a contact or deal.");
+  const query=kind==="contacts" ? {contactId:id} : {dealId:id};
+  return {record,customer:kind==="deals" ? getRecord(actor,"contacts",record.contactId) : record,deals:kind==="contacts" ? listRecords(actor,"deals",{...query,limit:100}) : {items:[record],total:1},tasks:listRecords(actor,"tasks",{...query,limit:100}),packages:listRecords(actor,"packages",{...query,limit:100}),notes:listRecords(actor,"notes",{parentId:id,limit:100}),history:repo.history(actor.entityId,kind,id)};
+}
 function people(actor) {
+  if(!actor.canReadAll)return [];
   return listObjects({entityId:actor.entityId,status:"active"}).filter(object=>object.objectType === "person").map(object=>({ objectId:object.objectId,name:object.displayName }));
 }
-module.exports = { authorize,save,listRecords,getRecord,people,STAGES,date };
+module.exports = { authorize,save,listRecords,getRecord,people,related,STAGES,date,text };
