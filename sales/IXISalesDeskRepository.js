@@ -19,6 +19,9 @@ function database() {
         revision INTEGER NOT NULL, payload TEXT NOT NULL, search_text TEXT NOT NULL,
         updated_at TEXT NOT NULL, PRIMARY KEY(entity_id, kind, id)
       );
+      CREATE INDEX IF NOT EXISTS sales_desk_assignment ON sales_desk_records(entity_id,kind,json_extract(payload,'$.assignedTo'));
+      CREATE INDEX IF NOT EXISTS sales_desk_contact_link ON sales_desk_records(entity_id,kind,json_extract(payload,'$.contactId'));
+      CREATE INDEX IF NOT EXISTS sales_desk_deal_link ON sales_desk_records(entity_id,kind,json_extract(payload,'$.dealId'));
       CREATE INDEX IF NOT EXISTS sales_desk_listing ON sales_desk_records(entity_id,kind,updated_at);
       CREATE UNIQUE INDEX IF NOT EXISTS sales_contact_email ON sales_desk_records(entity_id,json_extract(payload,'$.email')) WHERE kind='contacts' AND json_extract(payload,'$.email')<>'';
       CREATE UNIQUE INDEX IF NOT EXISTS sales_contact_object ON sales_desk_records(entity_id,json_extract(payload,'$.objectId')) WHERE kind='contacts';
@@ -42,33 +45,42 @@ const parse = row => row ? JSON.parse(row.payload) : null;
 function get(entityId, kind, id) {
   return parse(database().prepare("SELECT payload FROM sales_desk_records WHERE entity_id=? AND kind=? AND id=?").get(entityId,kind,id));
 }
-function list(entityId, kind, { query = "", offset = 0, limit = 100, parentId = "" } = {}) {
-  const db = database();
-  const q = String(query).toLowerCase();
-  const where = "entity_id=? AND kind=? AND instr(search_text,?)>0" + (parentId ? " AND json_extract(payload,'$.parentId')=?" : "");
-  const args = [entityId,kind,q,...(parentId ? [parentId] : [])];
-  return {
-    items: db.prepare(`SELECT payload FROM sales_desk_records WHERE ${where} ORDER BY updated_at DESC,id LIMIT ? OFFSET ?`).all(...args,limit,offset).map(parse),
-    total: db.prepare(`SELECT count(*) AS total FROM sales_desk_records WHERE ${where}`).get(...args).total,
-    offset, limit
-  };
+function visibility(actor, alias="r") {
+  if (!actor || actor.canReadAll) return {sql:"1=1",args:[]};
+  const own=`((${alias}.kind<>'packages' AND json_extract(${alias}.payload,'$.assignedTo')=?) OR (${alias}.kind='boards' AND json_extract(${alias}.payload,'$.createdBy')=?))`;
+  const contact=`(${alias}.kind='contacts' AND EXISTS(SELECT 1 FROM sales_desk_records d WHERE d.entity_id=${alias}.entity_id AND d.kind IN ('deals','tasks') AND json_extract(d.payload,'$.contactId')=${alias}.id AND json_extract(d.payload,'$.assignedTo')=?))`;
+  const note=`(${alias}.kind='notes' AND EXISTS(SELECT 1 FROM sales_desk_records p WHERE p.entity_id=${alias}.entity_id AND p.id=json_extract(${alias}.payload,'$.parentId') AND p.kind=json_extract(${alias}.payload,'$.parentKind') AND (json_extract(p.payload,'$.assignedTo')=? OR (p.kind='contacts' AND EXISTS(SELECT 1 FROM sales_desk_records d WHERE d.entity_id=p.entity_id AND d.kind IN ('deals','tasks') AND json_extract(d.payload,'$.contactId')=p.id AND json_extract(d.payload,'$.assignedTo')=?)))))`;
+  const packet=`(${alias}.kind='packages' AND EXISTS(SELECT 1 FROM sales_desk_records d WHERE d.entity_id=${alias}.entity_id AND d.kind='deals' AND d.id=json_extract(${alias}.payload,'$.dealId') AND json_extract(d.payload,'$.assignedTo')=?))`;
+  return {sql:`(${own} OR ${contact} OR ${note} OR ${packet})`,args:Array(6).fill(actor.actorId)};
 }
-function summary(entityId,today) {
-  const db=database();
-  const count=(where,args=[])=>db.prepare(`SELECT count(*) AS total FROM sales_desk_records WHERE entity_id=? AND ${where}`).get(entityId,...args).total;
-  return {contacts:count("kind='contacts'"),activeDeals:count("kind='deals' AND json_extract(payload,'$.stage') NOT IN ('lost','archived')"),dueTasks:count("kind='tasks' AND json_extract(payload,'$.completed')=0 AND json_extract(payload,'$.dueDate')<=?",[today])};
+function visible(actor,kind,id) {
+  const access=visibility(actor);
+  return !!database().prepare(`SELECT 1 FROM sales_desk_records r WHERE r.entity_id=? AND r.kind=? AND r.id=? AND ${access.sql}`).get(actor.entityId,kind,id,...access.args);
+}
+function list(entityId, kind, { query="",offset=0,limit=100,parentId="",contactId="",dealId="",dueBefore="",openOnly=false,actor=null }={}) {
+  const db=database(),access=visibility(actor),args=[entityId,kind,String(query).toLowerCase(),...access.args];
+  let where=`r.entity_id=? AND r.kind=? AND instr(r.search_text,?)>0 AND ${access.sql}`;
+  for(const [field,value] of [["parentId",parentId],["contactId",contactId],["dealId",dealId]]) if(value){where+=` AND json_extract(r.payload,'$.${field}')=?`;args.push(value);}
+  if(dueBefore){where+=" AND json_extract(r.payload,'$.dueDate')<>'' AND json_extract(r.payload,'$.dueDate')<=?";args.push(dueBefore);}
+  if(openOnly)where+=" AND coalesce(json_extract(r.payload,'$.completed'),0)=0 AND coalesce(json_extract(r.payload,'$.stage'),'') NOT IN ('lost','archived')";
+  return {items:db.prepare(`SELECT r.payload FROM sales_desk_records r WHERE ${where} ORDER BY r.updated_at DESC,r.id LIMIT ? OFFSET ?`).all(...args,limit,offset).map(parse),total:db.prepare(`SELECT count(*) AS total FROM sales_desk_records r WHERE ${where}`).get(...args).total,offset,limit};
+}
+function summary(entityId,today,actor=null) {
+  return {contacts:list(entityId,"contacts",{actor,limit:1}).total,activeDeals:list(entityId,"deals",{actor,openOnly:true,limit:1}).total,dueTasks:list(entityId,"tasks",{actor,openOnly:true,dueBefore:today,limit:1}).total,dueDeals:list(entityId,"deals",{actor,openOnly:true,dueBefore:today,limit:1}).total};
 }
 function history(entityId,kind,id) {
   return database().prepare("SELECT actor_id AS actorId,action,created_at AS createdAt FROM sales_desk_audit WHERE entity_id=? AND kind=? AND record_id=? ORDER BY id DESC LIMIT 50").all(entityId,kind,id);
 }
-function command({ entityId, actorId, commandId, input }, prepare) {
+function command({ entityId, actorId, commandId, input, canReadAll }, prepare) {
   const db = database();
   const hash = crypto.createHash("sha256").update(JSON.stringify(input)).digest("hex");
   const replay = () => {
     const row = db.prepare("SELECT payload_hash,result FROM sales_desk_commands WHERE entity_id=? AND actor_id=? AND command_id=?").get(entityId,actorId,commandId);
     if (!row) return null;
     if (row.payload_hash !== hash) throw new MosError("SALES_COMMAND_CONFLICT", "This save identifier was already used for different changes.", null, 409);
-    return JSON.parse(row.result);
+    const saved=JSON.parse(row.result);
+    if(input.kind && !visible({entityId,actorId,canReadAll},input.kind,saved.record.id))throw new MosError("SALES_NOT_FOUND","This sales record is no longer assigned to you.",null,404);
+    return saved;
   };
   const previous = replay();
   if (previous) return previous;
@@ -96,4 +108,4 @@ function command({ entityId, actorId, commandId, input }, prepare) {
     return result;
   }).immediate();
 }
-module.exports = { database,get,list,history,command,summary };
+module.exports = { database,get,list,history,command,summary,visible };
