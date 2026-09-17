@@ -1360,6 +1360,8 @@ function createFinancialLifecycleSnapshot({
           type
         )
       ) {
+        // A recorded trade changes the receivable, not revenue or machine cost.
+        if (document.creditType === "trade-credit") return;
         if (document.creditType === "revenue-credit") {
           revenue -= getCreditEffect(document);
           return;
@@ -1411,7 +1413,9 @@ function createFinancialLifecycleSnapshot({
       0,
       revenue -
       collected -
-      filtered.reduce((sum, document) => sum + (getRevenueEffect(document) > 0 ? require("./IXIFinancialTradeContract").tradeValue(document) : 0), 0)
+      filtered.reduce((sum, document) => sum + (getRevenueEffect(document) > 0
+        ? require("./IXIFinancialTradeContract").tradeValue(document) + require("./IXIFinancialTradeCorrections").tradeCredits(document.financialDocumentId, filtered).reduce((total, credit) => total + getCreditEffect(credit), 0)
+        : 0), 0)
     );
 
 

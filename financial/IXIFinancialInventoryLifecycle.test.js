@@ -37,6 +37,17 @@ test("other companies cannot enter this inventory projection", () => {
   assert.deepEqual(result.current, {});
 });
 
+test("recorded trade credits remain noncash consideration in SOLD inventory", () => {
+  const doc = invoice();
+  doc.metadata.assetSaleRecord.collection = { tradeValue: 10000 };
+  const credit = { documentType: "credit", creditType: "trade-credit", financialState: "incurred", financialDocumentId: "test-trade-credit", sourceFinancialDocumentId: doc.financialDocumentId, references: refs, totals: { total: 10000 } };
+  const result = projectInventory({ records: [doc, credit, acquisition], entityPassportId: context.entityPassportId });
+  assert.equal(result.current.IXIMACHINE1.state, "sold");
+  assert.equal(result.sales[0].tradeCreditAmount, 10000);
+  assert.equal(result.sales[0].refundDue, 0);
+  assert.equal(result.issues.some(issue => issue.code === "COLLECTION_RECONCILIATION_REQUIRED"), false);
+});
+
 test("trade sales retain historical machine price and dates while cash stays separate", () => {
   const doc = invoice();
   doc.totals.total = 85000;

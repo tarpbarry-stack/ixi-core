@@ -372,8 +372,10 @@ function rebuildCanonicalSettlement({
   const creditIds = new Set(credits.map(doc => doc.financialDocumentId));
   const refunded = money(related.filter(doc => active(doc) && doc.documentType === "payment" &&
     doc.metadata?.customerRefund === true && creditIds.has(doc.sourceFinancialDocumentId)).reduce((sum, doc) => sum + amountOf(doc), 0));
-  const customerRefundLiability = money(Math.max(0, Math.min(collected, credited) - refunded));
-  const netSalePrice = money(salePrice - credited);
+  const tradeCreditAmount = money(credits.filter(doc => require("./IXIFinancialTradeCorrections").isTradeCredit(doc)).reduce((sum, doc) => sum + amountOf(doc), 0));
+  const revenueCredits = money(credited - tradeCreditAmount);
+  const customerRefundLiability = money(Math.max(0, Math.min(collected, revenueCredits) - refunded));
+  const netSalePrice = money(salePrice - revenueCredits);
   const ledger = expenseLedger(related, assetPassportId, assetObjectId),
     canonicalCosts = money(
       ledger
@@ -443,7 +445,8 @@ function rebuildCanonicalSettlement({
     customerRefundLiability,
     netSalePrice,
     invoiceTotal,
-    tradeValue,
+    tradeValue: money(tradeValue + tradeCreditAmount),
+    tradeCreditAmount,
     buyerBalance: money(Math.max(0, invoiceTotal - collected - credited)),
     acquisitionCost,
     makeReadyCost,

@@ -97,7 +97,12 @@ async function assertFinancialTradeLinks(document, loadDocument) {
   if (!acquisition?.trade && !trades?.length) return;
   const sourceId = document.sourceFinancialDocumentId;
   const source = await loadDocument(sourceId);
-  const order = source?.financialDocument?.salesOrder;
+  const correction = source?.financialDocument;
+  const correctedTrade = acquisition?.trade && require("./IXIFinancialTradeCorrections").isTradeCredit(correction) &&
+    ["incurred", "approved", "posted", "closed"].includes(correction.financialState) && correction.tradeCorrection;
+  const original = correctedTrade ? await loadDocument(correctedTrade.salesOrderId) : source;
+  const baseOrder = original?.financialDocument?.salesOrder;
+  const order = correctedTrade && baseOrder ? { ...baseOrder, trades: [correctedTrade.trade] } : baseOrder;
   if (!order || !sourceId || !order.trades?.length)
     throw new Error(
       "Trade documents require their saved sales order and linked machines.",

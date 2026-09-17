@@ -58,7 +58,7 @@ function planAdjustment({ invoice, documents, body, accessContext }) {
   if (replay) { if ((replay.metadata?.saleId || replay.sourceFinancialDocumentId) !== invoice.financialDocumentId) throw fail("This command already belongs to a different sale."); return checkedReplay(replay, body); }
   const kind = clean(body.kind);
   if (!["price-adjustment", "return"].includes(kind)) throw fail("Choose a price adjustment or a machine return.");
-  if (kind === "return" && array(invoice.metadata?.trades).length) throw fail("This sale includes trade-in machines. A full return must account for those machines and their acquisition reversals; the cash-only return action cannot close this deal.");
+  if (kind === "return" && (array(invoice.metadata?.trades).length || require("./IXIFinancialTradeCorrections").tradeCredits(invoice.financialDocumentId, documents).length)) throw fail("This sale includes trade-in machines. A full return must account for those machines and their acquisition reversals; the cash-only return action cannot close this deal.");
   const effectiveDate = businessDate(body.effectiveDate);
   if (effectiveDate < resolveSoldBusinessDate(invoice, documents).date) throw fail("An adjustment cannot predate this sale.");
   const reason = clean(body.reason);
@@ -66,13 +66,13 @@ function planAdjustment({ invoice, documents, body, accessContext }) {
   const amount = Number(body.amount);
   if (!Number.isFinite(amount) || amount <= 0 || cents(amount) !== amount * 100 && Math.abs(cents(amount) - amount * 100) > 0.000001) throw fail("Enter a positive amount with at most two decimal places.");
   const credits = documents.filter(doc => doc.sourceFinancialDocumentId === invoice.financialDocumentId && isRevenueCredit(doc) && isActive(doc));
-  if (documents.some(doc => doc.documentType === "credit" && doc.sourceFinancialDocumentId === invoice.financialDocumentId && isActive(doc) && !isRevenueCredit(doc))) throw fail("Reconcile the existing legacy customer credit before adding a sale adjustment.");
+  if (documents.some(doc => doc.documentType === "credit" && doc.sourceFinancialDocumentId === invoice.financialDocumentId && isActive(doc) && !isRevenueCredit(doc) && !require("./IXIFinancialTradeCorrections").isTradeCredit(doc))) throw fail("Reconcile the existing legacy customer credit before adding a sale adjustment.");
   const originalTaxCents = cents(invoice.totals?.tax ?? invoice.metadata?.commercialBreakdown?.tax ?? 0);
   const priorTaxCents = credits.reduce((sum, doc) => sum + cents(doc.totals?.tax || 0), 0);
   const taxAmount = kind === "return" ? (originalTaxCents - priorTaxCents) / 100 : Number(body.taxAmount ?? 0);
   if (!Number.isFinite(taxAmount) || taxAmount < 0 || taxAmount > amount || cents(taxAmount) > originalTaxCents - priorTaxCents || Math.abs(cents(taxAmount) - taxAmount * 100) > 0.000001) throw fail("The tax credit must match the remaining original invoice tax and cannot exceed the credit amount.");
   if (kind !== "return" && originalTaxCents > 0 && body.taxAmount == null) throw fail("Specify the tax included in this credit, including zero if no tax is being credited.");
-  const creditedCents = credits.reduce((sum, doc) => sum + cents(totalOf(doc)), 0);
+  const creditedCents = [...credits, ...require("./IXIFinancialTradeCorrections").tradeCredits(invoice.financialDocumentId, documents)].reduce((sum, doc) => sum + cents(totalOf(doc)), 0);
   const remainingCents = cents(totalOf(invoice)) - creditedCents;
   if (cents(amount) > remainingCents) throw fail("The credit exceeds the remaining original invoice amount.");
   if (kind === "return" && cents(amount) !== remainingCents) throw fail("A full sale return must credit the remaining invoice amount. Use a price adjustment when the buyer keeps the machine.");
