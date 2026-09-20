@@ -135,6 +135,9 @@ async function getCurrentPolicyRecord(
 }
 
 
+const getCurrentPolicyRecords = require("./IXIAuthorityBatchRead")
+  .createAuthorityBatchReader({ client, tableName: TABLE_NAME });
+
 async function getPolicyHistory(
   passportId
 ) {
@@ -437,6 +440,7 @@ module.exports = {
   TABLE_NAME,
 
   getCurrentPolicyRecord,
+  getCurrentPolicyRecords,
   getPolicyHistory,
   putPolicyRecord,
 

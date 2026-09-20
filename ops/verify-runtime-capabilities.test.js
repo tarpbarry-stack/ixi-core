@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { verifyRuntimeCapabilities } = require("./verify-runtime-capabilities");
-function client({ days = 35, status = "ENABLED", probeError, unexpectedSuccess = false, batchDenied = false } = {}) {
+function client({ days = 35, status = "ENABLED", probeError, unexpectedSuccess = false, batchDenied = false, authorityDenied = false } = {}) {
   const calls = [];
   return {
     calls, destroyed: false,
@@ -14,7 +14,10 @@ function client({ days = 35, status = "ENABLED", probeError, unexpectedSuccess =
         } } };
       }
       if (command.constructor.name === "BatchGetItemCommand") {
-        assert.equal(command.input.RequestItems["ixi-financial-v1"].ConsistentRead, true);
+        const table = Object.keys(command.input.RequestItems)[0];
+        assert.ok(["ixi-financial-v1", "ixi-aos-authority-v1"].includes(table));
+        assert.equal(command.input.RequestItems[table].ConsistentRead, true);
+        if (authorityDenied && table === "ixi-aos-authority-v1") throw new Error("authority batch read denied");
         if (batchDenied) throw Object.assign(new Error("batch read denied"), { name: "AccessDeniedException" });
         return {};
       }
@@ -33,9 +36,10 @@ test("release capabilities require recoverable business tables and prove atomic 
   const result = await verifyRuntimeCapabilities(connection);
   assert.equal(result.ok, true);
   assert.equal(result.financialBatchReadAuthorized, true);
+  assert.equal(result.authorityBatchReadAuthorized, true);
   assert.equal(result.writePerformed, false);
   assert.deepEqual(result.recovery.map(item => item.table), ["ixi-financial-v1", "IXIFreight", "IXITickets"]);
-  assert.equal(connection.calls.length, 5);
+  assert.equal(connection.calls.length, 6);
   assert.equal(connection.destroyed, true);
 });
 test("missing or short recovery retention blocks release before the Treasury probe", async () => {
@@ -59,5 +63,12 @@ test("release blocks before the Treasury probe when batch read permission is abs
   const connection = client({ batchDenied: true });
   await assert.rejects(verifyRuntimeCapabilities(connection), /batch read denied/);
   assert.equal(connection.calls.length, 4);
+  assert.equal(connection.destroyed, true);
+});
+
+test("missing authority batch permission blocks release before service shutdown or Treasury probe", async () => {
+  const connection = client({ authorityDenied: true });
+  await assert.rejects(verifyRuntimeCapabilities(connection), /authority batch read denied/);
+  assert.equal(connection.calls.length, 5);
   assert.equal(connection.destroyed, true);
 });

@@ -1,0 +1,9 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Sid": "ReadCurrentAuthorityPoliciesInBatches",
+    "Effect": "Allow",
+    "Action": "dynamodb:BatchGetItem",
+    "Resource": "arn:aws:dynamodb:us-east-2:459212966383:table/ixi-aos-authority-v1"
+  }]
+}

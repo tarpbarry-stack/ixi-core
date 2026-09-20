@@ -28,3 +28,8 @@
   at most two concurrent requests per collection. Never restore one Get per record.
   Preserve index scope, consistent reads, bounded partial-key retries and fail-closed
   totals. The 350-document collection budget and adapter tests run in npm test.
+- Authority policy inputs use consistent batches of at most 100 keys and two
+  concurrent requests per explicit read scope. Coalesce target and ancestor reads;
+  retain specificity, inheritance and principal-specific decisions. Never replace
+  a failed batch with missing policies or cache policy records across requests.
+  The 200-target/shared-ancestor batch budget is a required npm test gate.

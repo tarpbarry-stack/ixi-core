@@ -1,14 +1,16 @@
 # Approved runtime read permission
 
 Status: user authorized proceeding with the single-table read permission on
-2026-09-20 after the deployment denial was explained. Application remains pending.
+2026-09-20 after the deployment denial was explained. Application completed by the administrator on 2026-09-20; complete release
+35523278167 attempt 2 proved financialBatchReadAuthorized=true.
 The release operator was subsequently denied iam:GetRole in run 35522733627;
 no IAM permission or runtime installation occurred.
 
 Production release run 35521181449 stopped before service shutdown on 2026-09-20.
 AWS denied `dynamodb:BatchGetItem` to the runtime role `EC2-SSM-Role` for
 `arn:aws:dynamodb:us-east-2:459212966383:table/ixi-financial-v1`.
-The existing backend 0c2e80dd590258309ff4d1823b8c35cb433d50f4 remains installed.
+That failure left backend 0c2e80dd590258309ff4d1823b8c35cb433d50f4 installed;
+the subsequent successful complete release installed the financial batch reader.
 
 Proposed change: attach the adjacent policy as a dedicated inline policy named
 `IXITransactFinancialBatchRead` on `EC2-SSM-Role` in account 459212966383.

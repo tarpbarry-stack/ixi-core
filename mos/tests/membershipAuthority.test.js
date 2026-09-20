@@ -19,6 +19,7 @@ const {
 } = require("../security/mosMembershipAuthorityService");
 const authorityStore = require("../../authority/IXIAuthorityDynamoStore");
 authorityStore.getCurrentPolicyRecord = async () => null;
+authorityStore.getCurrentPolicyRecords = ids => Promise.all(ids.map(id => authorityStore.getCurrentPolicyRecord(id)));
 const {
   evaluateMosObjectAuthority,
   buildMosObjectActorAuthority
