@@ -380,6 +380,24 @@ router.get("/health", (req, res) => {
  * Enforcement remains OFF until the
  * coordinated Vercel + IX-Core rollout.
  */
+// Measure existing read work only: no extra checks, requests or saved records.
+router.use((req, res, next) => {
+  if (req.method === "GET" && (req.path === "/aos/work-bootstrap" ||
+      req.path === "/aos/context" || /^\/entities\/[^/]+$/.test(req.path))) {
+    const started = performance.now();
+    req.ixiReadTiming = {};
+    const json = res.json;
+    res.json = function(body) {
+      const durations = { ...req.ixiReadTiming, total: performance.now() - started };
+      res.setHeader("Server-Timing", Object.entries(durations)
+        .map(([name, ms]) => `ixi-mos-${name};dur=${Math.max(0, ms).toFixed(1)}`).join(", "));
+      return json.call(this, body);
+    };
+    req.ixiReadAuthStarted = started;
+  }
+  next();
+});
+
 router.use(
   createInternalAuthMiddleware()
 );
@@ -391,6 +409,11 @@ router.use(
 router.use(
   createMosMembershipAuthorityMiddleware()
 );
+
+router.use((req, res, next) => {
+  if (req.ixiReadTiming) req.ixiReadTiming.auth = performance.now() - req.ixiReadAuthStarted;
+  next();
+});
 
 
 /*
@@ -557,7 +580,8 @@ router.get(
       const environment = await loadAosEnvironment({
         ownerUserId: principalId,
         strictAuthorization: true,
-        allowProvisioning: false
+        allowProvisioning: false,
+        onTiming: (name, ms) => { req.ixiReadTiming[name] = ms; }
       });
 
       const definitions = listCustomerObjectTypes({
