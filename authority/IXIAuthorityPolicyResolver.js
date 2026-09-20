@@ -42,6 +42,8 @@ const {
   );
 
 
+const { createPolicyReadQueue } = require("./IXIAuthorityBatchRead");
+
 const authorityPolicyReadScope =
   new AsyncLocalStorage();
 
@@ -70,15 +72,15 @@ async function loadPolicy(
   }
 
 
-  const scopedRecords =
-    authorityPolicyReadScope.getStore()?.records;
+  const scope = authorityPolicyReadScope.getStore();
+  const scopedRecords = scope?.records;
 
   let recordRequest =
     scopedRecords?.get(id);
 
   if (!recordRequest) {
     recordRequest =
-      store.getCurrentPolicyRecord(id);
+      scope ? scope.readPolicy(id) : store.getCurrentPolicyRecord(id);
 
     scopedRecords?.set(id, recordRequest);
   }
@@ -124,7 +126,8 @@ function withAuthorityPolicyReadScope(callback) {
   }
 
   return authorityPolicyReadScope.run(
-    { records: new Map(), chains: new Map() },
+    { records: new Map(), chains: new Map(),
+      readPolicy: createPolicyReadQueue(ids => store.getCurrentPolicyRecords(ids)) },
     callback
   );
 }
@@ -149,10 +152,10 @@ async function resolveAuthorityPolicyChainUncached(
     [];
 
 
-  const targetPolicy =
-    await loadPolicy(
-      targetId
-    );
+  // Request the complete chain together, then retain specificity order below.
+  const [targetPolicy, ...ancestorPolicies] = await Promise.all(
+    [targetId, ...graph.ancestorPassportIds].map(loadPolicy)
+  );
 
 
   if (targetPolicy) {
@@ -193,10 +196,7 @@ async function resolveAuthorityPolicyChainUncached(
         ];
 
 
-    const resolved =
-      await loadPolicy(
-        passportId
-      );
+    const resolved = ancestorPolicies[index];
 
 
     if (!resolved) {

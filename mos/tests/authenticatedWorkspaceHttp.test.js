@@ -21,6 +21,7 @@ const { readPassportRecords } = require("../../passport/passportRegistry");
 const { buildCanonicalRequest } = require("../security/internalRequestAuthService");
 const authorityStore = require("../../authority/IXIAuthorityDynamoStore");
 authorityStore.getCurrentPolicyRecord = async () => null;
+authorityStore.getCurrentPolicyRecords = ids => Promise.all(ids.map(id => authorityStore.getCurrentPolicyRecord(id)));
 // This isolated company has no financial records. Keep the HTTP/identity test independent of AWS.
 require("../../financial/IXIFinancialProviderService").listDocumentsByPassport = async () => ({ ok: true, data: { documents: [] } });
 const { mosRouter } = require("../routes/mosRouter");

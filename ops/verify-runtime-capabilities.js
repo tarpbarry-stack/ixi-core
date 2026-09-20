@@ -38,13 +38,16 @@ async function verifyRuntimeCapabilities(client = new DynamoDBClient({
       recovery.push({ table, status: state.PointInTimeRecoveryStatus, days: state.RecoveryPeriodInDays });
     }
     // Read-only permission proof runs before service shutdown. No IAM mutation or fallback.
-    await client.send(new BatchGetItemCommand({ RequestItems: {
-      [process.env.IXI_FINANCIAL_DDB_TABLE || "ixi-financial-v1"]: {
-        Keys: [{ PK: { S: "IXI-RELEASE-PERMISSION-PROBE" }, SK: { S: "NEVER-WRITTEN" } }],
-        ConsistentRead: true
-      }
-    } }));
-    return { ...(await verifyAtomicTreasuryAccess(client)), financialBatchReadAuthorized: true, recovery };
+    for (const table of [process.env.IXI_FINANCIAL_DDB_TABLE || "ixi-financial-v1",
+      process.env.IXI_AUTHORITY_DDB_TABLE || "ixi-aos-authority-v1"]) {
+      await client.send(new BatchGetItemCommand({ RequestItems: {
+        [table]: {
+          Keys: [{ PK: { S: "IXI-RELEASE-PERMISSION-PROBE" }, SK: { S: "NEVER-WRITTEN" } }],
+          ConsistentRead: true
+        }
+      } }));
+    }
+    return { ...(await verifyAtomicTreasuryAccess(client)), financialBatchReadAuthorized: true, authorityBatchReadAuthorized: true, recovery };
   } finally {
     client.destroy();
   }
