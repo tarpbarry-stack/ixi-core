@@ -25,6 +25,7 @@ router.get("/calendar",(req,res)=>{try{res.json({ok:true,...work.calendar(req.sa
 router.get("/work",(req,res)=>{try{res.json({ok:true,...work.work(req.salesActor,req.query)});}catch(e){sendMosError(res,e);}});
 router.post("/calendar/preview",(req,res)=>{try{res.json({ok:true,...work.preview(req.salesActor,req.body)});}catch(e){sendMosError(res,e);}});
 router.post("/intake",(req,res)=>{try{res.json({ok:true,...intake.capture(req.salesActor,req.body)});}catch(e){sendMosError(res,e);}});
+router.post("/inquiries/manual",(req,res)=>{try{const result=require("./IXISalesDeskManualInquiry").capture(req.salesActor,req.body);res.json({ok:true,...result,conflicts:work.conflicts(req.salesActor,"deals",result.deal)});}catch(e){sendMosError(res,e);}});
 router.get("/team",(req,res)=>{try{access.requireOwner(req.salesActor);res.json({ok:true,members:access.team(req.salesActor,true),invitations:access.invitations(req.salesActor)});}catch(e){sendMosError(res,e);}});
 router.post("/team",(req,res)=>{try{res.json({ok:true,...access.updateSeat(req.salesActor,req.body)});}catch(e){sendMosError(res,e);}});
 router.post("/invitations",(req,res)=>{try{res.json({ok:true,...access.invitation(req.salesActor,req.body)});}catch(e){sendMosError(res,e);}});
