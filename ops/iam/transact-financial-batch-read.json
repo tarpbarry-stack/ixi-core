@@ -1,0 +1,11 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadCurrentFinancialRecordsInBatches",
+      "Effect": "Allow",
+      "Action": "dynamodb:BatchGetItem",
+      "Resource": "arn:aws:dynamodb:us-east-2:459212966383:table/ixi-financial-v1"
+    }
+  ]
+}
