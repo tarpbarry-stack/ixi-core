@@ -666,15 +666,7 @@ async function listFinancialDocumentsByEntity(
 
 
   const records =
-    await Promise.all(
-      ids.map(
-        financialDocumentId =>
-          store
-            .getCurrentDocumentRecord(
-              financialDocumentId
-            )
-      )
-    );
+    await store.getCurrentDocumentRecords(ids);
 
 
   return records.filter(
@@ -698,15 +690,7 @@ async function listFinancialDocumentsByPassport(
 
 
   const records =
-    await Promise.all(
-      ids.map(
-        financialDocumentId =>
-          store
-            .getCurrentDocumentRecord(
-              financialDocumentId
-            )
-      )
-    );
+    await store.getCurrentDocumentRecords(ids);
 
 
   return records.filter(

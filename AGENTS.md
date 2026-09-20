@@ -24,3 +24,7 @@
   Changing either budget requires a measured explanation, not deleting the check.
 - Report fresh browser directory and worksheet readiness and gateway timings after
   deployment. A warm tab, a loading skeleton or a successful build is not proof.
+- Financial collection reads must use current-data batches of at most 100 keys,
+  at most two concurrent requests per collection. Never restore one Get per record.
+  Preserve index scope, consistent reads, bounded partial-key retries and fail-closed
+  totals. The 350-document collection budget and adapter tests run in npm test.
