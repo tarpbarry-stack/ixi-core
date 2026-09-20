@@ -1,4 +1,7 @@
 "use strict";
+const { readCanonicalSnapshot } = require("../storage/canonicalReadScope");
+const canonicalIndexKey = Symbol("canonical-admission-index");
+
 
 const {
   readPassportRecords,
@@ -153,6 +156,12 @@ function aliasKey(alias) {
 }
 
 function resolveCanonicalObjectIdentity(input = {}) {
+  const key = JSON.stringify([cleanText(input.entityId), cleanText(input.objectId),
+    cleanText(input.passportId), requestedAliases(input)]);
+  return readCanonicalSnapshot(`canonical-admission:${key}`, () => resolveCanonicalObjectIdentityUncached(input));
+}
+
+function resolveCanonicalObjectIdentityUncached(input = {}) {
   const entityId = cleanText(input.entityId);
   const objectId = cleanText(input.objectId);
   const passportId = cleanText(input.passportId);
@@ -176,17 +185,22 @@ function resolveCanonicalObjectIdentity(input = {}) {
     );
   }
 
-  const objects = listObjects({ status: null });
-  const passports = readPassportRecords();
-  const objectsById = new Map(objects.map(object => [cleanText(object.objectId), object]));
-  const objectPassportIds = new Map(objects.map(object => [
-    cleanText(object.objectId),
-    normalizedPassportIds(object)
-  ]));
-  const objectAliases = new Map(objects.map(object => [
-    cleanText(object.objectId),
-    new Set(normalizedAliases(object).map(aliasKey))
-  ]));
+  const { objects, passports, objectsById, objectPassportIds, objectAliases } =
+    readCanonicalSnapshot(canonicalIndexKey, () => {
+      const objects = listObjects({ status: null });
+      const passports = readPassportRecords();
+      const objectsById = new Map(objects.map(object => [cleanText(object.objectId), object]));
+      const objectPassportIds = new Map(objects.map(object => [
+        cleanText(object.objectId),
+        normalizedPassportIds(object)
+      ]));
+      const objectAliases = new Map(objects.map(object => [
+        cleanText(object.objectId),
+        new Set(normalizedAliases(object).map(aliasKey))
+      ]));
+
+      return { objects, passports, objectsById, objectPassportIds, objectAliases };
+    });
 
   const matchedPassportIds = new Set();
   const matchedObjectIds = new Set();

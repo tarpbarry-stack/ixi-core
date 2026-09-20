@@ -1,3 +1,4 @@
+const { withCanonicalReadScope } = require("../storage/canonicalReadScope");
 const express = require("express");
 const crypto = require("crypto");
 
@@ -521,7 +522,7 @@ router.get("/aos/inventory-availability", async (req, res) => {
 
 router.get(
   "/aos/work-bootstrap",
-  async (req, res) => {
+  async (req, res) => withCanonicalReadScope(async () => {
     try {
       if (!req.ixiRequestContext?.authenticated) {
         throw new MosError(
@@ -603,7 +604,7 @@ router.get(
     } catch (error) {
       return sendMosError(res, error);
     }
-  }
+  })
 );
 
 router.post(

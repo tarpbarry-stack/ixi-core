@@ -1,3 +1,4 @@
+const { readCanonicalSnapshot, assertCanonicalWriteAllowed } = require("../mos/storage/canonicalReadScope");
 // /passport/passportRegistry.js
 
 const fs = require("fs");
@@ -29,6 +30,10 @@ function registryError(code, message, cause = null) {
 }
 
 function readPassportRecords() {
+  return readCanonicalSnapshot(getPassportDataFile(), readPassportRecordsUncached);
+}
+
+function readPassportRecordsUncached() {
   const passportDataFile = getPassportDataFile();
   if (!fs.existsSync(passportDataFile)) {
     return [];
@@ -166,6 +171,7 @@ function withPassportRegistryLock(operation) {
 }
 
 function writePassportRecordsUnlocked(records = []) {
+  assertCanonicalWriteAllowed();
   if (!Array.isArray(records)) {
     throw registryError(
       "PASSPORT_REGISTRY_INVALID_WRITE",
