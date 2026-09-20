@@ -86,8 +86,15 @@ function resolveOwnerPerson({ membership, entityId }) {
   return people[0];
 }
 
-async function bindInternalFinancialContext(req) {
+async function bindInternalFinancialContext(req, onTiming = () => {}) {
+  let phaseStarted = performance.now();
+  const mark = name => {
+    const now = performance.now();
+    onTiming(name, now - phaseStarted);
+    phaseStarted = now;
+  };
   const signed = verifyInternalRequest(req);
+  mark("signature");
   const principalId = clean(signed.principalId);
   const entityId = clean(signed.entityId);
 
@@ -119,12 +126,14 @@ async function bindInternalFinancialContext(req) {
     );
   }
 
+  mark("membership");
   const person = resolveOwnerPerson({ membership, entityId });
   const entityIdentity = resolveEntityPassport(entityId);
   const personIdentity = resolvePersonPassport({
     objectId: person.objectId,
     expectedEntityId: entityId
   });
+  mark("identity");
 
   const authorityPrincipal = {
     authenticated: true,
@@ -145,6 +154,7 @@ async function bindInternalFinancialContext(req) {
     aosEntityId: entityId,
     entityPassportId: entityIdentity.entityPassportId
   });
+  mark("scope");
 
   req.ixiIdentity = {
     authenticatedUserId: principalId,
@@ -178,9 +188,21 @@ async function bindInternalFinancialContext(req) {
 
 async function ixiInternalFinancialRequest(req, res, next) {
   if (!hasInternalSignature(req)) return next();
+  const durations = {};
+  const measured = req.method === "GET" && req.path === "/access-context";
+  const started = performance.now();
+  if (measured) {
+    const json = res.json;
+    res.json = function(body) {
+      durations.total = performance.now() - started;
+      res.setHeader("Server-Timing", Object.entries(durations)
+        .map(([name, ms]) => `ixi-financial-${name};dur=${Math.max(0, ms).toFixed(1)}`).join(", "));
+      return json.call(this, body);
+    };
+  }
 
   try {
-    await bindInternalFinancialContext(req);
+    await bindInternalFinancialContext(req, (name, ms) => { if (measured) durations[name] = ms; });
     return next();
   } catch (error) {
     const status = Number(error?.statusCode || error?.status || 401);
