@@ -77,17 +77,19 @@ function summary(entityId,today,actor=null) {
 function history(entityId,kind,id) {
   return database().prepare("SELECT actor_id AS actorId,action,created_at AS createdAt FROM sales_desk_audit WHERE entity_id=? AND kind=? AND record_id=? ORDER BY id DESC LIMIT 50").all(entityId,kind,id);
 }
+function replayCommand({ entityId, actorId, commandId, input, canReadAll }) {
+  const row=database().prepare("SELECT payload_hash,result FROM sales_desk_commands WHERE entity_id=? AND actor_id=? AND command_id=?").get(entityId,actorId,commandId);
+  if(!row)return null;
+  const hash=crypto.createHash("sha256").update(JSON.stringify(input)).digest("hex");
+  if(row.payload_hash!==hash)throw new MosError("SALES_COMMAND_CONFLICT","This save identifier was already used for different changes.",null,409);
+  const saved=JSON.parse(row.result);
+  if(input.kind && !visible({entityId,actorId,canReadAll},input.kind,saved.record.id))throw new MosError("SALES_NOT_FOUND","This sales record is no longer assigned to you.",null,404);
+  return saved;
+}
 function command({ entityId, actorId, commandId, input, canReadAll }, prepare) {
   const db = database();
   const hash = crypto.createHash("sha256").update(JSON.stringify(input)).digest("hex");
-  const replay = () => {
-    const row = db.prepare("SELECT payload_hash,result FROM sales_desk_commands WHERE entity_id=? AND actor_id=? AND command_id=?").get(entityId,actorId,commandId);
-    if (!row) return null;
-    if (row.payload_hash !== hash) throw new MosError("SALES_COMMAND_CONFLICT", "This save identifier was already used for different changes.", null, 409);
-    const saved=JSON.parse(row.result);
-    if(input.kind && !visible({entityId,actorId,canReadAll},input.kind,saved.record.id))throw new MosError("SALES_NOT_FOUND","This sales record is no longer assigned to you.",null,404);
-    return saved;
-  };
+  const replay = () => replayCommand({entityId,actorId,commandId,input,canReadAll});
   const previous = replay();
   if (previous) return previous;
   // Canonical provisioning uses its existing recoverable command before the
@@ -114,4 +116,4 @@ function command({ entityId, actorId, commandId, input, canReadAll }, prepare) {
     return result;
   }).immediate();
 }
-module.exports = { database,get,list,history,command,summary,visible,visibility };
+module.exports = { database,get,list,history,command,replayCommand,summary,visible,visibility };
