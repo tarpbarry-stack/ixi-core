@@ -2,6 +2,8 @@
 
 Status: user authorized proceeding with the single-table read permission on
 2026-09-20 after the deployment denial was explained. Application remains pending.
+The release operator was subsequently denied iam:GetRole in run 35522733627;
+no IAM permission or runtime installation occurred.
 
 Production release run 35521181449 stopped before service shutdown on 2026-09-20.
 AWS denied `dynamodb:BatchGetItem` to the runtime role `EC2-SSM-Role` for
@@ -13,11 +15,14 @@ Proposed change: attach the adjacent policy as a dedicated inline policy named
 It adds one read operation on one table. It grants no writes, deletes, other tables,
 or IAM administration. Application authorization and consistent-read behavior remain.
 
-The complete release workflow runs `ops/ensure-financial-batch-read-permission.py`
-under its authorized deployment operator. It checks the account, role and existing
+An authorized AWS administrator can run `ops/ensure-financial-batch-read-permission.py`
+with the adjacent policy. Routine deployments do not administer IAM, and the
+release account must not be expanded to do so. The script checks the account, role and existing
 policies, proves pre-existing unrestricted GetItem access to this same table, and
 refuses to replace a different policy under the chosen name. Existing explicit
-denies, permission boundaries and trust policies are never edited. An identical
+denies, permission boundaries and trust policies are never edited. A new grant
+also stops for any existing deny, exclusion or permission boundary so an
+administrator can review their effect on batch access. An identical
 installed policy is verified without another write. The runtime capability probe
 still must independently succeed; this step does not bypass it.
 Do not use the read-only AWS audit connector to make the change.
