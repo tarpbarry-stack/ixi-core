@@ -124,12 +124,27 @@ test("signed workspace HTTP contract binds membership, ignores forged authority,
       return null;
     };
 
-    const workBootstrap = await request(baseUrl, {
+    const { MOS_PATHS } = require("../storage/mosPaths");
+    const originalRead = fs.readFileSync;
+    const canonicalReads = new Map();
+    fs.readFileSync = function(file, ...args) {
+      const key = String(file);
+      if ([MOS_PATHS.objects, process.env.IXI_PASSPORT_DATA_FILE].includes(key)) {
+        canonicalReads.set(key, (canonicalReads.get(key) || 0) + 1);
+      }
+      return originalRead.call(this, file, ...args);
+    };
+    let workBootstrap;
+    try { workBootstrap = await request(baseUrl, {
       method: "GET",
       targetPath: "/mos/v1/aos/work-bootstrap",
       principalId: "frontend-new-owner",
       entityId: ""
     });
+    } finally { fs.readFileSync = originalRead; }
+    for (const file of [MOS_PATHS.objects, process.env.IXI_PASSPORT_DATA_FILE]) {
+      assert.ok(canonicalReads.get(file) <= 2, `Cold bootstrap registry read budget exceeded: ${path.basename(file)} ${canonicalReads.get(file)}`);
+    }
     assert.equal(workBootstrap.status, 200);
     assert.equal(
       workBootstrap.body.workBootstrapVersion,

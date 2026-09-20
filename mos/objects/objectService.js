@@ -1,3 +1,4 @@
+const { readCanonicalSnapshot, assertCanonicalWriteAllowed } = require("../storage/canonicalReadScope");
 const {
   readJsonFile,
   writeJsonFileAtomic
@@ -72,14 +73,12 @@ function validateSystemIndexMembershipPolicy(object) {
 
 
 function readObjects() {
-  return readJsonFile(
-    MOS_PATHS.objects,
-    {}
-  );
+  return readCanonicalSnapshot(MOS_PATHS.objects, () => readJsonFile(MOS_PATHS.objects, {}));
 }
 
 
 function writeObjects(objects) {
+  assertCanonicalWriteAllowed();
   writeJsonFileAtomic(
     MOS_PATHS.objects,
     objects

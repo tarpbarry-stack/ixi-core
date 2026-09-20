@@ -1,4 +1,7 @@
 "use strict";
+const { withCanonicalReadScope } = require("../mos/storage/canonicalReadScope");
+const { withAuthorityPolicyReadScope } = require("../authority/IXIAuthorityPolicyResolver");
+
 
 /*
  * IXI FINANCIAL SCOPE DISCOVERY SERVICE
@@ -239,7 +242,7 @@ function resolveProductionObjectIdentity(
    AUTHENTICATED COMPANY FINANCIAL SCOPE
    ========================================================= */
 
-async function discoverFinancialPassportScope({
+async function discoverFinancialPassportScopeUncached({
   principal,
   aosEntityId,
   entityPassportId
@@ -394,6 +397,10 @@ async function discoverFinancialPassportScope({
   };
 }
 
+
+function discoverFinancialPassportScope(options) {
+  return withCanonicalReadScope(() => withAuthorityPolicyReadScope(() => discoverFinancialPassportScopeUncached(options)));
+}
 
 module.exports = {
   resolveProductionObjectIdentity,

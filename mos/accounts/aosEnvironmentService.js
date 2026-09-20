@@ -1,3 +1,4 @@
+const { withCanonicalReadScope } = require("../storage/canonicalReadScope");
 const { loadInventory } = require("../../financial/IXIFinancialInventoryService");
 const {
   ensureAosAccount,
@@ -449,9 +450,8 @@ async function loadAosEnvironmentWithinAuthorityScope({
 }
 
 function loadAosEnvironment(options = {}) {
-  return withAuthorityPolicyReadScope(
-    () => loadAosEnvironmentWithinAuthorityScope(options)
-  );
+  const read = () => withAuthorityPolicyReadScope(() => loadAosEnvironmentWithinAuthorityScope(options));
+  return options.allowProvisioning === false ? withCanonicalReadScope(read) : read();
 }
 
 module.exports = {
