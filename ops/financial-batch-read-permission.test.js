@@ -18,7 +18,7 @@ class Fixture:
     def __call__(self,*args):
         self.calls.append(args); operation=args[1]
         if operation=="get-caller-identity": return {"Account":self.account}
-        if operation=="get-role": return {"Role":{"Arn":f"arn:aws:iam::{grant.ACCOUNT}:role/{grant.ROLE}","PermissionsBoundary":{"PermissionsBoundaryArn":"unchanged"}}}
+        if operation=="get-role": return {"Role":{"Arn":f"arn:aws:iam::{grant.ACCOUNT}:role/{grant.ROLE}"}}
         if operation=="list-role-policies": return {"PolicyNames":list(self.policies)}
         if operation=="get-role-policy": return {"PolicyDocument":self.policies[args[args.index("--policy-name")+1]]}
         if operation=="list-attached-role-policies": return {"AttachedPolicies":[{"PolicyArn":"managed-read"}] if self.managed else []}
@@ -74,4 +74,19 @@ test("unrelated action or table authority is insufficient to grant financial bat
 for statement in [{"Effect":"Allow","Action":"dynamodb:GetItem","Resource":"other-table"},
                   {"Effect":"Allow","Action":"dynamodb:Query","Resource":grant.TABLE}]:
     fixture=Fixture(); fixture.policies={"Unrelated":{"Statement":[statement]}}; blocked(fixture)
+`));
+
+test("existing explicit denies and exclusions require administrator review without a grant", () => check(`
+for statement in [{"Effect":"Deny","Action":"dynamodb:GetItem","Resource":grant.TABLE},
+                  {"Effect":"Allow","NotAction":"dynamodb:DeleteItem","Resource":"*"}]:
+    fixture=Fixture(); fixture.policies["Restriction"]={"Statement":[statement]}; blocked(fixture)
+fixture=Fixture()
+def boundary(*args):
+    result=fixture(*args)
+    if args[1]=="get-role": result["Role"]["PermissionsBoundary"]={"PermissionsBoundaryArn":"unchanged"}
+    return result
+try: grant.ensure_permission(boundary)
+except RuntimeError: pass
+else: raise AssertionError("Expected boundary review to block the grant")
+assert not fixture.writes()
 `));

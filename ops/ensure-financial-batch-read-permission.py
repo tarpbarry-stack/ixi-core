@@ -58,6 +58,10 @@ def ensure_permission(call=aws, desired=EXPECTED_POLICY):
         version = call("iam", "get-policy", "--policy-arn", arn)["Policy"]["DefaultVersionId"]
         existing.append(call("iam", "get-policy-version", "--policy-arn", arn,
                              "--version-id", version)["PolicyVersion"]["Document"])
+    if POLICY_NAME not in documents and (role.get("PermissionsBoundary") or any(
+            statement.get("Effect") == "Deny" or "NotAction" in statement or "NotResource" in statement
+            for document in existing for statement in items(document.get("Statement", [])))):
+        raise RuntimeError("Existing denies, exclusions or permission boundary require administrator review; no permission changed")
     # Do not widen a condition-limited record scope. Existing explicit denies,
     # boundaries, managed policies and the role trust policy are never edited.
     if not any(existing_table_read(document) for document in existing):
