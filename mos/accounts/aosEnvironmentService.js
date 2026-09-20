@@ -210,8 +210,15 @@ async function loadAosEnvironmentWithinAuthorityScope({
   trustedEntity = null,
   authorityPrincipal = null,
   strictAuthorization = false,
-  allowProvisioning = true
+  allowProvisioning = true,
+  onTiming = () => {}
 }) {
+  let phaseStarted = performance.now();
+  const mark = name => {
+    const now = performance.now();
+    onTiming(name, now - phaseStarted);
+    phaseStarted = now;
+  };
   const normalizedUserId =
     cleanText(ownerUserId);
 
@@ -304,7 +311,9 @@ async function loadAosEnvironmentWithinAuthorityScope({
     });
 
   const inventoryEntityPassportId = cleanText(effectiveAuthorityPrincipal?.entityPassportId || membership?.entityPassportId || entity?.passportId);
+  mark("identity");
   const inventory = inventoryEntityPassportId ? await loadInventory(inventoryEntityPassportId) : null;
+  mark("inventory");
   const objects = allObjects.flatMap(object => {
     const state = normalizedPassportIds(object).map(passportId => inventory?.current?.[passportId]).find(Boolean);
     if (state?.state === "sold") return [];
@@ -330,6 +339,7 @@ async function loadAosEnvironmentWithinAuthorityScope({
       }))
     }))
   );
+  mark("authority");
 
   const authorizedObjectById = new Map(
     authorizedObjects.map(object => [object.objectId, object])
@@ -387,6 +397,7 @@ async function loadAosEnvironmentWithinAuthorityScope({
           projection.containerId
         )
     );
+  mark("projections");
 
   return {
     account: {
