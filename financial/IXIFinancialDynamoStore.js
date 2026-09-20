@@ -51,6 +51,9 @@ const client =
   );
 
 
+const { createFinancialBatchReader } = require("./IXIFinancialBatchRead");
+const getCurrentDocumentRecords = createFinancialBatchReader({ client, tableName: TABLE_NAME });
+
 function clean(
   value
 ) {
@@ -1758,6 +1761,7 @@ module.exports = {
   TABLE_NAME,
 
   getCurrentDocumentRecord,
+  getCurrentDocumentRecords,
   getFinancialDocumentHistory,
 
   getIdempotencyRecord,

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 const crypto = require("node:crypto");
-const { DynamoDBClient, TransactWriteItemsCommand, DescribeContinuousBackupsCommand } = require("@aws-sdk/client-dynamodb");
+const { DynamoDBClient, TransactWriteItemsCommand, DescribeContinuousBackupsCommand, BatchGetItemCommand } = require("@aws-sdk/client-dynamodb");
 
 async function verifyAtomicTreasuryAccess(client) {
   try {
@@ -37,7 +37,14 @@ async function verifyRuntimeCapabilities(client = new DynamoDBClient({
       }
       recovery.push({ table, status: state.PointInTimeRecoveryStatus, days: state.RecoveryPeriodInDays });
     }
-    return { ...(await verifyAtomicTreasuryAccess(client)), recovery };
+    // Read-only permission proof runs before service shutdown. No IAM mutation or fallback.
+    await client.send(new BatchGetItemCommand({ RequestItems: {
+      [process.env.IXI_FINANCIAL_DDB_TABLE || "ixi-financial-v1"]: {
+        Keys: [{ PK: { S: "IXI-RELEASE-PERMISSION-PROBE" }, SK: { S: "NEVER-WRITTEN" } }],
+        ConsistentRead: true
+      }
+    } }));
+    return { ...(await verifyAtomicTreasuryAccess(client)), financialBatchReadAuthorized: true, recovery };
   } finally {
     client.destroy();
   }
