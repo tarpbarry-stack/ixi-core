@@ -1,7 +1,12 @@
 "use strict";
 const crypto = require("crypto");
 const { postingForMachine } = require("../storage/postFreePostingStore");
-function findPosting(machineKey) { return machineKey ? postingForMachine(machineKey) : null; }
+function findPosting(machineKey) {
+  if (!machineKey) return null;
+  // Authorization must resolve the exact key used by the legacy storage layer.
+  const { sanitizeMachineKey } = require("../../media/storage/machineMediaManifest");
+  return postingForMachine(sanitizeMachineKey(machineKey));
+}
 function validReadTicket(ticket, machineKey, now = Date.now()) {
   const secret = process.env.IXI_MOS_INTERNAL_SECRET;
   const [expires, signature] = String(ticket || "").split(".");
@@ -11,10 +16,10 @@ function validReadTicket(ticket, machineKey, now = Date.now()) {
 }
 async function protectPostingMedia(req, res, next) {
   try {
-    const matched = req.path.match(/^\/machines\/([^/]+)/);
+    const matched = req.path.match(/^\/machines\/([^/]+)/i);
     const keys = [matched && decodeURIComponent(matched[1]), req.body?.machineId, req.body?.passportId, req.query?.machineKey].filter(Boolean);
-    if (req.path.startsWith("/jobs/")) {
-      const job = await require("../../media/storage/mediaJobStore").getMediaJob(decodeURIComponent(req.path.slice(6)));
+    if (/^\/jobs\//i.test(req.path)) {
+      const job = await require("../../media/storage/mediaJobStore").getMediaJob(decodeURIComponent(req.path.slice(6)).trim());
       if (job) keys.push(job.machineId, job.passportId);
     }
     const row = keys.map(findPosting).find(Boolean);
