@@ -1324,6 +1324,44 @@ router.post(
   }
 );
 
+router.post("/aos/post-free-media/:action", async (req, res) => {
+  try {
+    const action = req.params.action;
+    if (!["manifest", "init", "complete", "job"].includes(action)) throw new MosError("MEDIA_ACTION_UNKNOWN", "Unknown media action", null, 404);
+    const principal = governedPrincipal(req, ["aos.view"]);
+    let job = null;
+    if (action === "job") job = await require("../../media/storage/mediaJobStore").getMediaJob(req.body.jobId);
+    const row = require("../onboarding/postFreeMediaAccess").findPosting(job?.passportId || req.body.passportId || req.body.machineId || req.body.machineKey);
+    if (!row || row.entityId !== principal.entityId) throw new MosError("MEDIA_ACCESS_DENIED", "Machine media not found in this Entity", null, 404);
+    const object = getObject(row.objectId);
+    await assertMosObjectAuthority({ principal: req.ixiAuthorityPrincipal, object,
+      capability: ["manifest", "job"].includes(action) ? "aos.view" : "aos.edit" });
+    if (action === "manifest") return res.json({ ok: true, manifest: await require("../../media/storage/machineMediaManifest").getMachineMediaManifest({ machineId: row.objectId, passportId: row.passportId }) });
+    if (action === "job") return res.json({ ok: true, job });
+    if (row.status !== "complete") throw new MosError("MEDIA_POSTING_PENDING", "Resume the posting before changing its media", null, 409);
+    if (action === "init") return res.json({ ok: true, upload: await require("../../media/uploads/createDirectUpload").createDirectUpload({ ...req.body, machineId: row.objectId, passportId: row.passportId }) });
+    if (!Array.isArray(req.body.uploads) || req.body.uploads.some(upload => !String(upload.key).startsWith(`incoming/${row.passportId}/`))) throw new MosError("MEDIA_INPUT_SCOPE", "Uploads must belong to this machine", null, 403);
+    return res.json(await require("../../media/uploads/completeDirectUpload").completeDirectUpload({ ...req.body, machineId: row.objectId, passportId: row.passportId }));
+  } catch (error) { return sendMosError(res, error); }
+});
+
+const postFreePosting = require("../onboarding/postFreePostingService");
+for (const [action, operation] of Object.entries(postFreePosting)) {
+  router.post(`/aos/post-free/${action}`, async (req, res) => {
+    try {
+      const principal = governedPrincipal(req, ["aos.create"]);
+      if (req.body?.operationId) {
+        const postingKey = crypto.createHash("sha256").update(JSON.stringify([principal.entityId, principal.principalId, req.body.operationId])).digest("hex");
+        const saved = require("../storage/postFreePostingStore").readPosting(postingKey);
+        if (saved?.objectId) await assertMosObjectAuthority({ principal: req.ixiAuthorityPrincipal,
+          object: getObject(saved.objectId), capability: action === "state" ? "aos.view" : "aos.edit" });
+      }
+      const result = await operation({ ...req.body, entityId: principal.entityId, principalId: principal.principalId });
+      return res.json(result);
+    } catch (error) { return sendMosError(res, error); }
+  });
+}
+
 const tradeMachines = require("../onboarding/tradeMachineService");
 for (const [action, operation] of Object.entries({ list: tradeMachines.listTradeMachines, reserve: tradeMachines.reserveTradeMachine, "create-rejected": tradeMachines.rejectTradeListingCreate, complete: tradeMachines.completeTradeMachine, acquired: tradeMachines.confirmTradeAcquisition })) {
   router.post(`/aos/trades/${action}`, async (req, res) => {

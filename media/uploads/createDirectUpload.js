@@ -125,7 +125,8 @@ async function createDirectUpload({
   fileName,
   contentType,
   sizeBytes,
-  position = 0
+  position = 0,
+  sha256 = ""
 } = {}) {
   if (!machineId) {
     throw new Error(
@@ -199,6 +200,7 @@ async function createDirectUpload({
 
       ContentType:
         normalizedContentType,
+      ...(sha256 ? { ChecksumSHA256: Buffer.from(sha256, "hex").toString("base64") } : {}),
 
       Metadata: {
         uploadid:
@@ -234,6 +236,7 @@ async function createDirectUpload({
 
   return {
     uploadId,
+    sha256,
 
     inputType:
       "s3-object",
@@ -271,7 +274,19 @@ async function createDirectUpload({
   };
 }
 
+async function renewDirectUpload(upload) {
+  if (upload.bucket !== BUCKET || !String(upload.key).startsWith(`incoming/${sanitizeSegment(upload.passportId || upload.machineId)}/`)) throw new Error("Upload is not bound to this machine.");
+  const command = new PutObjectCommand({ Bucket: BUCKET, Key: upload.key,
+    ContentType: upload.contentType,
+    ...(upload.sha256 ? { ChecksumSHA256: Buffer.from(upload.sha256, "hex").toString("base64") } : {}),
+    Metadata: { uploadid: upload.uploadId, machineid: sanitizeSegment(upload.machineId),
+      passportid: sanitizeSegment(upload.passportId), position: String(upload.position),
+      originalfilename: sanitizeSegment(upload.fileName) } });
+  return { ...upload, uploadUrl: await getSignedUrl(s3, command, { expiresIn: PRESIGNED_UPLOAD_SECONDS }) };
+}
+
 module.exports = {
+  renewDirectUpload,
   ALLOWED_IMAGE_TYPES,
   PRESIGNED_UPLOAD_SECONDS,
   sanitizeSegment,

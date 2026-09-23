@@ -212,10 +212,16 @@ async function processOneInput({
     } optimize`
   );
 
-  const optimized =
-    await optimizeImage(
-      loaded.buffer
-    );
+  const optimized = await optimizeImage(loaded.buffer);
+  if (input.sha256 && optimized.hash !== input.sha256) throw new Error("Source photo checksum mismatch.");
+  if (input.rendition) {
+    const presentation = await loadMediaInput(input.rendition);
+    const edited = await optimizeImage(presentation.buffer);
+    if (edited.hash !== input.rendition.sha256) throw new Error("Photo treatment checksum mismatch.");
+    optimized.hero = edited.hero;
+    optimized.display = edited.display;
+    optimized.thumb = edited.thumb;
+  }
 
   console.log(
     `[${job.jobId}] media ${
@@ -262,6 +268,7 @@ async function processOneInput({
   let incomingCleanup = null;
 
   if (
+    !job.retainIncoming &&
     loaded.inputType === "s3-object" &&
     loaded.bucket &&
     loaded.key
@@ -403,7 +410,11 @@ async function processOneInput({
   };
 }
 
-async function processMediaJob(job = {}) {
+async function processMediaJobBody(job = {}, assertOwned = () => {}) {
+  if (job.requireComplete && job.jobId) {
+    const previous = await getMediaJob(job.jobId);
+    if (previous?.status === "superseded" || (previous?.status === "complete" && previous.manifestKey)) return previous;
+  }
   if (
     job.type !==
     "ixi-machine-media-ingestion"
@@ -570,6 +581,13 @@ async function processMediaJob(job = {}) {
     );
   }
 
+  if (job.requireComplete && failures.length) {
+    const saved = await updateMediaJob(job.jobId, { status: "failed", completedAt,
+      processedPhotoCount: media.length, failedPhotoCount: failures.length, media, failures,
+      error: "Not all selected photos completed. The existing manifest was preserved; retry the same posting." });
+    return saved.record;
+  }
+
   const status =
     failures.length > 0
       ? "partial"
@@ -579,7 +597,7 @@ async function processMediaJob(job = {}) {
     await updateMediaJob(
       job.jobId,
       {
-        status,
+        status: job.requireComplete ? "processing" : status,
 
         completedAt,
 
@@ -598,6 +616,7 @@ async function processMediaJob(job = {}) {
       }
     );
 
+  assertOwned();
   const manifest =
     await replaceMachineMediaManifest({
       job: saved.record,
@@ -607,6 +626,7 @@ async function processMediaJob(job = {}) {
   await updateMediaJob(
     job.jobId,
     {
+      ...(job.requireComplete ? { status: "complete" } : {}),
       manifestKey:
         manifest.manifestKey,
 
@@ -621,6 +641,7 @@ async function processMediaJob(job = {}) {
     }
   );
 
+  saved.record.status = status;
   saved.record.manifestKey =
     manifest.manifestKey;
 
@@ -642,6 +663,29 @@ async function processMediaJob(job = {}) {
   );
 
   return saved.record;
+}
+
+async function processMediaJob(job = {}) {
+  if (!job.requireComplete) return processMediaJobBody(job);
+  const { acquireMediaJobLease } = require("../storage/mediaJobLease");
+  const lease = await acquireMediaJobLease(job.jobId);
+  try {
+    const result = await processMediaJobBody(job, () => lease.assertOwned());
+    if (result.status === "complete" && result.manifestKey && job.retainIncoming) {
+      lease.assertOwned();
+      // Only the completed, leased job can remove staging bytes. A redelivery
+      // reads its persisted result and retries cleanup without reprocessing.
+      const cleaned = new Set();
+      for (const input of [...(job.mediaInputs || []), ...(job.cleanupInputs || [])]) {
+        for (const source of [input, input.rendition].filter(Boolean)) {
+          if (source.inputType !== "s3-object" || cleaned.has(`${source.bucket}/${source.key}`)) continue;
+          cleaned.add(`${source.bucket}/${source.key}`);
+          await cleanupIncomingObject({ bucket: source.bucket, key: source.key });
+        }
+      }
+    }
+    return result;
+  } finally { await lease.release(); }
 }
 
 module.exports = {

@@ -16,6 +16,7 @@ const {
 } = require("../config/mediaPolicy");
 
 const {
+  getMediaJob,
   saveMediaJob,
   updateMediaJob
 } = require("../storage/mediaJobStore");
@@ -170,7 +171,11 @@ async function createMediaJob({
   imageUrls = [],
   mediaInputs = [],
   manifestMode = "replace",
-  selectionMode = ""
+  selectionMode = "",
+  reservedJobId = "",
+  requireComplete = false,
+  retainIncoming = false,
+  cleanupInputs = []
 } = {}) {
   if (!machineId) {
     throw new Error(
@@ -198,8 +203,18 @@ async function createMediaJob({
     normalizedInputs
   );
 
-  const jobId =
-    createJobId();
+  if (reservedJobId && !/^ixi-post-free-[a-f0-9]{64}(?:-[0-9]+)?$/.test(reservedJobId)) throw new Error("Invalid reserved media job reference.");
+  const jobId = reservedJobId || createJobId();
+  let existingReserved = null;
+  if (reservedJobId) {
+    const existing = await getMediaJob(jobId);
+    existingReserved = existing;
+    if (existing) {
+      if (existing.status === "superseded") throw new Error("This photo selection was replaced by a newer revision.");
+      if (existing.machineId !== machineId || existing.passportId !== passportId || JSON.stringify(existing.mediaInputs) !== JSON.stringify(normalizedInputs)) throw new Error("Media job cannot be rebound to different inputs.");
+      if (["processing", "complete"].includes(existing.status)) return existing;
+    }
+  }
 
   const now =
     new Date().toISOString();
@@ -220,6 +235,9 @@ async function createMediaJob({
 
   const job = {
     version: 2,
+    requireComplete,
+    retainIncoming,
+    cleanupInputs,
 
     jobId,
 
@@ -284,7 +302,12 @@ async function createMediaJob({
       now
   };
 
-  await saveMediaJob(job);
+  // Persist the outbox before delivery. An ambiguous delivery can be replayed
+  // with the same job ID; never reset a worker's state after sending to SQS.
+  if (reservedJobId) {
+    if (!existingReserved || !["queued", "processing", "complete"].includes(existingReserved.status))
+      await saveMediaJob({ ...job, status: "queued" });
+  } else await saveMediaJob(job);
 
   try {
     const queueUrl =
@@ -336,6 +359,8 @@ async function createMediaJob({
       );
     }
 
+    if (reservedJobId) return (await getMediaJob(jobId)) || queuedJob;
+
     const saved =
       await updateMediaJob(
         jobId,
@@ -356,6 +381,7 @@ async function createMediaJob({
 
     return saved.record;
   } catch (error) {
+    if (reservedJobId) throw error;
     await updateMediaJob(
       jobId,
       {
