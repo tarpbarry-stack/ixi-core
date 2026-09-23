@@ -29,3 +29,15 @@ test("unsigned manifest reads and legacy writes cannot bypass posting authority"
   assert.equal((await check("POST", "/jobs", {}, { passportId: "PASS-ONE" })).status, 403);
   assert.equal((await check("GET", "/machines/legacy-machine")).next, true);
 });
+
+test("normalized keys and route case cannot bypass managed media authority", async () => {
+  for (const key of ["PASS-ONE", "%20PASS-ONE%20", "-PASS-ONE-", "PASS%20ONE"]) {
+    for (const route of ["machines", "Machines", "MACHINES"]) {
+      assert.equal((await check("GET", `/${route}/${key}`)).status, 403);
+      assert.equal((await check("POST", `/${route}/${key}/hero`, {}, { mediaId: "image-one" })).status, 403);
+    }
+  }
+  for (const passportId of [" PASS-ONE ", "-PASS-ONE-", "PASS ONE"]) {
+    assert.equal((await check("POST", "/jobs", {}, { machineId: "unrelated", passportId })).status, 403);
+  }
+});
