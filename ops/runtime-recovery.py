@@ -8,6 +8,8 @@ from pathlib import Path
 import sqlite3
 import tarfile
 import tempfile
+import sys
+import time
 from datetime import datetime, timezone
 
 def digest(file):
@@ -73,6 +75,10 @@ def create(app_root, mos_database, output_dir, online=False):
     passport_bytes = passport_file.read_bytes()
     passport_before = hashlib.sha256(passport_bytes).hexdigest()
     database = output / "aos.sqlite"
+    phase_started = time.monotonic()
+    def phase(name):
+        print(json.dumps({"recoveryPhase": name, "elapsedSeconds": round(time.monotonic() - phase_started, 2)}), file=sys.stderr, flush=True)
+    phase("sqlite-snapshot")
     source = sqlite3.connect(f"file:{Path(mos_database).resolve()}?mode=ro", uri=True)
     target = sqlite3.connect(database)
     try:
@@ -84,7 +90,9 @@ def create(app_root, mos_database, output_dir, online=False):
     if digest(passport_file) != passport_before:
         raise ValueError("Passport registry changed during capture; retry the recovery set")
     passports = json.loads(passport_bytes)
+    phase("snapshot-integrity-and-census")
     proof = census(database, passports)
+    phase("runtime-archive")
     archive_file = output / "runtime.tar.gz"
     with tarfile.open(archive_file, "w:gz") as archive:
         def include(member):
@@ -108,6 +116,7 @@ def create(app_root, mos_database, output_dir, online=False):
     os.chmod(archive_file, 0o600)
     if not online and digest(passport_file) != passport_before:
         raise ValueError("Passport registry changed during capture; retry the recovery set")
+    phase("recovery-checksums")
     manifest = {
         "schema": "ixi.recovery.v1", "createdAt": datetime.now(timezone.utc).isoformat(),
         "consistency": "sqlite-snapshot-stable-passports" if online else "quiesced-runtime",
@@ -118,7 +127,9 @@ def create(app_root, mos_database, output_dir, online=False):
     }
     (output / "recovery.json").write_text(json.dumps(manifest, indent=2) + "\n")
     os.chmod(output / "recovery.json", 0o600)
+    phase("independent-restore-verification")
     verify(output)
+    phase("verified")
     return manifest
 
 def verify(output_dir):
