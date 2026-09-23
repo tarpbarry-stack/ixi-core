@@ -120,6 +120,10 @@ app.use(express.json({
   limit: "1mb"
 }));
 
+const { protectPostingMedia } = require("./mos/onboarding/postFreeMediaAccess");
+app.use("/media", protectPostingMedia);
+app.use("/admin/media", protectPostingMedia);
+
 app.use(
   "/communications/v1",
   passportEmailRouter
