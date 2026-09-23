@@ -19,3 +19,14 @@ test("recovery retries are bounded and never suppress integrity or permission fa
     assert.equal(attempts, 1);
   }
 });
+
+test("recovery budget scales for a large snapshot while remaining bounded", () => {
+  const { recoveryCaptureTimeoutMs } = require("./recovery-capture");
+  assert.equal(recoveryCaptureTimeoutMs(16 * 1024 * 1024), 180000);
+  assert.ok(recoveryCaptureTimeoutMs(1467871232) > 500000);
+  assert.equal(recoveryCaptureTimeoutMs(100 * 1024 * 1024 * 1024), 600000);
+  assert.throws(() => recoveryCaptureTimeoutMs(-1), /Invalid/);
+});
+test("capture timeout retains the last completed diagnostic phase", () => {
+  assert.throws(() => captureStableRecovery(() => ({ status: null, error: new Error("ETIMEDOUT"), stderr: '{"recoveryPhase":"independent-restore-verification"}' })), /ETIMEDOUT[\s\S]*independent-restore-verification/);
+});

@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
-const { captureStableRecovery } = require("./recovery-capture");
+const { captureStableRecovery, recoveryCaptureTimeoutMs } = require("./recovery-capture");
 const { S3Client, GetPublicAccessBlockCommand, GetBucketVersioningCommand,
   PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
 
@@ -56,15 +56,18 @@ async function main() {
   let output;
   let retained = false;
   try {
+    const captureTimeoutMs = recoveryCaptureTimeoutMs(fs.statSync(database).size);
+    process.stderr.write(JSON.stringify({ recoveryCaptureTimeoutMs: captureTimeoutMs, databaseBytes: fs.statSync(database).size }) + "\n");
     const result = captureStableRecovery(attempt => {
       output = path.join(working, `data-${attempt}`);
       const captured = spawnSync("python3", [path.join(__dirname, "runtime-recovery.py"), "create",
         "--app-root", app, "--mos-db", database, "--output-dir", output,
         process.argv.includes("--writers-stopped") ? "--writers-stopped" : "--online"
-      ], { encoding: "utf8", timeout: 180000 });
+      ], { encoding: "utf8", timeout: captureTimeoutMs });
       if (captured.status !== 0) fs.rmSync(output, { recursive: true, force: true });
       return captured;
     });
+    if (result.stderr) process.stderr.write(result.stderr);
     const manifest = JSON.parse(result.stdout);
     const bundle = path.join(working, "recovery.tar.gz");
     const packed = spawnSync("tar", ["-czf", bundle, "-C", output, "."], { encoding: "utf8", timeout: 180000 });
