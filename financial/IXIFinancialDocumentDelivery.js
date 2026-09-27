@@ -21,18 +21,27 @@ async function deliverFinancialDocuments(input, dependencies) {
     records.push(record);
   }
   const key = `transact-${input.entityPassportId}-${input.commandId}`;
+  const names = records.map(record => record.financialDocument.documentNumber || record.financialDocument.financialDocumentId);
+  const relatedPassportIds = [...new Set(records.flatMap(record =>
+    (Array.isArray(record.financialDocument?.references)
+      ? record.financialDocument.references
+      : [])
+      .filter(reference => ["asset", "machine", "object"].includes(clean(reference?.role).toLowerCase()))
+      .map(reference => clean(reference?.passportId).toUpperCase())
+      .filter(Boolean)
+  ))];
+  const subject = `IXI TRAN$ACT · ${ids.length === 1 ? names[0] : `${ids.length} transactions`}`;
   // Stable across retries: PDF timestamps/encoding must not invalidate the
   // identity of a send of these exact canonical revisions to this recipient.
   const fingerprint = crypto.createHash("sha256").update(JSON.stringify({ entity: input.entityPassportId, actor: input.actorPassportId, recipient, ids, revisions: input.revisions })).digest("hex");
   consumeRate({ principalId: input.actorPassportId });
-  const delivery = claim({ idempotencyKey: key, fingerprint, passportId: input.entityPassportId, listingId: ids.join(","), principalId: input.actorPassportId, recipients: [recipient], allowPendingRetry: false });
+  const delivery = claim({ idempotencyKey: key, fingerprint, passportId: input.entityPassportId, listingId: ids.join(","), principalId: input.actorPassportId, recipients: [recipient], communicationKind: "transact-document", subject, relatedPassportIds, allowPendingRetry: false });
   if (delivery.replayed) return { deliveryId: key, status: "accepted", recipient, messageIds: delivery.result.messageIds, replayed: true };
-  const names = records.map(record => record.financialDocument.documentNumber || record.financialDocument.financialDocumentId);
   // After dispatch begins, retain pending on any ambiguous failure. Replaying
   // the same command must never cause a second email after an unknown result.
   let result;
   try {
-    result = await sendEmail({ to: recipient, subject: `IXI TRAN$ACT · ${ids.length === 1 ? names[0] : `${ids.length} transactions`}`, text: `Your transaction documents are attached as a PDF.\n\n${names.join("\n")}`, html: "<p>Your IXI TRAN$ACT documents are attached as a PDF.</p>", fromName: "IXI TRAN$ACT", attachments: [{ FileName: "IXI-TRANSACT.pdf", ContentType: "application/pdf", ContentDisposition: "ATTACHMENT", ContentTransferEncoding: "BASE64", RawContent: content }] });
+    result = await sendEmail({ to: recipient, subject, text: `Your transaction documents are attached as a PDF.\n\n${names.join("\n")}`, html: "<p>Your IXI TRAN$ACT documents are attached as a PDF.</p>", fromName: "IXI TRAN$ACT", attachments: [{ FileName: "IXI-TRANSACT.pdf", ContentType: "application/pdf", ContentDisposition: "ATTACHMENT", ContentTransferEncoding: "BASE64", RawContent: content }] });
     if (!result?.accepted || !result.messageId) throw new Error("Provider receipt unavailable.");
     complete({ idempotencyKey: key, messageIds: [result.messageId] });
   } catch (error) {

@@ -4,7 +4,8 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const {
-  createPassportEmailHandler
+  createPassportEmailHandler,
+  createPassportCommunicationHistoryHandler
 } = require("./passportEmailRoutes");
 
 function responseRecorder() {
@@ -59,6 +60,28 @@ test("Passport email rejects an unsigned internal request", async () => {
     res.payload.error.code,
     "IXI_INTERNAL_AUTH_HEADERS_REQUIRED"
   );
+});
+
+test("communication history requires signed identity and returns Passport-linked records", () => {
+  const handler = createPassportCommunicationHistoryHandler({
+    verifyRequest: () => ({ principalId: "user-123" }),
+    findPassport: () => ({ passportId: "IXIWQMZWAE" }),
+    listCommunications: ({ passportId }) => [{
+      id: "passport_send_1234567890",
+      passportId,
+      kind: "passport",
+      status: "accepted"
+    }]
+  });
+  const res = responseRecorder();
+  handler({
+    params: { passportId: "ixiwqmzwae" },
+    headers: {},
+    query: {}
+  }, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.payload.history.passportId, "IXIWQMZWAE");
+  assert.equal(res.payload.history.items[0].status, "accepted");
 });
 
 test("Passport email delivers exact rendered content once", async () => {

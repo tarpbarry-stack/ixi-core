@@ -17,7 +17,8 @@ const {
   consumePassportEmailRate,
   claimPassportEmailDelivery,
   completePassportEmailDelivery,
-  failPassportEmailDelivery
+  failPassportEmailDelivery,
+  listCommunicationsForPassport
 } = require("./passportEmailStore");
 
 const MAX_RECIPIENTS = 5;
@@ -201,7 +202,9 @@ function createPassportEmailHandler(dependencies = {}) {
         passportId,
         listingId,
         principalId,
-        recipients
+        recipients,
+        communicationKind: "passport",
+        subject: content.subject
       });
 
       if (claim.replayed) {
@@ -240,7 +243,7 @@ function createPassportEmailHandler(dependencies = {}) {
       completeDelivery({ idempotencyKey, messageIds });
 
       console.info({
-        event: "ixi_passport_email_delivered",
+        event: "ixi_passport_email_accepted",
         passportId,
         listingId,
         principalId,
@@ -294,10 +297,59 @@ function createPassportEmailHandler(dependencies = {}) {
   };
 }
 
+function createPassportCommunicationHistoryHandler(dependencies = {}) {
+  const verifyRequest = dependencies.verifyRequest || verifyInternalRequest;
+  const findPassport = dependencies.findPassport || findPassportById;
+  const listCommunications =
+    dependencies.listCommunications || listCommunicationsForPassport;
+
+  return function passportCommunicationHistoryHandler(req, res) {
+    res.setHeader("Cache-Control", "no-store, private");
+    try {
+      const auth = verifyRequest(req);
+      if (!clean(auth?.principalId)) {
+        throw routeError(
+          "IXI_COMMUNICATION_HISTORY_PRINCIPAL_REQUIRED",
+          "Authenticated user identity is required.",
+          401
+        );
+      }
+      const passportId = clean(req.params?.passportId).toUpperCase();
+      if (!findPassport(passportId)) {
+        throw routeError(
+          "IXI_COMMUNICATION_HISTORY_PASSPORT_NOT_FOUND",
+          "IXI Machine Passport was not found.",
+          404
+        );
+      }
+      const items = listCommunications({ passportId, limit: req.query?.limit });
+      return res.status(200).json({
+        ok: true,
+        history: { passportId, items, count: items.length }
+      });
+    } catch (error) {
+      const status = Number(error?.statusCode || error?.status || 500);
+      return res.status(status >= 400 && status <= 599 ? status : 500).json({
+        ok: false,
+        error: {
+          code: error?.code || "IXI_COMMUNICATION_HISTORY_FAILED",
+          message: status >= 500
+            ? "Communication history could not be loaded."
+            : error?.message || "Communication history request was rejected."
+        }
+      });
+    }
+  };
+}
+
 const passportEmailRouter = express.Router();
 passportEmailRouter.post(
   "/passports/:passportId/email",
   createPassportEmailHandler()
+);
+passportEmailRouter.get(
+  "/passports/:passportId/history",
+  createPassportCommunicationHistoryHandler()
 );
 
 module.exports = {
@@ -308,5 +360,6 @@ module.exports = {
   assertPassportListing,
   fingerprintPayload,
   createPassportEmailHandler,
+  createPassportCommunicationHistoryHandler,
   passportEmailRouter
 };
