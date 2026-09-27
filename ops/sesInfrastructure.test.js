@@ -24,9 +24,7 @@ test("SES lifecycle infrastructure is encrypted, scoped and activated after runt
   assert.match(template, /AWS:SourceArn/u);
   assert.match(template, /Condition: DeliveryEventsEnabled/u);
   assert.match(template, /communications\/v1\/provider-events\/ses/u);
-  for (const event of ["delivery", "deliveryDelay", "bounce", "complaint", "reject", "renderingFailure"]) {
-    assert.match(template, new RegExp(`- ${event}\\b`, "u"));
-  }
+  assert.doesNotMatch(template, /AWS::SES::ConfigurationSetEventDestination/u);
 
   assert.match(deploy, /IXI_SES_EVENT_TOPIC_ARN:\?Authorized SES event topic is required/u);
   assert.match(deploy, /ixi-ses-communication-events/u);
