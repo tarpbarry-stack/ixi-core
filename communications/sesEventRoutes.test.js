@@ -3,7 +3,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { assertSnsUrl, canonicalSnsMessage, createSesEventHandler } = require("./sesEventRoutes");
+const { assertSnsUrl, canonicalSnsMessage, createSesEventHandler, parseSnsBody } = require("./sesEventRoutes");
 
 function responseRecorder() {
   return { headers: {}, statusCode: 200, payload: null, setHeader(name, value) { this.headers[name] = value; }, status(value) { this.statusCode = value; return this; }, json(value) { this.payload = value; return this; } };
@@ -18,6 +18,21 @@ test("SNS validation accepts only Amazon HTTPS certificate and subscription host
 test("SNS canonical message preserves the documented signed field order", () => {
   const canonical = canonicalSnsMessage({ Type: "Notification", Message: "body", MessageId: "id", Timestamp: "time", TopicArn: "arn" });
   assert.equal(canonical, "Message\nbody\nMessageId\nid\nTimestamp\ntime\nTopicArn\narn\nType\nNotification\n");
+});
+
+test("SNS text/plain payloads are decoded before signature verification", async () => {
+  const payload = { Type: "SubscriptionConfirmation", TopicArn: "arn:topic" };
+  assert.deepEqual(parseSnsBody(JSON.stringify(payload)), payload);
+  assert.throws(() => parseSnsBody("not-json"), /invalid JSON/u);
+  let verified;
+  const handler = createSesEventHandler({
+    verify: async message => { verified = message; },
+    fetchImpl: async () => ({ ok: true })
+  });
+  const res = responseRecorder();
+  await handler({ body: JSON.stringify({ ...payload, SubscribeURL: "https://sns.us-east-2.amazonaws.com/?Action=ConfirmSubscription" }) }, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(verified.TopicArn, "arn:topic");
 });
 
 test("verified SES callbacks record provider lifecycle without sending", async () => {
