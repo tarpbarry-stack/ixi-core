@@ -135,6 +135,12 @@ app.use(
   textConsentRouter
 );
 
+const { sesEventRouter } = require("./communications/sesEventRoutes");
+app.use(
+  "/communications/v1",
+  sesEventRouter
+);
+
 app.use(
   "/sales-signing",
   salesSigningRoutes
