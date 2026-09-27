@@ -73,6 +73,26 @@ function openDatabase() {
       updated_at_ms INTEGER NOT NULL,
       PRIMARY KEY (principal_id, window_start_ms)
     );
+
+    CREATE TABLE IF NOT EXISTS text_messaging_consents (
+      consent_id TEXT PRIMARY KEY,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      fingerprint TEXT NOT NULL,
+      full_name TEXT NOT NULL,
+      mobile_e164 TEXT NOT NULL,
+      purpose TEXT NOT NULL,
+      policy_version TEXT NOT NULL,
+      consent_text TEXT NOT NULL,
+      source_url TEXT NOT NULL,
+      source_ip_hash TEXT NOT NULL,
+      user_agent_hash TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('active', 'withdrawn')),
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS text_messaging_consents_mobile_idx
+      ON text_messaging_consents(mobile_e164, created_at_ms);
   `);
 
   try {
@@ -304,6 +324,65 @@ function getPassportEmailDelivery(idempotencyKey) {
   return openDatabase().prepare("SELECT * FROM passport_email_deliveries WHERE idempotency_key = ?").get(clean(idempotencyKey)) || null;
 }
 
+function recordTextMessagingConsent({
+  consentId,
+  idempotencyKey,
+  fingerprint,
+  fullName,
+  mobileE164,
+  purpose,
+  policyVersion,
+  consentText,
+  sourceUrl,
+  sourceIpHash,
+  userAgentHash,
+  now = Date.now()
+} = {}) {
+  const db = openDatabase();
+  const existing = db.prepare(`
+    SELECT consent_id, fingerprint, status, created_at_ms
+    FROM text_messaging_consents
+    WHERE idempotency_key = ?
+  `).get(clean(idempotencyKey));
+
+  if (existing) {
+    if (existing.fingerprint !== clean(fingerprint)) {
+      throw emailError(
+        "IXI_TEXT_CONSENT_IDEMPOTENCY_CONFLICT",
+        "This consent token was already used for different information.",
+        409
+      );
+    }
+    return {
+      consentId: existing.consent_id,
+      status: existing.status,
+      createdAtMs: existing.created_at_ms,
+      replayed: true
+    };
+  }
+
+  db.prepare(`
+    INSERT INTO text_messaging_consents (
+      consent_id, idempotency_key, fingerprint, full_name, mobile_e164,
+      purpose, policy_version, consent_text, source_url, source_ip_hash,
+      user_agent_hash, status, created_at_ms, updated_at_ms
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+  `).run(
+    clean(consentId), clean(idempotencyKey), clean(fingerprint),
+    clean(fullName), clean(mobileE164), clean(purpose), clean(policyVersion),
+    clean(consentText), clean(sourceUrl), clean(sourceIpHash),
+    clean(userAgentHash), now, now
+  );
+
+  return { consentId: clean(consentId), status: "active", createdAtMs: now, replayed: false };
+}
+
+function getTextMessagingConsent(consentId) {
+  return openDatabase().prepare(`
+    SELECT * FROM text_messaging_consents WHERE consent_id = ?
+  `).get(clean(consentId)) || null;
+}
+
 module.exports = {
   DEFAULT_WINDOW_MS,
   DEFAULT_LIMIT,
@@ -313,5 +392,7 @@ module.exports = {
   completePassportEmailDelivery,
   failPassportEmailDelivery,
   getPassportEmailDelivery,
+  recordTextMessagingConsent,
+  getTextMessagingConsent,
   closePassportEmailStore
 };
