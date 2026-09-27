@@ -129,6 +129,12 @@ app.use(
   passportEmailRouter
 );
 
+const { textConsentRouter } = require("./communications/textConsentRoutes");
+app.use(
+  "/communications/v1",
+  textConsentRouter
+);
+
 app.use(
   "/sales-signing",
   salesSigningRoutes
