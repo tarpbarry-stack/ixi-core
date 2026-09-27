@@ -11,6 +11,15 @@ const certificateCache = new Map();
 
 function clean(value) { return String(value ?? "").trim(); }
 
+function parseSnsBody(body) {
+  if (typeof body !== "string") return body || {};
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw Object.assign(new Error("Amazon SNS message body is invalid JSON."), { status: 400 });
+  }
+}
+
 function assertSnsUrl(value, kind) {
   const url = new URL(clean(value));
   const hostAllowed = /^sns(?:\.[a-z0-9-]+)?\.amazonaws\.com(?:\.cn)?$/u.test(url.hostname);
@@ -81,7 +90,7 @@ function createSesEventHandler(dependencies = {}) {
   return async function sesEventHandler(req, res) {
     res.setHeader("Cache-Control", "no-store");
     try {
-      const message = req.body || {};
+      const message = parseSnsBody(req.body);
       await verify(message, { fetchImpl });
       if (message.Type === "SubscriptionConfirmation") {
         const subscribeUrl = assertSnsUrl(message.SubscribeURL, "subscription");
@@ -113,10 +122,15 @@ function createSesEventHandler(dependencies = {}) {
 }
 
 const sesEventRouter = express.Router();
-sesEventRouter.post("/provider-events/ses", createSesEventHandler());
+sesEventRouter.post(
+  "/provider-events/ses",
+  express.text({ type: "text/plain", limit: "256kb" }),
+  createSesEventHandler()
+);
 
 module.exports = {
   assertSnsUrl,
+  parseSnsBody,
   canonicalSnsMessage,
   verifySnsMessage,
   createSesEventHandler,
