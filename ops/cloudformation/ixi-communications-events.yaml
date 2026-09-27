@@ -1,0 +1,138 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Durable Amazon SES delivery events for IXI Passport communications.
+
+Parameters:
+  ConfigurationSetName:
+    Type: String
+    Default: my-first-configuration-set
+  EndpointUrl:
+    Type: String
+    Default: https://staging.ironxchange.com/ix-core/communications/v1/provider-events/ses
+    AllowedPattern: ^https://.+$
+  EnableDeliveryEvents:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
+Conditions:
+  DeliveryEventsEnabled: !Equals [!Ref EnableDeliveryEvents, "true"]
+
+Resources:
+  CommunicationEventsKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: Encrypt IXI SES communication lifecycle events in SNS.
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AccountKeyAdministration
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+          - Sid: AllowSesEventEncryption
+            Effect: Allow
+            Principal:
+              Service: ses.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey
+            Resource: "*"
+            Condition:
+              StringEquals:
+                AWS:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                AWS:SourceArn: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${ConfigurationSetName}
+      Tags:
+        - Key: ixi:system
+          Value: communications
+
+  CommunicationEventsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/ixi-ses-communication-events
+      TargetKeyId: !Ref CommunicationEventsKey
+
+  CommunicationEventsTopic:
+    Type: AWS::SNS::Topic
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TopicName: ixi-ses-communication-events
+      DisplayName: IXI SES communication events
+      KmsMasterKeyId: !GetAtt CommunicationEventsKey.Arn
+      Tags:
+        - Key: ixi:system
+          Value: communications
+        - Key: ixi:purpose
+          Value: ses-delivery-events
+
+  CommunicationEventsTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref CommunicationEventsTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowSesConfigurationSetPublish
+            Effect: Allow
+            Principal:
+              Service: ses.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref CommunicationEventsTopic
+            Condition:
+              StringEquals:
+                AWS:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                AWS:SourceArn: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${ConfigurationSetName}
+
+  CommunicationEventsSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: DeliveryEventsEnabled
+    Properties:
+      Protocol: https
+      Endpoint: !Ref EndpointUrl
+      TopicArn: !Ref CommunicationEventsTopic
+      DeliveryPolicy:
+        healthyRetryPolicy:
+          minDelayTarget: 20
+          maxDelayTarget: 20
+          numRetries: 5
+          numNoDelayRetries: 0
+          numMinDelayRetries: 0
+          numMaxDelayRetries: 5
+          backoffFunction: linear
+
+  SesCommunicationEventDestination:
+    Type: AWS::SES::ConfigurationSetEventDestination
+    Condition: DeliveryEventsEnabled
+    DependsOn: CommunicationEventsTopicPolicy
+    Properties:
+      ConfigurationSetName: !Ref ConfigurationSetName
+      EventDestination:
+        Name: ixi-passport-communication-lifecycle
+        Enabled: true
+        MatchingEventTypes:
+          - delivery
+          - deliveryDelay
+          - bounce
+          - complaint
+          - reject
+          - renderingFailure
+        SnsDestination:
+          TopicARN: !Ref CommunicationEventsTopic
+
+Outputs:
+  TopicArn:
+    Description: Authorized SES event topic consumed by IX-Core.
+    Value: !Ref CommunicationEventsTopic
+  EndpointUrl:
+    Description: Signed SNS callback boundary.
+    Value: !Ref EndpointUrl

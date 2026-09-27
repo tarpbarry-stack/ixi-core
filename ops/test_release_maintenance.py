@@ -180,7 +180,9 @@ class ReleaseExitTests(unittest.TestCase):
                 source += 'INSTALLED=1\nSTOPPED=1\nACTIVE=(IX-Core)\nmkdir -p "$ROLLBACK"\nprintf "{}" > "$ROLLBACK/rollback.json"\n'
             source += 'exit 17\n'
             env = dict(os.environ, PATH=str(commands) + ':' + os.environ['PATH'], TEST_LOG=str(root / 'commands.log'),
-                       IXI_CORE_SHA='a' * 40, IXI_RECOVERY_BUCKET='private', IXI_RECOVERY_ACCOUNT_ID='123456789012')
+                       AWS_REGION='us-east-2', IXI_CORE_SHA='a' * 40, IXI_RECOVERY_BUCKET='private',
+                       IXI_RECOVERY_ACCOUNT_ID='123456789012',
+                       IXI_SES_EVENT_TOPIC_ARN='arn:aws:sns:us-east-2:123456789012:ixi-ses-communication-events')
             result = subprocess.run(['bash'], input=source, text=True, capture_output=True, env=env)
             self.assertNotEqual(result.returncode, 0)
             self.assertTrue((backups / 'last-release-failure.log').exists())
