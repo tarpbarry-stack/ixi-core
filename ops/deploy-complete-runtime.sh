@@ -2,10 +2,13 @@
 # This entry point is called only by the paired, authenticated release workflow.
 set -Eeuo pipefail
 umask 077
+: "${AWS_REGION:?AWS region is required}"
 : "${IXI_CORE_SHA:?An immutable backend commit is required}"
 : "${IXI_RECOVERY_BUCKET:?Verified private recovery bucket is required}"
 : "${IXI_RECOVERY_ACCOUNT_ID:?Expected account is required}"
+: "${IXI_SES_EVENT_TOPIC_ARN:?Authorized SES event topic is required}"
 [[ "$IXI_CORE_SHA" =~ ^[a-f0-9]{40}$ ]]
+[[ "$IXI_SES_EVENT_TOPIC_ARN" =~ ^arn:aws:sns:${AWS_REGION}:${IXI_RECOVERY_ACCOUNT_ID}:ixi-ses-communication-events$ ]]
 APP=/var/www/ix-core
 export IXI_LIVE_ROOT="$APP"
 export IXI_MOS_SQLITE_PATH=/var/lib/ixi-core/mos/ixi-aos.sqlite
@@ -23,6 +26,9 @@ SUCCESS=0
 TIMER_ACTIVE=0
 ROLLBACK="$BACKUP_ROOT/source-before-$IXI_CORE_SHA-$(date -u +%Y%m%dT%H%M%SZ)"
 run_pm2() { sudo -u ubuntu -H pm2 "$@"; }
+run_pm2_with_runtime_env() {
+  sudo -u ubuntu -H env IXI_SES_EVENT_TOPIC_ARN="$IXI_SES_EVENT_TOPIC_ARN" pm2 "$@"
+}
 STAGE="$(mktemp -d /var/tmp/ixi-complete-release-XXXXXXXX)"
 finish() {
   local status=$? rollback_ok=1
@@ -42,7 +48,7 @@ finish() {
     fi
   fi
   if [[ "$STOPPED" -eq 1 && "$SUCCESS" -ne 1 && "$rollback_ok" -eq 1 ]]; then
-    run_pm2 restart "${ACTIVE[@]}" >/dev/null || rollback_ok=0
+    run_pm2_with_runtime_env restart "${ACTIVE[@]}" --update-env >/dev/null || rollback_ok=0
     local healthy=0
     for attempt in {1..15}; do
       if curl --max-time 3 -fsS http://127.0.0.1:4100/live >/dev/null &&
@@ -144,7 +150,7 @@ DEPENDENCIES=1
 mv "$STAGE/node_modules" "$APP/node_modules"
 DEPENDENCIES=2
 node "$APP/ops/runtime-release.js" verify "$APP" "$APP/.ixi-release.json"
-run_pm2 restart "${ACTIVE[@]}" >/dev/null
+run_pm2_with_runtime_env restart "${ACTIVE[@]}" --update-env >/dev/null
 healthy=0
 for attempt in {1..15}; do
   if curl --max-time 3 -fsS http://127.0.0.1:4100/live >/dev/null &&
@@ -152,6 +158,7 @@ for attempt in {1..15}; do
   sleep 2
 done
 test "$healthy" -eq 1
+run_pm2 save >/dev/null
 for route in /communications/v1/passports/IXIWQMZWAE/email /financial/commands/desktop/journals/release-probe/post; do
   code="$(curl --max-time 5 -sS -o "$STAGE/protected-route.json" -w '%{http_code}' \
     -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:4100$route")"
