@@ -110,25 +110,6 @@ Resources:
           numMaxDelayRetries: 5
           backoffFunction: linear
 
-  SesCommunicationEventDestination:
-    Type: AWS::SES::ConfigurationSetEventDestination
-    Condition: DeliveryEventsEnabled
-    DependsOn: CommunicationEventsTopicPolicy
-    Properties:
-      ConfigurationSetName: !Ref ConfigurationSetName
-      EventDestination:
-        Name: ixi-passport-communication-lifecycle
-        Enabled: true
-        MatchingEventTypes:
-          - delivery
-          - deliveryDelay
-          - bounce
-          - complaint
-          - reject
-          - renderingFailure
-        SnsDestination:
-          TopicARN: !Ref CommunicationEventsTopic
-
 Outputs:
   TopicArn:
     Description: Authorized SES event topic consumed by IX-Core.
