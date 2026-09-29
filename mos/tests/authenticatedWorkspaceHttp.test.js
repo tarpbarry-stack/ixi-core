@@ -174,6 +174,16 @@ test("signed workspace HTTP contract binds membership, ignores forged authority,
     );
     authorityStore.getCurrentPolicyRecord = async () => null;
 
+    const ownerInventoryAvailability = await request(baseUrl, {
+      method: "GET",
+      targetPath: "/mos/v1/aos/inventory-availability",
+      principalId: "frontend-new-owner",
+      entityId: frontendEntityId
+    });
+    assert.equal(ownerInventoryAvailability.status, 200);
+    assert.equal(ownerInventoryAvailability.body.ok, true);
+    assert.deepEqual(ownerInventoryAvailability.body.current, {});
+
     const machineCommandId = "sharetribe-listing:frontend-listing-1";
     const frontendMachine = await request(baseUrl, {
       targetPath: "/mos/v1/aos/machines/sharetribe-listing",
