@@ -415,9 +415,58 @@ function getAosAccountForUser(
   };
 }
 
+function getAosMembershipContextForPrincipal({
+  principalId,
+  entityId = ""
+} = {}) {
+  const normalizedPrincipalId = cleanText(principalId);
+  const normalizedEntityId = cleanText(entityId);
+  if (!normalizedPrincipalId) {
+    throw new MosError(
+      "AOS_MEMBERSHIP_PRINCIPAL_REQUIRED",
+      "Authenticated principal identity is required.",
+      null,
+      401
+    );
+  }
+
+  const matches = Object.values(readMemberships()).filter(membership =>
+    cleanText(membership.principalId) === normalizedPrincipalId &&
+    cleanText(membership.status) === "active" &&
+    (!normalizedEntityId || cleanText(membership.entityId) === normalizedEntityId)
+  );
+  if (matches.length !== 1) {
+    throw new MosError(
+      matches.length
+        ? "AOS_MEMBERSHIP_CONTEXT_AMBIGUOUS"
+        : "AOS_ACCOUNT_NOT_FOUND",
+      matches.length
+        ? "Select one Entity before opening AOS."
+        : "No active AOS membership was found for this login.",
+      { principalId: normalizedPrincipalId, activeMembershipCount: matches.length },
+      matches.length ? 409 : 404
+    );
+  }
+
+  const membership = matches[0];
+  const account = readAccounts()[cleanText(membership.accountId)];
+  if (!account || cleanText(account.status) !== "active" ||
+      cleanText(account.tenantId) !== cleanText(membership.tenantId) ||
+      cleanText(account.primaryEntityId) !== cleanText(membership.entityId)) {
+    throw new MosError(
+      "AOS_MEMBERSHIP_CONTEXT_INVALID",
+      "The active membership, account, tenant, and Entity are inconsistent.",
+      { membershipId: membership.membershipId },
+      409
+    );
+  }
+  return { account, entity: getEntity(membership.entityId), membership };
+}
+
 module.exports = {
   ensureAosAccount,
   getAosAccountForUser,
+  getAosMembershipContextForPrincipal,
   findAccountByOwnerUserId,
   bindOwnerMembershipIdentity
 };

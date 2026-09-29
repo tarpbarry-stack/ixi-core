@@ -39,6 +39,16 @@ const {
     "./IXIAuthorityErrors"
   );
 
+const { MOS_OBJECT_TYPES } = require("../mos/constants");
+
+const MACHINE_SCOPE_OBJECT_TYPES = new Set([
+  MOS_OBJECT_TYPES.MACHINE,
+  MOS_OBJECT_TYPES.EQUIPMENT,
+  MOS_OBJECT_TYPES.VEHICLE,
+  MOS_OBJECT_TYPES.TRAILER,
+  MOS_OBJECT_TYPES.TOOL
+]);
+
 
 function clean(
   value
@@ -166,6 +176,32 @@ async function evaluateResolvedMosObjectAuthority({ principal, identity, capabil
           identity.object?.objectId
         )
     };
+  }
+
+  /*
+   * Workforce machine scope is resolved from the signed principal's durable
+   * MOS membership. It never trusts a browser claim, a customer label, or a
+   * container name. The owner membership has no restriction and therefore
+   * retains permanent carte-blanche access.
+   */
+  const machineScope = principal.machineScope && typeof principal.machineScope === "object"
+    ? principal.machineScope
+    : null;
+  if (principal.strictAuthorization === true && machineScope &&
+      MACHINE_SCOPE_OBJECT_TYPES.has(clean(identity.object?.objectType))) {
+    const mode = clean(machineScope.mode) || "none";
+    const selected = new Set((Array.isArray(machineScope.passportIds) ? machineScope.passportIds : []).map(clean));
+    if (mode !== "all" && !(mode === "selected" && selected.has(identity.passportId))) {
+      return {
+        enforced: true,
+        allowed: false,
+        decision: "deny",
+        reason: "workforce-machine-scope",
+        capability: clean(capability),
+        objectId: clean(identity.object?.objectId),
+        passportId: identity.passportId
+      };
+    }
   }
 
 
