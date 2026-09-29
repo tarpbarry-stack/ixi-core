@@ -163,7 +163,8 @@ const {
 );
 
 const {
-  resolveCanonicalObjectIdentity
+  resolveCanonicalObjectIdentity,
+  normalizedPassportIds
 } = require(
   "../identity/canonicalObjectAdmissionService"
 );
