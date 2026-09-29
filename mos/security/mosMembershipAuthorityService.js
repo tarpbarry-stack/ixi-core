@@ -49,6 +49,16 @@ function principalFromMosMembership(membership, {
     ),
     directDenies: uniqueStrings(membership.directDenies),
     scopes: uniqueStrings(membership.scopes),
+    machineScope: membership?.machineScope && typeof membership.machineScope === "object"
+      ? {
+          mode: cleanText(membership.machineScope.mode),
+          passportIds: uniqueStrings(membership.machineScope.passportIds)
+        }
+      : null,
+    financialRole: cleanText(membership.financialRole),
+    calendar: membership.calendar && typeof membership.calendar === "object"
+      ? { ...membership.calendar }
+      : {},
     membershipId: cleanText(membership.membershipId),
     tenantId: cleanText(membership.tenantId),
     accountId: cleanText(membership.accountId),

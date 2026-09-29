@@ -12,6 +12,13 @@
 const CAPABILITIES =
   Object.freeze({
 
+    /* OPERATIONAL CALENDAR */
+
+    "calendar.access": {
+      family: "calendar",
+      label: "Open operational calendar"
+    },
+
     /* AOS OBJECT GRAPH */
 
     "aos.discover": {

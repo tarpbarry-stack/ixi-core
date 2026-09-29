@@ -15,8 +15,16 @@ const {
 } = require("../mos/security/internalRequestAuthService");
 
 const {
-  getAosAccountForUser
+  getAosMembershipContextForPrincipal
 } = require("../mos/accounts/aosAccountService");
+
+const {
+  principalFromMosMembership
+} = require("../mos/security/mosMembershipAuthorityService");
+
+const {
+  IXI_FINANCIAL_ROLES
+} = require("../financial/IXIFinancialPermissionEngine");
 
 const {
   listObjects
@@ -52,7 +60,7 @@ function fail(code, message, details = {}, statusCode = 401) {
   throw error;
 }
 
-function resolveOwnerPerson({ membership, entityId }) {
+function resolveOwnerPerson({ membership, entityId, allowSingleFallback = true }) {
   const explicitObjectId = clean(membership?.personObjectId);
   const people = listObjects({
     entityId,
@@ -72,12 +80,16 @@ function resolveOwnerPerson({ membership, entityId }) {
     return explicit;
   }
 
-  if (people.length !== 1) {
+  if (!allowSingleFallback || people.length !== 1) {
     fail(
-      "IXI_FINANCIAL_OWNER_PERSON_REQUIRED",
-      people.length
-        ? "The AOS owner must be linked to one Person before Financial access can open."
-        : "The AOS Entity needs an owner Person before Financial access can open.",
+      allowSingleFallback
+        ? "IXI_FINANCIAL_OWNER_PERSON_REQUIRED"
+        : "IXI_FINANCIAL_PERSON_REQUIRED",
+      allowSingleFallback
+        ? (people.length
+          ? "The AOS owner must be linked to one Person before Financial access can open."
+          : "The AOS Entity needs an owner Person before Financial access can open.")
+        : "This membership must be bound to its existing AOS Person before Financial access can open.",
       { entityId, activePersonCount: people.length },
       409
     );
@@ -107,27 +119,28 @@ async function bindInternalFinancialContext(req, onTiming = () => {}) {
     );
   }
 
-  const accountContext = getAosAccountForUser(principalId);
+  const accountContext = getAosMembershipContextForPrincipal({ principalId, entityId });
   const membership = accountContext?.membership || {};
-  const ownedEntityId = clean(accountContext?.entity?.entityId);
+  const memberEntityId = clean(accountContext?.entity?.entityId);
 
   if (
-    ownedEntityId !== entityId ||
+    memberEntityId !== entityId ||
     clean(membership.principalId) !== principalId ||
     clean(membership.entityId) !== entityId ||
-    clean(membership.role) !== "owner" ||
     clean(membership.status) !== "active"
   ) {
     fail(
       "IXI_FINANCIAL_INTERNAL_TENANT_DENIED",
-      "The signed principal is not the active owner of this AOS Entity.",
+      "The signed principal is not an active member of this AOS Entity.",
       { entityId },
       403
     );
   }
 
   mark("membership");
-  const person = resolveOwnerPerson({ membership, entityId });
+  const owner = clean(membership.role) === "owner" &&
+    clean(accountContext.account?.ownerUserId) === principalId;
+  const person = resolveOwnerPerson({ membership, entityId, allowSingleFallback: owner });
   const entityIdentity = resolveEntityPassport(entityId);
   const personIdentity = resolvePersonPassport({
     objectId: person.objectId,
@@ -136,17 +149,9 @@ async function bindInternalFinancialContext(req, onTiming = () => {}) {
   mark("identity");
 
   const authorityPrincipal = {
-    authenticated: true,
-    principalType: "sharetribe-user",
-    principalId,
+    ...principalFromMosMembership(membership, { strictAuthorization: true }),
     actorPassportId: personIdentity.actorPassportId,
-    entityId,
-    entityPassportId: entityIdentity.entityPassportId,
-    roleIds: ["owner"],
-    groupIds: [],
-    directGrants: [],
-    directDenies: [],
-    scopes: []
+    entityPassportId: entityIdentity.entityPassportId
   };
 
   const estate = await discoverFinancialPassportScope({
@@ -167,17 +172,26 @@ async function bindInternalFinancialContext(req, onTiming = () => {}) {
     metadata: { entityId, personObjectId: person.objectId }
   };
 
+  const financialRoleValues = new Set(Object.values(IXI_FINANCIAL_ROLES));
+  const financialRoles = owner
+    ? [IXI_FINANCIAL_ROLES.ADMIN]
+    : [...new Set([membership.financialRole, ...(membership.roleIds || [])]
+      .map(clean).filter(role => financialRoleValues.has(role)))];
+
   req.trustedFinancialAccess = {
     actorPassportId: personIdentity.actorPassportId,
     entityPassportId: entityIdentity.entityPassportId,
-    roles: ["financial-admin"],
-    permissions: [],
-    deniedPermissions: [],
+    roles: financialRoles,
+    permissions: (membership.financialPermissions || []).map(clean).filter(Boolean),
+    deniedPermissions: (membership.financialDeniedPermissions || membership.directDenies || [])
+      .map(clean).filter(permission => permission === "*" || permission.startsWith("financial.")),
     managedPassportIds: estate.scopePassportIds,
     metadata: {
       principalId,
       entityId,
-      source: "sharetribe-server-gateway"
+      source: "sharetribe-server-gateway",
+      membershipId: membership.membershipId,
+      owner
     }
   };
 

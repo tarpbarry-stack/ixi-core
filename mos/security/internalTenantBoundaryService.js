@@ -109,7 +109,8 @@ function bindInternalTenantContext(
   // handlers resolve active memberships or the scoped, verified invitation.
   const method = clean(req.method).toUpperCase();
   if ((method === "GET" && path === "/sales-desk/companies") ||
-      (method === "POST" && path === "/sales-desk/invitations/accept")) {
+      (method === "POST" && path === "/sales-desk/invitations/accept") ||
+      (method === "POST" && path === "/workforce-access/invitations/accept")) {
     req.ixiRequestContext = {
       authenticated: true, principalId, entityId: null,
       requestId: clean(auth.requestId) || null,

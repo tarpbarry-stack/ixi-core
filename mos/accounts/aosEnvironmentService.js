@@ -208,6 +208,8 @@ async function loadAosEnvironmentWithinAuthorityScope({
   metadata = {},
 
   trustedEntity = null,
+  trustedAccount = null,
+  trustedMembership = null,
   authorityPrincipal = null,
   strictAuthorization = false,
   allowProvisioning = true,
@@ -235,27 +237,18 @@ async function loadAosEnvironmentWithinAuthorityScope({
 
   if (trustedEntity) {
     bootstrap = {
-      account: {
-        accountId:
-          null,
-
-        tenantId:
-          null,
-
-        primaryEntityId:
-          trustedEntity.entityId,
-
-        status:
-          "active",
-
-        settings:
-          {}
+      account: trustedAccount || {
+        accountId: null,
+        tenantId: null,
+        primaryEntityId: trustedEntity.entityId,
+        status: "active",
+        settings: {}
       },
 
       entity:
         trustedEntity,
 
-      membership: {
+      membership: trustedMembership || {
         principalType:
           "ixi-principal",
 

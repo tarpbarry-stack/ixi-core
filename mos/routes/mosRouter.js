@@ -122,7 +122,8 @@ const {
 
 const {
   findAccountByOwnerUserId,
-  getAosAccountForUser
+  getAosAccountForUser,
+  getAosMembershipContextForPrincipal
 } = require("../accounts/aosAccountService");
 
 const {
@@ -189,7 +190,8 @@ const {
 
 const {
   createMosMembershipAuthorityMiddleware,
-  assertPrincipalCapability
+  assertPrincipalCapability,
+  principalFromMosMembership
 } = require("../security/mosMembershipAuthorityService");
 
 const {
@@ -472,6 +474,10 @@ router.use(
 // Sales Desk inherits signature, tenant and active-membership enforcement.
 router.use("/sales-desk", require("../../sales/IXISalesDeskRoutes"));
 
+// Owner-governed access is attached to existing Person Objects and Passports.
+// It never creates, renames, moves, or reparents an AOS identity.
+router.use("/workforce-access", require("../../access/IXIWorkforceAccessRoutes"));
+
 /* ---------- AOS ENVIRONMENT ---------- */
 
 router.get(
@@ -494,7 +500,10 @@ router.get(
         account,
         entity,
         membership
-      } = getAosAccountForUser(principalId);
+      } = getAosMembershipContextForPrincipal({
+        principalId,
+        entityId: req.ixiRequestContext.entityId
+      });
 
       if (
         !membership ||
@@ -532,14 +541,24 @@ router.get(
 router.get("/aos/inventory-availability", async (req, res) => {
   try {
     if (!req.ixiRequestContext?.authenticated) throw new MosError("AUTH_REQUIRED", "Signed principal required.", null, 401);
-    const { entity, membership } = getAosAccountForUser(req.ixiRequestContext.principalId);
+    const { entity, membership } = getAosMembershipContextForPrincipal({
+      principalId: req.ixiRequestContext.principalId,
+      entityId: req.ixiRequestContext.entityId
+    });
     if (membership?.status !== "active" || membership?.entityId !== entity?.entityId) throw new MosError("MEMBERSHIP_REQUIRED", "Active company membership required.", null, 403);
     const entityPassportId = membership.entityPassportId || entity.passportId;
     if (!entityPassportId) return res.json({ ok: true, current: {} });
     const { loadInventory } = require("../../financial/IXIFinancialInventoryService");
     const inventory = await loadInventory(entityPassportId);
+    const visibleObjects = await filterDiscoverableObjects({
+      principal: principalFromMosMembership(membership, { strictAuthorization: true }),
+      objects: listObjects({ entityId: entity.entityId, status: "active" })
+    });
+    const visiblePassportIds = new Set(visibleObjects.flatMap(normalizedPassportIds));
     res.set("Cache-Control", "private, no-store");
-    return res.json({ ok: true, current: Object.fromEntries(Object.entries(inventory.current).map(([passportId, state]) => [passportId, { state: state.state, forcePrivate: state.forcePrivate === true }])) });
+    return res.json({ ok: true, current: Object.fromEntries(Object.entries(inventory.current)
+      .filter(([passportId]) => visiblePassportIds.has(passportId))
+      .map(([passportId, state]) => [passportId, { state: state.state, forcePrivate: state.forcePrivate === true }])) });
   } catch (error) { return sendMosError(res, error); }
 });
 
@@ -560,7 +579,10 @@ router.get(
         String(req.ixiRequestContext.principalId || "").trim();
 
       const { account, entity, membership } =
-        getAosAccountForUser(principalId);
+        getAosMembershipContextForPrincipal({
+          principalId,
+          entityId: req.ixiRequestContext.entityId
+        });
 
       if (
         !membership ||
@@ -579,6 +601,12 @@ router.get(
 
       const environment = await loadAosEnvironment({
         ownerUserId: principalId,
+        trustedAccount: account,
+        trustedEntity: entity,
+        trustedMembership: membership,
+        authorityPrincipal: principalFromMosMembership(membership, {
+          strictAuthorization: true
+        }),
         strictAuthorization: true,
         allowProvisioning: false,
         onTiming: (name, ms) => { req.ixiReadTiming[name] = ms; }
